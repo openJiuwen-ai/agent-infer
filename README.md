@@ -1,2 +1,2 @@
 # AgentCache
-Highly efficient cache management for the agentic workflow, pluggable for LLM serving engine, e.g., vLLM
+Efficient cache management for agent workflows, designed to plug into LLM serving engines such as vLLM.
