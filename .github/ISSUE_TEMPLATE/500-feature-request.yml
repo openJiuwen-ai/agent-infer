@@ -1,0 +1,51 @@
+name: Feature request
+description: Propose a new AgentCache feature.
+title: "[Feature]: "
+labels: ["feature request"]
+
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Before submitting an issue, please search existing issues to check
+        whether this feature has already been proposed.
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Feature, motivation, and pitch
+      description: Describe the feature and the problem it solves.
+      placeholder: >
+        I am working on an agent workflow where repeated tool-call prefixes could be reused if...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior or API you would like AgentCache to provide.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Describe alternatives you considered, if any.
+    validations:
+      required: false
+  - type: textarea
+    id: success-criteria
+    attributes:
+      label: Success criteria
+      description: What result would make this feature complete?
+      placeholder: |
+        - Unit tests cover...
+        - Integration benchmark shows...
+    validations:
+      required: false
+  - type: checkboxes
+    id: before-submitting
+    attributes:
+      label: Before submitting a new issue...
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true

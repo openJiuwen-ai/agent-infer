@@ -1,0 +1,72 @@
+name: Request for comments
+description: Ask for feedback on major AgentCache architectural changes or roadmap decisions.
+title: "[RFC]: "
+labels: ["RFC"]
+
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Use RFCs for major design choices, architecture changes, roadmap proposals,
+        or work that needs explicit cross-team feedback before implementation.
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Explain the problem, user need, or roadmap goal.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-change
+    attributes:
+      label: Proposed change
+      description: Describe the proposed design, rollout plan, milestones, and owners.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe simpler options, rejected designs, and tradeoffs.
+    validations:
+      required: false
+  - type: textarea
+    id: success-criteria
+    attributes:
+      label: Success criteria
+      description: Define measurable acceptance criteria and verification steps.
+      placeholder: |
+        | Metric | Baseline | Target |
+        | --- | --- | --- |
+        | E2E time | | |
+    validations:
+      required: false
+  - type: textarea
+    id: feedback-period
+    attributes:
+      label: Feedback period
+      description: State the start and end dates for comments.
+      placeholder: "YYYY-MM-DD through YYYY-MM-DD"
+    validations:
+      required: false
+  - type: textarea
+    id: cc-list
+    attributes:
+      label: CC list
+      description: Mention people who should review or be aware of this RFC.
+    validations:
+      required: false
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add links, diagrams, reports, or related issues.
+    validations:
+      required: false
+  - type: checkboxes
+    id: before-submitting
+    attributes:
+      label: Before submitting a new issue...
+      options:
+        - label: I searched existing issues and RFCs for related proposals.
+          required: true

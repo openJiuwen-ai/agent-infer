@@ -1,0 +1,51 @@
+name: Usage
+description: Ask how to use AgentCache or integrate it with an agent workflow.
+title: "[Usage]: "
+labels: ["usage"]
+
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Before submitting an issue, please search existing issues to check
+        whether the question has already been answered.
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to do?
+      description: Describe the agent workflow, serving engine, model, and cache behavior you want.
+      placeholder: >
+        I want to use AgentCache with vLLM for a multi-turn SWE-bench style agent workflow...
+    validations:
+      required: true
+  - type: textarea
+    id: current-approach
+    attributes:
+      label: What have you tried?
+      description: Include commands, config snippets, links, or code that show your current approach.
+      placeholder: |
+        ```sh
+        # Commands or config you tried
+        ```
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include any details that may affect the answer.
+      placeholder: |
+        AgentCache commit:
+        vLLM or vllm-omni version/commit:
+        Python version:
+        GPU/driver/CUDA:
+        Model:
+    validations:
+      required: false
+  - type: checkboxes
+    id: before-submitting
+    attributes:
+      label: Before submitting a new issue...
+      options:
+        - label: I searched existing issues and did not find an answer.
+          required: true

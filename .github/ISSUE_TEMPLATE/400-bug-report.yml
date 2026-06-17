@@ -1,0 +1,75 @@
+name: Bug report
+description: Report a reproducible AgentCache bug.
+title: "[Bug]: "
+labels: ["bug"]
+
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Before submitting an issue, please search existing issues to check
+        whether the bug has already been reported.
+  - type: markdown
+    attributes:
+      value: |
+        **Security warning:** Please review pasted logs and configs before submitting. Redact tokens, passwords, private URLs, internal hostnames, and confidential data.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Paste the relevant environment details for reproducing the bug.
+      placeholder: |
+        AgentCache commit:
+        vLLM or vllm-omni version/commit:
+        Python version:
+        OS:
+        GPU/driver/CUDA:
+        Model:
+        Serving flags/config:
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest command, config, or code snippet that reproduces the problem.
+      placeholder: |
+        ```sh
+        # Minimal commands to reproduce
+        ```
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead? Include the full traceback or relevant logs when available.
+      placeholder: |
+        ```text
+        Full error message or logs
+        ```
+    validations:
+      required: true
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add any context, links, screenshots, or suspected root cause.
+    validations:
+      required: false
+  - type: checkboxes
+    id: before-submitting
+    attributes:
+      label: Before submitting a new issue...
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: I reduced the reproduction as much as practical.
+          required: true

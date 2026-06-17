@@ -1,0 +1,63 @@
+name: Performance discussion
+description: Discuss AgentCache performance, regressions, or benchmark results.
+title: "[Performance]: "
+labels: ["performance"]
+
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Before submitting an issue, please search existing issues to check
+        whether this performance topic is already being discussed.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Describe the performance topic, proposal, or regression.
+    validations:
+      required: true
+  - type: textarea
+    id: benchmark-setup
+    attributes:
+      label: Benchmark setup
+      description: Include enough detail for another contributor to reproduce the result.
+      placeholder: |
+        Benchmark:
+        Dataset/subset:
+        Model:
+        Hardware:
+        Agent framework/version:
+        AgentCache commit:
+        vLLM or vllm-omni version/commit:
+        Serving flags/config:
+        Concurrency:
+        Number of runs:
+    validations:
+      required: false
+  - type: textarea
+    id: results
+    attributes:
+      label: Results
+      description: Provide baseline and AgentCache results, including wall-clock time, TTFT, throughput, cache-hit rate, and correctness when available.
+      placeholder: |
+        | Metric | Baseline | AgentCache | Delta |
+        | --- | --- | --- | --- |
+        | E2E time | | | |
+        | TTFT | | | |
+        | Pass rate | | | |
+    validations:
+      required: false
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional notes
+      description: Add any profiling data, logs, links, or hypotheses.
+    validations:
+      required: false
+  - type: checkboxes
+    id: before-submitting
+    attributes:
+      label: Before submitting a new issue...
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
