@@ -60,10 +60,9 @@ def start_server(model, port, timeout):
 
     proc = subprocess.Popen(
         [
-            sys.executable, "-m", "vllm.entrypoints.openai.api_server",
-            "--model", model,
+            "vllm-acache", "serve",
+            model,
             "--port", str(port),
-            "--scheduler-cls", "agentcache.core.scheduler.AgentScheduler",
         ],
         stdout=open(log_file, "w"),
         stderr=subprocess.STDOUT,
