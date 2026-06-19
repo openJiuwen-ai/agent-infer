@@ -120,14 +120,14 @@ def verify_scheduler_in_logs(log_file):
         return False
 
 
-def send_test_request(port, timeout):
+def send_test_request(port, timeout, model):
     print("=" * 60)
     print("Stage 4: Sending test completion request")
     print("=" * 60)
 
     url = f"http://localhost:{port}/v1/completions"
     payload = json.dumps({
-        "model": "default",
+        "model": model,
         "prompt": "Hello, my name is",
         "max_tokens": 16,
     }).encode()
@@ -190,7 +190,7 @@ def main():
             sys.exit(1)
 
         # Stage 4: Send test request
-        if not send_test_request(args.port, args.timeout):
+        if not send_test_request(args.port, args.timeout, args.model):
             print(red("VERIFICATION FAILED: Test request failed"))
             sys.exit(1)
 
