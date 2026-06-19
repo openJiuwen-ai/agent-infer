@@ -28,6 +28,10 @@ class TestAgentSchedulerResolution(unittest.TestCase):
 
 
 class TestEngineArgsPatch(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import agentcache.entrypoints.cli.main  # noqa: F401 - triggers EngineArgs patch
+
     def test_patch_sets_scheduler_cls_when_none(self):
         from vllm.engine.arg_utils import EngineArgs
 
