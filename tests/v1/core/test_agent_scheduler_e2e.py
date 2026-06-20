@@ -1,14 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentCache project
 
+import agentcache  # noqa: F401 - applies EngineArgs scheduler_cls default
+
 import pytest
+from vllm import LLM
 
 pytestmark = pytest.mark.cpu_test
-
-# Trigger the EngineArgs patch that defaults scheduler_cls to AgentScheduler.
-import agentcache.entrypoints.cli.main  # noqa: E402, F401
-
-from vllm import LLM  # noqa: E402
 
 MODEL = "hmellor/tiny-random-LlamaForCausalLM"
 PROMPT = "Hello my name is Robert and I"

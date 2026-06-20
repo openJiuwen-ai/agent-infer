@@ -34,14 +34,14 @@ def test_get_scheduler_cls_default_is_vllm_scheduler():
     assert cls is VllmScheduler
 
 
-def test_patch_sets_scheduler_cls_when_none(engine_args_patched):
+def test_patch_sets_scheduler_cls_when_none():
     from vllm.engine.arg_utils import EngineArgs
 
     args = EngineArgs(model="test-model")
     assert args.scheduler_cls == "agentcache.core.scheduler.AgentScheduler"
 
 
-def test_patch_preserves_explicit_scheduler_cls(engine_args_patched):
+def test_patch_preserves_explicit_scheduler_cls():
     from vllm.engine.arg_utils import EngineArgs
 
     args = EngineArgs(
@@ -51,7 +51,5 @@ def test_patch_preserves_explicit_scheduler_cls(engine_args_patched):
     assert args.scheduler_cls == "vllm.v1.core.sched.scheduler.Scheduler"
 
 
-@pytest.fixture(scope="module")
-def engine_args_patched():
-    import agentcache.entrypoints.cli.main  # noqa: F401 - triggers EngineArgs patch
-    yield
+if __name__ == "__main__":
+    pytest.main([__file__])
