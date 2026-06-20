@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentCache project
 """
-E2E test for AgentScheduler via vllm-acache serve subprocess.
+E2E test for AgentAwareScheduler via vllm-acache serve subprocess.
 
 Mirrors vllm's RemoteOpenAIServer pattern:
 - Launches vllm-acache serve in a subprocess
 - Waits for /health readiness
 - Sends completions via openai.OpenAI client
-- Verifies AgentScheduler is loaded in server logs
+- Verifies AgentAwareScheduler is loaded in server logs
 """
 
 import os
@@ -108,11 +108,11 @@ def client(server):
 
 
 def test_agent_scheduler_configured(server):
-    """Verify AgentScheduler appears in the server logs."""
+    """Verify AgentAwareScheduler appears in the server logs."""
     with open(LOG_FILE) as f:
         content = f.read()
     assert "Using custom scheduler class" in content, (
-        "AgentScheduler warning not found in server logs"
+        "AgentAwareScheduler warning not found in server logs"
     )
 
 

@@ -8,7 +8,7 @@ pytestmark = pytest.mark.cpu_test
 
 MODEL = "hmellor/tiny-random-LlamaForCausalLM"
 PROMPT = "Hello my name is Robert and I"
-SCHEDULER_CLS_PATH = "agentcache.core.scheduler.AgentScheduler"
+SCHEDULER_CLS_PATH = "agentcache.core.scheduler.AgentAwareScheduler"
 
 
 @pytest.fixture(scope="module")
