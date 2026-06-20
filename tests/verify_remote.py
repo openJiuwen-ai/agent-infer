@@ -38,7 +38,7 @@ def run_unit_tests():
     print("=" * 60)
 
     result = subprocess.run(
-        [sys.executable, "-m", "pytest", os.path.join(ROOT, "tests", "test_scheduler.py"), "-v"],
+        [sys.executable, "-m", "pytest", os.path.join(ROOT, "tests", "v1"), "-v"],
         capture_output=False,
         cwd=ROOT,
     )
