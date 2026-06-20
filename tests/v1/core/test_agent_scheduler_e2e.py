@@ -1,10 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentCache project
 
-import agentcache  # noqa: F401 - applies EngineArgs scheduler_cls default
-
 import pytest
-from vllm import LLM
+from agentcache import LLM
 
 pytestmark = pytest.mark.cpu_test
 

@@ -1,3 +1,4 @@
+from agentcache.llm import LLM  # noqa: E402, F401 - after patch
 from vllm.engine.arg_utils import EngineArgs
 
 _original_post_init = EngineArgs.__post_init__

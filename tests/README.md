@@ -19,7 +19,7 @@ Unit tests for `AgentScheduler` resolution and the `EngineArgs` patch.
 
 ### `tests/v1/core/test_agent_scheduler_e2e.py`
 
-In-process end-to-end test using `vllm.LLM` with a tiny model.
+In-process end-to-end test using `agentcache.LLM` (wraps `vllm.LLM`) with a tiny model.
 
 | Test | What it verifies |
 |------|-----------------|
