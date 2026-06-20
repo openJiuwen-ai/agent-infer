@@ -1,26 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentCache project
 """
-E2E test for AgentScheduler via vllm serve subprocess.
+E2E test for AgentScheduler via vllm-acache serve subprocess.
 
 Mirrors vllm's RemoteOpenAIServer pattern:
-- Launches vllm serve in a subprocess with --scheduler-cls
+- Launches vllm-acache serve in a subprocess
 - Waits for /health readiness
 - Sends completions via openai.OpenAI client
 - Verifies AgentScheduler is loaded in server logs
 """
 
-import json
 import os
 import signal
 import subprocess
-import sys
 import time
 
 import openai
 import pytest
 
-SCHEDULER_CLS_PATH = "agentcache.core.scheduler.AgentScheduler"
 MODEL = "Qwen/Qwen3-0.6B"
 LOG_FILE = os.path.join(os.path.dirname(__file__), "_e2e_server.log")
 
