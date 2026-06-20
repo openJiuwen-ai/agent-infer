@@ -112,7 +112,7 @@ def client(server):
     )
 
 
-def test_agent_scheduler_configured():
+def test_agent_scheduler_configured(server):
     """Verify AgentScheduler appears in the server logs."""
     with open(LOG_FILE) as f:
         content = f.read()
