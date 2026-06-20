@@ -65,8 +65,6 @@ def server():
     env["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
     cmd = [
-        sys.executable,
-        "-m",
         "vllm",
         "serve",
         MODEL,
