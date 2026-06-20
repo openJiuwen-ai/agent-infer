@@ -37,11 +37,13 @@ class TestAgentAwareQueueEmpty:
     def test_len_zero(self):
         assert len(AgentAwareQueue()) == 0
 
-    def test_pop_returns_none(self):
-        assert AgentAwareQueue().pop_request() is None
+    def test_pop_raises_on_empty(self):
+        with pytest.raises(IndexError):
+            AgentAwareQueue().pop_request()
 
-    def test_peek_returns_none(self):
-        assert AgentAwareQueue().peek_request() is None
+    def test_peek_raises_on_empty(self):
+        with pytest.raises(IndexError):
+            AgentAwareQueue().peek_request()
 
     def test_iter_yields_nothing(self):
         assert list(AgentAwareQueue()) == []
@@ -82,8 +84,9 @@ class TestAgentAwareQueuePeek:
         assert q.peek_request().request_id == "a"
         assert len(q) == 1
 
-    def test_peek_empty_returns_none(self):
-        assert AgentAwareQueue().peek_request() is None
+    def test_peek_empty_raises(self):
+        with pytest.raises(IndexError):
+            AgentAwareQueue().peek_request()
 
 
 class TestAgentAwareQueuePrepend:
@@ -101,8 +104,8 @@ class TestAgentAwareQueuePrepend:
         q = AgentAwareQueue()
         q.add_request(r1)
         q.prepend_requests([r2, r3])
-        assert q.pop_request().request_id == "b"
         assert q.pop_request().request_id == "c"
+        assert q.pop_request().request_id == "b"
         assert q.pop_request().request_id == "a"
 
 
@@ -116,10 +119,11 @@ class TestAgentAwareQueueRemove:
         assert len(q) == 1
         assert q.pop_request().request_id == "b"
 
-    def test_remove_nonexistent_no_error(self):
+    def test_remove_nonexistent_raises_valueerror(self):
         q = AgentAwareQueue()
         q.add_request(_mock_request("a"))
-        q.remove_request(_mock_request("z"))
+        with pytest.raises(ValueError):
+            q.remove_request(_mock_request("z"))
         assert len(q) == 1
 
     def test_remove_requests_bulk(self):
