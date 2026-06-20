@@ -65,13 +65,11 @@ def server():
     env["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
     cmd = [
-        "vllm",
+        "vllm-acache",
         "serve",
         MODEL,
         "--port",
         str(port),
-        "--scheduler-cls",
-        SCHEDULER_CLS_PATH,
         "--enforce-eager",
         "--max-model-len",
         "512",
