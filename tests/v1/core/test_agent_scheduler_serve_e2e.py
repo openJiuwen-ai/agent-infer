@@ -138,3 +138,26 @@ def test_chat_completion(client):
     )
     assert len(response.choices) == 1
     assert response.choices[0].message.content
+
+
+def test_agent_aware_queue_logged(server):
+    """Verify AgentAwareQueue is referenced in server logs."""
+    with open(LOG_FILE) as f:
+        content = f.read()
+    assert "AgentAwareQueue" in content or "AgentAwareScheduler" in content, (
+        "AgentAwareQueue/AgentAwareScheduler not found in server logs"
+    )
+
+
+def test_multi_request_throughput(client):
+    """Send multiple requests to exercise the AgentAwareQueue FCFS path."""
+    prompts = [f"Hello my name is {name}" for name in ("Alice", "Bob", "Charlie", "Diana", "Eve")]
+    for prompt in prompts:
+        completion = client.completions.create(
+            model=MODEL,
+            prompt=prompt,
+            max_tokens=4,
+            temperature=0.0,
+        )
+        assert len(completion.choices) == 1
+        assert completion.choices[0].text

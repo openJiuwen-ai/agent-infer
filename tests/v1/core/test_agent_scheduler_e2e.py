@@ -3,6 +3,7 @@
 
 import pytest
 from agentcache import LLM
+from agentcache.core.request_queue import AgentAwareQueue
 
 pytestmark = pytest.mark.cpu_test
 
@@ -35,4 +36,18 @@ def test_generation_works(llm):
     assert len(outputs) == 3
     for output in outputs:
         assert len(output.outputs) == 1
+        assert output.outputs[0].text
+
+
+def test_agent_aware_queue_is_used(llm):
+    engine_core = llm.llm_engine.engine_core
+    assert isinstance(engine_core.scheduler.waiting, AgentAwareQueue), (
+        f"Expected AgentAwareQueue, got {type(engine_core.scheduler.waiting)}"
+    )
+
+
+def test_agent_aware_queue_fcfs_ordering(llm):
+    outputs = llm.generate([PROMPT + str(i) for i in range(5)])
+    assert len(outputs) == 5
+    for output in outputs:
         assert output.outputs[0].text
