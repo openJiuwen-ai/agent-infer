@@ -43,9 +43,11 @@ Do NOT invoke for: adding a cache backend (use `ac-bootstrap`), benchmarking
 
    ```bash
    python - <<'PY'
+   import os
    from agentcache.adapters import vllm as acv
 
-   ac = acv.connect("$AGENTCACHE_VLLM_URL")
+   url = os.getenv("AGENTCACHE_VLLM_URL", "")
+   ac = acv.connect(url)
    t1 = ac.time_call("Once upon a time,")
    t2 = ac.time_call("Once upon a time,")
    assert t2 < t1, f"no cache speedup: {t2=}, {t1=}"

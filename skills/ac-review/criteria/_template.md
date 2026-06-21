@@ -7,8 +7,12 @@ header comment when done.
 
 Describe which diffs this category applies to.
 
-## CRITERION {id}: {one-line summary}
+The criterion block follows the same shape documented in `README.md`:
+
+````markdown
+## CRITERION <id>: <one-line summary>
 
 - **Severity:** blocker | warning | nit
-- **Check:** {how to evaluate it against a diff}
-- **Fix:** {what the author should do if it fails}
+- **Check:** <how to evaluate it against a diff>
+- **Fix:** <what the author should do if it fails>
+````
