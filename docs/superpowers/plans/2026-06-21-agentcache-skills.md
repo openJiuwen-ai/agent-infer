@@ -35,6 +35,7 @@ skills/
 ```
 
 Each file has a single, clear responsibility:
+
 - `SKILL.md` files = the skill the agent invokes (process + steps).
 - `criteria/*.md` files = one category of review checks each, with a `## TRIGGER` header that says when it applies.
 - `criteria/_template.md` = copy-and-fill template so new criteria stay consistent.
@@ -43,6 +44,7 @@ Each file has a single, clear responsibility:
 **Verification gate (Task 7):** run pre-commit on the whole skills tree and fix any markdownlint/ruff/typos findings before the final commit.
 
 **Decision rules applied:**
+
 - DRY: the cross-skill "final step = run ac-review" link is written once in each SKILL.md but points at the same skill rather than duplicated logic.
 - YAGNI: no staleness check for criteria in v1; no benchmark harness code (only the skill describing how to use one once it exists).
 - TDD: these are doc-only skills, so "tests" = verification that each skill is markdownlint-clean and that its frontmatter matches the contract. Task 7 is the verification pass.
@@ -52,6 +54,7 @@ Each file has a single, clear responsibility:
 ## Task 1: Create the skills index
 
 **Files:**
+
 - Create: `skills/README.md`
 
 - [ ] **Step 1: Write the index**
@@ -104,6 +107,7 @@ Signed-off-by: $(git config user.name) <$(git config user.email)>"
 ## Task 2: Create `ac-bootstrap` skill
 
 **Files:**
+
 - Create: `skills/ac-bootstrap/SKILL.md`
 
 - [ ] **Step 1: Write the skill**
@@ -140,23 +144,26 @@ non-AgentCache scaffolding.
    mkdir -p src/agentcache
    printf '"""AgentCache: efficient cache management for agent workflows."""\n' > src/agentcache/__init__.py
    ```
-3. Place the new file by kind:
+
+1. Place the new file by kind:
    - **backend** -> `src/agentcache/backends/<name>.py`
    - **policy** -> `src/agentcache/policies/<name>.py`
    - **entry point** -> `src/agentcache/__init__.py` (add the public export)
    Never put backends and policies in the same module.
-4. Add the symbol to the relevant `__init__.py` `__all__` / import so it is
+2. Add the symbol to the relevant `__init__.py` `__all__` / import so it is
    importable from the package top level (for entry points and public backends).
-5. Add a smoke test that imports the new symbol:
+3. Add a smoke test that imports the new symbol:
    - File: `tests/test_<kind>_<name>.py`
    - Minimal body: `from agentcache import <symbol>` inside a test that asserts
      the import succeeds.
-6. Run the full pre-commit pass on the changed files:
+4. Run the full pre-commit pass on the changed files:
+
    ```bash
    pre-commit run --files src/agentcache/** tests/**
    ```
+
    Fix every reported issue before continuing.
-7. Confirm the commit message will carry the DCO `Signed-off-by:` line. The
+5. Confirm the commit message will carry the DCO `Signed-off-by:` line. The
    repo's `commit-msg` hook adds it automatically if missing; do not strip it.
 
 ## DON'T
@@ -170,6 +177,7 @@ non-AgentCache scaffolding.
 
 Once the new component compiles and pre-commit passes, invoke `ac-review` to
 validate the diff against repo conventions before opening the PR.
+
 ```
 
 - [ ] **Step 2: Verify markdownlint is clean**
@@ -191,6 +199,7 @@ Signed-off-by: $(git config user.name) <$(git config user.email)>"
 ## Task 3: Create `ac-benchmark` skill
 
 **Files:**
+
 - Create: `skills/ac-benchmark/SKILL.md`
 
 - [ ] **Step 1: Write the skill**
@@ -235,14 +244,17 @@ comparing two non-baseline runs against each other.
    ```bash
    python benchmarks/run.py --target "$AGENTCACHE_VLLM_URL" --warmup
    ```
-4. Run the measured pass, writing JSON metrics to a timestamped result file:
+
+1. Run the measured pass, writing JSON metrics to a timestamped result file:
+
    ```bash
    python benchmarks/run.py --target "$AGENTCACHE_VLLM_URL" \
      --out "benchmarks/results/$(date -u +%Y%m%dT%H%M%SZ).json"
    ```
-5. Compare the new result against `benchmarks/baseline.json` (hit-rate, p50/p99
+
+2. Compare the new result against `benchmarks/baseline.json` (hit-rate, p50/p99
    latency, throughput). Report each metric's delta and direction.
-6. If the run regresses any metric relative to baseline, state so explicitly
+3. If the run regresses any metric relative to baseline, state so explicitly
    (do not silently commit a worse number as the new baseline).
 
 ## DON'T
@@ -256,6 +268,7 @@ comparing two non-baseline runs against each other.
 
 Once metrics are captured and compared, invoke `ac-review` to validate any
 harness or baseline changes before opening the PR.
+
 ```
 
 - [ ] **Step 2: Verify markdownlint is clean**
@@ -277,6 +290,7 @@ Signed-off-by: $(git config user.name) <$(git config user.email)>"
 ## Task 4: Create `ac-integrate` skill
 
 **Files:**
+
 - Create: `skills/ac-integrate/SKILL.md`
 
 - [ ] **Step 1: Write the skill**
@@ -311,17 +325,21 @@ Do NOT invoke for: adding a cache backend (use `ac-bootstrap`), benchmarking
    python -c "import vllm; print(vllm.__version__)" 2>/dev/null \
      || echo "vllm not importable locally; read the deployment's declared version"
    ```
+
    Record the version — the prefix-cache API differs across vLLM releases.
 2. Locate the integration adapter under `src/agentcache/adapters/`. If the
    directory or adapter does not exist, create it:
+
    ```bash
    mkdir -p src/agentcache/adapters
    ```
-3. Wire the adapter per the engine's prefix-cache API **for the detected
+
+1. Wire the adapter per the engine's prefix-cache API **for the detected
    version**. Do not assume a cache API shape without checking that version's
    docs.
-4. Run a cache-hit validation: send the same prompt prefix twice and assert the
+2. Run a cache-hit validation: send the same prompt prefix twice and assert the
    second call is faster (or reports a cache hit). Example shape:
+
    ```bash
    python -c "
    from agentcache.adapters import vllm as acv
@@ -332,7 +350,8 @@ Do NOT invoke for: adding a cache backend (use `ac-bootstrap`), benchmarking
    print('cache hit validated')
    "
    ```
-5. Document the deployment specifics (engine, version, endpoint shape, any
+
+3. Document the deployment specifics (engine, version, endpoint shape, any
    non-default config) in the integration notes so the next integration is
    reproducible.
 
@@ -346,6 +365,7 @@ Do NOT invoke for: adding a cache backend (use `ac-bootstrap`), benchmarking
 
 Once the adapter is wired and cache hits are validated, invoke `ac-review` to
 validate the diff against repo conventions before opening the PR.
+
 ```
 
 - [ ] **Step 2: Verify markdownlint is clean**
@@ -370,6 +390,7 @@ This task creates the stable review process (`SKILL.md`) and the evolution
 protocol (`criteria/README.md`). The criteria *content* files come in Task 6.
 
 **Files:**
+
 - Create: `skills/ac-review/SKILL.md`
 - Create: `skills/ac-review/criteria/README.md`
 
@@ -406,19 +427,20 @@ reviewing non-AgentCache code.
    git diff --name-only origin/main...HEAD
    git diff origin/main...HEAD
    ```
-2. Read every file in `criteria/` (in numeric-prefix order: `00-`, `10-`, ...).
+
+1. Read every file in `criteria/` (in numeric-prefix order: `00-`, `10-`, ...).
    For each file, read its `## TRIGGER` block. If the trigger applies to this
    diff, apply every `## CRITERION` in that file; otherwise skip it.
-3. For each criterion, check it against the diff and record one of:
+2. For each criterion, check it against the diff and record one of:
    - **PASS** — criterion satisfied.
    - **FAIL** — criterion violated; cite `file:line` and the criterion id.
    - **NA** — criterion does not apply to this diff.
-4. Report findings grouped by severity:
+3. Report findings grouped by severity:
    - **blocker** — must fix before merge.
    - **warning** — should fix; surface to the author.
    - **nit** — optional; mention but don't block.
    Do not auto-fix beyond what a criterion explicitly authorizes.
-5. Propose new criteria. If you found yourself repeating a check that is not in
+4. Propose new criteria. If you found yourself repeating a check that is not in
    any `criteria/*.md`, or the PR establishes a new convention, draft a
    `## CRITERION` block and point the author at `criteria/README.md` to add it
    in the next weekly refresh. This is how the skill evolves.
@@ -435,6 +457,7 @@ reviewing non-AgentCache code.
 Hand the findings back to the author. Blockers must be resolved before merge;
 proposed new criteria go into the next weekly refresh (see
 `criteria/README.md`).
+
 ```
 
 - [ ] **Step 2: Write the evolution protocol**
@@ -460,6 +483,7 @@ live in this directory, one category per file, and evolve as the repo develops.
   - **Check:** <how to evaluate it against a diff>
   - **Fix:** <what the author should do if it fails>
   ```
+
 - Use `_template.md` to start a new category file.
 
 ## Weekly refresh
@@ -487,6 +511,7 @@ early-stage repo. Revisit the cadence once the codebase matures.
 - `30-testing.md` — test expectations.
 - `40-perf.md` — cache-performance bar.
 - `50-safety.md` — cache poisoning, eviction correctness.
+
 ```
 
 - [ ] **Step 3: Verify markdownlint is clean on both files**
@@ -510,6 +535,7 @@ Signed-off-by: $(git config user.name) <$(git config user.email)>"
 Strong starting templates (not empty stubs) so `ac-review` is useful on day one.
 
 **Files:**
+
 - Create: `skills/ac-review/criteria/00-meta.md`
 - Create: `skills/ac-review/criteria/10-style.md`
 - Create: `skills/ac-review/criteria/20-api.md`
@@ -723,6 +749,7 @@ Describe which diffs this category applies to.
 - [ ] **Step 8: Verify markdownlint is clean on all seven files**
 
 Run:
+
 ```bash
 pre-commit run markdownlint-cli2 --files \
   skills/ac-review/criteria/00-meta.md \
@@ -733,6 +760,7 @@ pre-commit run markdownlint-cli2 --files \
   skills/ac-review/criteria/50-safety.md \
   skills/ac-review/criteria/_template.md
 ```
+
 Expected: PASS. Fix and re-run on any finding.
 
 - [ ] **Step 9: Commit**
@@ -758,25 +786,32 @@ Expected: all hooks PASS (ruff-check, ruff-format, typos, markdownlint-cli2, sig
 - [ ] **Step 2: Sanity-check frontmatter contract**
 
 For each of the four `SKILL.md` files, confirm the first lines match:
+
 ```
 ---
 name: <skill-name>
 description: <one sentence>
 ---
 ```
+
 Run a quick grep to confirm all four have the contract:
+
 ```bash
 grep -L "^name: ac-" skills/*/SKILL.md
 ```
+
 Expected: no output (every SKILL.md matches). If a file is listed, fix its frontmatter.
 
 - [ ] **Step 3: Confirm the tree matches the planned structure**
 
 Run:
+
 ```bash
 find skills -type f | sort
 ```
+
 Expected output (exactly):
+
 ```
 skills/README.md
 skills/ac-benchmark/SKILL.md
@@ -792,6 +827,7 @@ skills/ac-review/criteria/50-safety.md
 skills/ac-review/criteria/README.md
 skills/ac-review/criteria/_template.md
 ```
+
 If anything is missing or misplaced, fix it and commit the fix.
 
 - [ ] **Step 4: If any fixups were needed in steps 1–3, commit them**
@@ -802,6 +838,7 @@ git commit -m "docs(skills): fixup verification findings
 
 Signed-off-by: $(git config user.name) <$(git config user.email)>"
 ```
+
 (If nothing changed, skip this step.)
 
 ---

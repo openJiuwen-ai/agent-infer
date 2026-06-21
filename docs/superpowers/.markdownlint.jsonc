@@ -1,0 +1,19 @@
+// markdownlint configuration for design specs and implementation plans.
+//
+// These are long-form technical documents (not user-facing docs). Two default
+// rules are noisy here and add little signal, so they are disabled for this
+// subtree only. The skills/ tree (skills/**/*.md) stays under markdownlint's
+// strict defaults via repo-root behavior.
+{
+  // Long prose lines in specs/plans would be 80-char-wrapped by hand, which is
+  // high-effort/low-value and obscures diffs when text is edited.
+  "MD013": false,
+  // Specs and plans intentionally repeat structural headings across sections
+  // (e.g. every plan task has "## Step 5: Commit"; every skill has
+  // "## DON'T" / "## AFTER"). These are structural, not true duplicates.
+  "MD024": false,
+  // Specs and plans embed fenced code blocks that are *examples* of skill
+  // content (mixed bash/markdown/yaml) or template text. A language tag is
+  // often meaningless for these, so the rule is noisy here.
+  "MD040": false
+}
