@@ -5,7 +5,7 @@ import pytest
 
 from agentcache import LLM
 
-pytestmark = pytest.mark.cpu_test
+pytestmark = pytest.mark.gpu_test
 
 MODEL = "hmellor/tiny-random-LlamaForCausalLM"
 PROMPT = "Hello my name is Robert and I"

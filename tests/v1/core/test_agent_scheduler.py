@@ -56,9 +56,20 @@ def test_patch_preserves_explicit_scheduler_cls():
 
 def test_agent_scheduler_uses_agent_aware_queue():
     with patch.object(VllmScheduler, "__init__", lambda self: None):
-        s = AgentAwareScheduler.__new__(AgentAwareScheduler)
-        s.__init__()
+        s = AgentAwareScheduler()
         assert isinstance(s.waiting, AgentAwareQueue)
+
+
+def test_engine_args_patch_is_idempotent_on_reload():
+    import importlib
+
+    from vllm.engine.arg_utils import EngineArgs
+
+    import agentcache
+
+    patched_post_init = EngineArgs.__post_init__
+    importlib.reload(agentcache)
+    assert EngineArgs.__post_init__ is patched_post_init
 
 
 if __name__ == "__main__":

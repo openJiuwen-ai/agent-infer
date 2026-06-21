@@ -18,6 +18,8 @@ import time
 import openai
 import pytest
 
+pytestmark = pytest.mark.gpu_test
+
 MODEL = "Qwen/Qwen3-0.6B"
 LOG_FILE = os.path.join(os.path.dirname(__file__), "_e2e_server.log")
 
@@ -111,7 +113,7 @@ def test_agent_scheduler_configured(server):
     """Verify AgentAwareScheduler appears in the server logs."""
     with open(LOG_FILE) as f:
         content = f.read()
-    assert "Using custom scheduler class" in content, "AgentAwareScheduler warning not found in server logs"
+    assert "AgentAwareQueue initialized as waiting queue" in content, "AgentAwareScheduler log not found in server logs"
 
 
 def test_completion(client):
