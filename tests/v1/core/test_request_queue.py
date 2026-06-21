@@ -4,9 +4,9 @@
 from unittest.mock import MagicMock
 
 import pytest
+from vllm.v1.core.sched.request_queue import FCFSRequestQueue, RequestQueue
 
 from agentcache.core.request_queue import AgentAwareQueue
-from vllm.v1.core.sched.request_queue import FCFSRequestQueue, RequestQueue
 
 pytestmark = pytest.mark.cpu_test
 

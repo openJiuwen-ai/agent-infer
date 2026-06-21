@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the AgentCache project
 
 import pytest
+
 from agentcache import LLM
 
 pytestmark = pytest.mark.cpu_test
@@ -25,9 +26,7 @@ def llm() -> LLM:
 
 def test_agent_scheduler_is_configured(llm):
     cfg = llm.llm_engine.vllm_config.scheduler_config
-    assert cfg.scheduler_cls == SCHEDULER_CLS_PATH, (
-        f"Expected {SCHEDULER_CLS_PATH}, got {cfg.scheduler_cls}"
-    )
+    assert cfg.scheduler_cls == SCHEDULER_CLS_PATH, f"Expected {SCHEDULER_CLS_PATH}, got {cfg.scheduler_cls}"
 
 
 def test_generation_works(llm):

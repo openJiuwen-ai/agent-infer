@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentCache project
 
+from unittest.mock import patch
+
 import pytest
-
-from unittest.mock import MagicMock, patch
-
-from agentcache.core.request_queue import AgentAwareQueue
-from agentcache.core.scheduler import AgentAwareScheduler
 from vllm.config.scheduler import SchedulerConfig
 from vllm.v1.core.sched.interface import SchedulerInterface
 from vllm.v1.core.sched.scheduler import Scheduler as VllmScheduler
+
+from agentcache.core.request_queue import AgentAwareQueue
+from agentcache.core.scheduler import AgentAwareScheduler
 
 pytestmark = pytest.mark.cpu_test
 

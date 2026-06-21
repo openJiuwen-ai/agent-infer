@@ -111,9 +111,7 @@ def test_agent_scheduler_configured(server):
     """Verify AgentAwareScheduler appears in the server logs."""
     with open(LOG_FILE) as f:
         content = f.read()
-    assert "Using custom scheduler class" in content, (
-        "AgentAwareScheduler warning not found in server logs"
-    )
+    assert "Using custom scheduler class" in content, "AgentAwareScheduler warning not found in server logs"
 
 
 def test_completion(client):
