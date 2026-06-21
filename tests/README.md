@@ -1,6 +1,7 @@
 # AgentCache Tests
 
-Mirrors [vllm-project/vllm](https://github.com/vllm-project/vllm) test structure under `tests/v1/core/`.
+Mirrors [vllm-project/vllm](https://github.com/vllm-project/vllm)
+test structure under `tests/v1/core/`.
 
 ## Test files
 
@@ -9,7 +10,7 @@ Mirrors [vllm-project/vllm](https://github.com/vllm-project/vllm) test structure
 Unit tests for `AgentScheduler` resolution and the `EngineArgs` patch.
 
 | Test | What it verifies |
-|------|-----------------|
+| ---- | ---------------- |
 | `test_agent_scheduler_is_subclass_of_vllm_scheduler` | `AgentScheduler` extends vllm's `Scheduler` |
 | `test_agent_scheduler_is_subclass_of_scheduler_interface` | `AgentScheduler` satisfies `SchedulerInterface` |
 | `test_get_scheduler_cls_resolves_agent_scheduler` | `SchedulerConfig.get_scheduler_cls()` resolves the class path |
@@ -19,10 +20,11 @@ Unit tests for `AgentScheduler` resolution and the `EngineArgs` patch.
 
 ### `tests/v1/core/test_agent_scheduler_e2e.py`
 
-In-process end-to-end test using `agentcache.LLM` (wraps `vllm.LLM`) with a tiny model.
+In-process end-to-end test using `agentcache.LLM`
+(wraps `vllm.LLM`) with a tiny model.
 
 | Test | What it verifies |
-|------|-----------------|
+| ---- | ---------------- |
 | `test_agent_scheduler_is_configured` | `scheduler_cls` is set to `AgentScheduler` in the running engine config |
 | `test_generation_works` | Text generation produces output |
 
@@ -31,7 +33,7 @@ In-process end-to-end test using `agentcache.LLM` (wraps `vllm.LLM`) with a tiny
 Subprocess end-to-end test via `vllm-acache serve` with a real model.
 
 | Test | What it verifies |
-|------|-----------------|
+| ---- | ---------------- |
 | `test_agent_scheduler_configured` | Server logs contain the `AgentScheduler` warning |
 | `test_completion` | OpenAI-compatible `/v1/completions` returns text |
 | `test_chat_completion` | OpenAI-compatible `/v1/chat/completions` returns a message |
