@@ -116,7 +116,7 @@ def test_bare_executable_remains_for_path_lookup(tmp_path: Path) -> None:
     ("filename", "router_enabled"),
     [
         ("swebench_vllm.yaml", False),
-        ("swebench_agentcache.yaml", True),
+        ("swebench_agentinfer.yaml", True),
     ],
 )
 def test_sample_yaml_loads(filename: str, router_enabled: bool) -> None:

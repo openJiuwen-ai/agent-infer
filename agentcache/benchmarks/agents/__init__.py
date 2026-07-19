@@ -5,6 +5,7 @@ these exports to exchange requests, results, and terminal outcome values.
 """
 
 from .contracts import AgentRunRequest, AgentRunResult
+from .dispatch import run_agent
 from .outcomes import AgentRunOutcome, TerminationReason
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "AgentRunRequest",
     "AgentRunResult",
     "TerminationReason",
+    "run_agent",
 ]

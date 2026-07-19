@@ -1,9 +1,9 @@
-# SWE-bench Verified on the AgentCache stack through Router.
+# SWE-bench Verified on the AgentInfer stack through Router.
 
 # === Experiment: per-run execution limits ===
 experiment:
   task_num: null                       # first N tasks; null = full selection_path list
-  result_dir: ../result_agentcache     # result output directory
+  result_dir: ../result_agentinfer    # result output directory
   max_concurrency: 1                   # number of concurrent agent workers
   task_timeout_seconds: 3600           # per-task wall-clock cap in seconds
   run_timeout_seconds: null            # whole-run wall-clock cap; null = uncapped
@@ -40,8 +40,8 @@ request_proxy:
   startup_timeout_seconds: 10          # wait for Request Proxy readiness
   shutdown_timeout_seconds: 30         # bounded graceful shutdown timeout
 
-# === Router: enabled for the AgentCache candidate ===
+# === Router: enabled for the AgentInfer candidate ===
 router:
   enabled: true                        # candidate registers and cleans up each session
-  base_url: http://127.0.0.1:8400      # AgentCache Router control and data-plane base URL
+  base_url: http://127.0.0.1:8400      # AgentInfer Router control and data-plane base URL
   control_timeout_seconds: 10          # timeout for Router registration and cleanup requests

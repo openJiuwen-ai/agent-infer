@@ -1,10 +1,4 @@
-"""Define execution status shared by agent runtimes and benchkit.
-
-``AgentRunOutcome`` provides the coarse completed/failed dimension used for
-aggregation. ``TerminationReason`` diagnoses why execution failed or stopped
-without normal completion. Neither enum represents task correctness, which is
-evaluated from separate evidence.
-"""
+"""Define execution outcomes separately from task correctness."""
 
 from enum import Enum
 
@@ -19,6 +13,8 @@ class AgentRunOutcome(str, Enum):
 class TerminationReason(str, Enum):
     """Diagnose why execution ended without normal completion."""
 
+    AGENT_STARTUP_FAILED = "agent_startup_failed"
+    AGENT_STARTUP_TIMEOUT = "agent_startup_timeout"
     TIMEOUT = "timeout"
     PLAN_EXIT_LOOP = "plan_exit_loop"
     VALIDATION_ERROR_LOOP = "validation_error_loop"

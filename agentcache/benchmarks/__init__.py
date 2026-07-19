@@ -1,1 +1,1 @@
-"""AgentCache benchmark harness."""
+"""AgentInfer benchmark harness."""

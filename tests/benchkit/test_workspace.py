@@ -11,6 +11,7 @@ from agentcache.benchmarks.benchkit.workspace import (
     prepare_workspace,
     validate_repo_name,
     verify_workspace,
+    workspace_has_changes,
 )
 
 
@@ -166,17 +167,46 @@ def test_verify_workspace_requires_one_commit(
     assert verify_workspace(tmp_path) is expected
 
 
-def test_export_patch_includes_all_tracked_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[list[str]] = []
+def test_workspace_has_changes_is_read_only(tmp_path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    tracked = tmp_path / "tracked.txt"
+    tracked.write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "base"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    index_before = (tmp_path / ".git" / "index").read_bytes()
 
-    def fake_run(args, **kwargs):  # noqa: ANN001, ANN003
-        calls.append(list(args))
-        return subprocess.CompletedProcess(args=args, returncode=0, stdout="complete patch\n", stderr="")
+    assert workspace_has_changes(tmp_path) is False
+    (tmp_path / "new.txt").write_text("new\n", encoding="utf-8")
+    assert workspace_has_changes(tmp_path) is True
+    assert (tmp_path / ".git" / "index").read_bytes() == index_before
 
-    monkeypatch.setattr("agentcache.benchmarks.benchkit.workspace.subprocess.run", fake_run)
 
-    assert export_patch(tmp_path) == "complete patch\n"
-    assert calls == [["git", "diff", "HEAD", "--binary"]]
+def test_export_patch_includes_untracked_binary_without_changing_index(tmp_path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    tracked = tmp_path / "tracked.txt"
+    tracked.write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "base"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    tracked.write_text("changed\n", encoding="utf-8")
+    (tmp_path / "new.bin").write_bytes(b"\x00\x01\x02")
+    index_before = (tmp_path / ".git" / "index").read_bytes()
+
+    patch = export_patch(tmp_path)
+
+    assert "diff --git a/tracked.txt b/tracked.txt" in patch
+    assert "diff --git a/new.bin b/new.bin" in patch
+    assert "GIT binary patch" in patch
+    assert (tmp_path / ".git" / "index").read_bytes() == index_before
 
 
 def test_run_command_failure_includes_command_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from .dataset import Task
@@ -162,10 +163,10 @@ def prepare_workspace(
         cwd=destination,
         env={
             **os.environ,
-            "GIT_AUTHOR_NAME": "agentcache",
-            "GIT_AUTHOR_EMAIL": "agentcache@bench",
-            "GIT_COMMITTER_NAME": "agentcache",
-            "GIT_COMMITTER_EMAIL": "agentcache@bench",
+            "GIT_AUTHOR_NAME": "agentinfer",
+            "GIT_AUTHOR_EMAIL": "agentinfer@bench",
+            "GIT_COMMITTER_NAME": "agentinfer",
+            "GIT_COMMITTER_EMAIL": "agentinfer@bench",
         },
     )
 
@@ -179,8 +180,24 @@ def verify_workspace(workspace: Path) -> bool:
     return result.returncode == 0 and result.stdout.strip() == "1"
 
 
-def export_patch(workspace: Path) -> str:
-    """Export all tracked changes relative to the workspace base commit."""
+def workspace_has_changes(workspace: Path) -> bool:
+    """Return whether tracked or untracked workspace changes exist."""
 
-    result = _run_git(["diff", "HEAD", "--binary"], cwd=workspace, text=True)
+    result = _run_git(
+        ["status", "--porcelain", "--untracked-files=normal"],
+        cwd=workspace,
+        env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
+        text=True,
+    )
+    return bool(result.stdout)
+
+
+def export_patch(workspace: Path) -> str:
+    """Export tracked and untracked workspace changes from the base commit."""
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(temp_dir) / "index")}
+        _run_git(["read-tree", "HEAD"], cwd=workspace, env=env)
+        _run_git(["add", "-N", "-A"], cwd=workspace, env=env)
+        result = _run_git(["diff", "HEAD", "--binary"], cwd=workspace, env=env, text=True)
     return result.stdout
