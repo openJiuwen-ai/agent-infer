@@ -2,7 +2,7 @@
 name = "agentcache"
 version = "0.1.0"
 requires-python = ">=3.10"
-dependencies = ["datasets", "PyYAML", "pydantic"]
+dependencies = ["datasets", "httpx", "numpy", "prometheus-client", "PyYAML", "pydantic"]
 
 [tool.setuptools.packages.find]
 include = ["agentcache*"]
