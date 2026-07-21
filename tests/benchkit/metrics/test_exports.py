@@ -25,13 +25,18 @@ def test_collector_package_exports() -> None:
 def test_metric_package_exports() -> None:
     from agentcache.benchmarks.benchkit.metrics import (
         EvidenceCapture,
+        LatencyStats,
+        ObservedTopology,
+        RequestMetrics,
         RouterMetrics,
         SourceHealth,
         TaskMetrics,
         VllmMetrics,
+        aggregate_request_metrics,
         aggregate_router_events,
         aggregate_task_results,
         aggregate_vllm_metrics,
+        derive_session_topology,
         evaluate_captures,
         parse_prometheus,
     )
@@ -40,13 +45,18 @@ def test_metric_package_exports() -> None:
         symbol is not None
         for symbol in (
             EvidenceCapture,
+            LatencyStats,
+            ObservedTopology,
+            RequestMetrics,
             RouterMetrics,
             SourceHealth,
             TaskMetrics,
             VllmMetrics,
+            aggregate_request_metrics,
             aggregate_router_events,
             aggregate_task_results,
             aggregate_vllm_metrics,
+            derive_session_topology,
             evaluate_captures,
             parse_prometheus,
         )
