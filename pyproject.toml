@@ -5,7 +5,7 @@ requires-python = ">=3.10"
 dependencies = ["datasets", "fastapi", "httpx", "numpy", "prometheus-client", "PyYAML", "pydantic", "uvicorn"]
 
 [tool.setuptools.packages.find]
-include = ["agentcache*"]
+include = ["agentcache*", "agentinfer*"]
 
 [project.scripts]
 vllm = "agentcache.entrypoints.cli.main:main"
@@ -29,7 +29,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["agentcache"]
+known-first-party = ["agentcache", "agentinfer"]
 
 [tool.ruff.format]
 quote-style = "double"
