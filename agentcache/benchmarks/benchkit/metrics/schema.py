@@ -1,11 +1,13 @@
 """Shared metric contracts."""
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
 
+from pydantic import ConfigDict
+from pydantic.dataclasses import dataclass
 
-@dataclass(frozen=True)
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class EvidenceCapture:
     """Describe raw evidence availability without interpreting its metrics."""
 
@@ -17,7 +19,7 @@ class EvidenceCapture:
     applicable: bool = True
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class SourceHealth:
     """Summarize availability across applicable raw evidence sources."""
 

@@ -2,23 +2,24 @@
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
 
 from prometheus_client.parser import text_string_to_metric_families
+from pydantic import ConfigDict
+from pydantic.dataclasses import dataclass
 
 LatencyValue = float | int | None
 SeriesLabels = tuple[tuple[str, str], ...]
 SeriesKey = tuple[str, SeriesLabels]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class PrometheusSnapshot:
     """Store Prometheus samples keyed by metric name and complete label set."""
 
     samples: Mapping[SeriesKey, float]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class VllmMetrics:
     """Store instance-wide vLLM metric deltas for a valid snapshot window."""
 

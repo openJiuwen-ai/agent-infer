@@ -163,12 +163,13 @@ class StuckDetector:
 
 
 def is_transcript_complete(raw_events: Sequence[Mapping[str, object]]) -> bool:
-    """Return whether the transcript ends with a completed assistant turn."""
+    """Return whether the last conversation event is a completed assistant turn."""
 
-    if not raw_events:
-        return False
-    last_event = raw_events[-1]
-    if last_event.get("type") != "assistant":
+    last_event = next(
+        (event for event in reversed(raw_events) if event.get("type") in ("assistant", "user")),
+        None,
+    )
+    if last_event is None or last_event.get("type") != "assistant":
         return False
     stop_reason = last_event.get("stop_reason")
     message = last_event.get("message")

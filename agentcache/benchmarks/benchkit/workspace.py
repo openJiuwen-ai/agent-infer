@@ -8,14 +8,108 @@ agent edits can be exported as a patch.
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 from .dataset import Task
 
 _GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_.][A-Za-z0-9_.-]*/[A-Za-z0-9_.][A-Za-z0-9_.-]*$")
 _OUTPUT_SNIPPET_CHARS = 1000
+
+
+class WorkspaceProcessOwner:
+    """Run workspace subprocesses and terminate their process trees on demand."""
+
+    def __init__(self, deadline: float | None = None) -> None:
+        self.deadline = deadline
+        self._processes: set[subprocess.Popen] = set()
+        self._lock = threading.Lock()
+        self._cancelled = False
+
+    def run(
+        self,
+        args: list[str],
+        *,
+        cwd: Path,
+        input: bytes | None = None,
+        env: dict[str, str] | None = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess:
+        options = (
+            {"start_new_session": True} if os.name != "nt" else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        )
+        process = subprocess.Popen(
+            args,
+            cwd=cwd,
+            stdin=subprocess.PIPE if input is not None else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            text=text,
+            **options,
+        )
+        with self._lock:
+            if self._cancelled:
+                terminate = True
+            else:
+                self._processes.add(process)
+                terminate = False
+        if terminate:
+            self._terminate(process)
+            raise TimeoutError("Benchmark workspace setup was cancelled")
+        try:
+            timeout = None if self.deadline is None else max(0, self.deadline - time.monotonic())
+            stdout, stderr = process.communicate(input, timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            self._terminate(process)
+            raise TimeoutError(f"Workspace command timed out: {subprocess.list2cmdline(args)}") from exc
+        finally:
+            with self._lock:
+                self._processes.discard(process)
+        return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+
+    def terminate_all(self) -> None:
+        with self._lock:
+            self._cancelled = True
+            processes = tuple(self._processes)
+        for process in processes:
+            self._terminate(process)
+
+    def check_active(self) -> None:
+        with self._lock:
+            if self._cancelled:
+                raise TimeoutError("Benchmark workspace setup was cancelled")
+
+    @staticmethod
+    def _terminate(process: subprocess.Popen) -> None:
+        if process.poll() is not None:
+            return
+        if os.name == "nt":
+            process.send_signal(signal.CTRL_BREAK_EVENT)
+        else:
+            os.killpg(process.pid, signal.SIGTERM)
+        try:
+            process.wait(timeout=0.2)
+        except subprocess.TimeoutExpired:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=2,
+                    check=False,
+                )
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
 
 
 def _output_snippet(value: bytes | str | None) -> str:
@@ -57,17 +151,14 @@ def _run_command(
     env: dict[str, str] | None = None,
     text: bool = False,
     check: bool = True,
+    owner: WorkspaceProcessOwner | None = None,
 ) -> subprocess.CompletedProcess:
     """Run a workspace command and raise a compact diagnostic on failure."""
 
-    result = subprocess.run(
-        args,
-        cwd=cwd,
-        capture_output=True,
-        input=input,
-        env=env,
-        text=text,
-    )
+    if owner is None:
+        result = subprocess.run(args, cwd=cwd, capture_output=True, input=input, env=env, text=text)
+    else:
+        result = owner.run(args, cwd=cwd, input=input, env=env, text=text)
     if check and result.returncode != 0:
         raise _command_failed(args, cwd, result)
     return result
@@ -81,10 +172,11 @@ def _run_git(
     env: dict[str, str] | None = None,
     text: bool = False,
     check: bool = True,
+    owner: WorkspaceProcessOwner | None = None,
 ) -> subprocess.CompletedProcess:
     """Run a git command in a repo or workspace directory."""
 
-    return _run_command(["git", *args], cwd=cwd, input=input, env=env, text=text, check=check)
+    return _run_command(["git", *args], cwd=cwd, input=input, env=env, text=text, check=check, owner=owner)
 
 
 def validate_repo_name(repo: str) -> str:
@@ -95,29 +187,31 @@ def validate_repo_name(repo: str) -> str:
     return repo
 
 
-def ensure_repo_cache(task: Task, repo_cache: Path) -> Path:
+def ensure_repo_cache(task: Task, repo_cache: Path, owner: WorkspaceProcessOwner | None = None) -> Path:
     """Ensure the shared repo cache contains the task base commit."""
 
+    if owner is not None:
+        owner.check_active()
     repo = validate_repo_name(task.repo)
     repo_name = repo.replace("/", "__")
     cache_dir = repo_cache / repo_name
 
     if not (cache_dir / ".git").exists():
         cache_dir.mkdir(parents=True, exist_ok=True)
-        _run_git(["init"], cwd=cache_dir)
-        _run_git(["remote", "add", "origin", f"https://github.com/{repo}.git"], cwd=cache_dir)
-        _run_git(["fetch", "--depth", "1", "origin", task.base_commit], cwd=cache_dir)
+        _run_git(["init"], cwd=cache_dir, owner=owner)
+        _run_git(["remote", "add", "origin", f"https://github.com/{repo}.git"], cwd=cache_dir, owner=owner)
+        _run_git(["fetch", "--depth", "1", "origin", task.base_commit], cwd=cache_dir, owner=owner)
 
-    if not _commit_available(cache_dir, task.base_commit):
-        _run_git(["fetch", "--depth", "1", "origin", task.base_commit], cwd=cache_dir)
+    if not _commit_available(cache_dir, task.base_commit, owner):
+        _run_git(["fetch", "--depth", "1", "origin", task.base_commit], cwd=cache_dir, owner=owner)
 
     return cache_dir
 
 
-def _commit_available(repo: Path, commit: str) -> bool:
+def _commit_available(repo: Path, commit: str, owner: WorkspaceProcessOwner | None = None) -> bool:
     """Return whether a commit object is available in the cached repo."""
 
-    result = _run_git(["cat-file", "-e", commit + "^{commit}"], cwd=repo, check=False)
+    result = _run_git(["cat-file", "-e", commit + "^{commit}"], cwd=repo, check=False, owner=owner)
     return result.returncode == 0
 
 
@@ -125,6 +219,7 @@ def prepare_workspace(
     task: Task,
     repo_cache: Path,
     destination: Path,
+    owner: WorkspaceProcessOwner | None = None,
     *,
     clean: bool = False,
 ) -> Path:
@@ -136,6 +231,8 @@ def prepare_workspace(
     ``git diff``.
     """
 
+    if owner is not None:
+        owner.check_active()
     repo = validate_repo_name(task.repo)
     repo_name = repo.replace("/", "__")
     cache_dir = repo_cache / repo_name
@@ -148,16 +245,17 @@ def prepare_workspace(
 
     destination.mkdir(parents=True, exist_ok=True)
 
-    archive_bytes = _run_git(["archive", task.base_commit], cwd=cache_dir).stdout
+    archive_bytes = _run_git(["archive", task.base_commit], cwd=cache_dir, owner=owner).stdout
 
     _run_command(
         ["tar", "xf", "-"],
         cwd=destination,
         input=archive_bytes,
+        owner=owner,
     )
 
-    _run_git(["init"], cwd=destination)
-    _run_git(["add", "-A", "-f"], cwd=destination)
+    _run_git(["init"], cwd=destination, owner=owner)
+    _run_git(["add", "-A", "-f"], cwd=destination, owner=owner)
     _run_git(
         ["commit", "-m", f"base {task.base_commit}"],
         cwd=destination,
@@ -168,6 +266,7 @@ def prepare_workspace(
             "GIT_COMMITTER_NAME": "agentinfer",
             "GIT_COMMITTER_EMAIL": "agentinfer@bench",
         },
+        owner=owner,
     )
 
     return destination

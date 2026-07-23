@@ -6,10 +6,21 @@ upstream datasets.
 """
 
 import json
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
+
+_INSTANCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_WINDOWS_RESERVED = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
 
 
 @dataclass(frozen=True)
@@ -23,6 +34,11 @@ class Task:
     difficulty: str | None = None
     fail_to_pass: tuple[str, ...] = field(default_factory=tuple)
     pass_to_pass: tuple[str, ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        stem = self.instance_id.split(".", 1)[0].upper()
+        if not _INSTANCE_ID_RE.fullmatch(self.instance_id) or stem in _WINDOWS_RESERVED:
+            raise ValueError(f"Invalid benchmark instance_id: {self.instance_id!r}")
 
     def public_dict(self) -> dict[str, str]:
         """Return the stable task subset embedded in prompts and artifacts."""
@@ -64,6 +80,9 @@ def load_tasks(
             if not line or line.startswith("#"):
                 continue
             instance_ids.append(line)
+
+    if len(instance_ids) != len(set(instance_ids)):
+        raise ValueError("Duplicate selected benchmark instance_id")
 
     instance_ids_set = set(instance_ids)
     tasks_by_id: dict[str, Task] = {}

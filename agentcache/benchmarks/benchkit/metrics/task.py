@@ -1,15 +1,16 @@
 """Task result aggregation."""
 
 from collections.abc import Iterable
-from dataclasses import dataclass
 
 from numpy import quantile
+from pydantic import ConfigDict
+from pydantic.dataclasses import dataclass
 
 from ...agents.contracts import AgentRunResult
 from ...agents.outcomes import AgentRunOutcome
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class TaskMetrics:
     """Store aggregate execution outcomes, patch counts, and durations."""
 

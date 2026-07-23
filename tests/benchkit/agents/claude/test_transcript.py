@@ -125,6 +125,15 @@ def test_transcript_is_complete_for_finished_assistant_turn(stop_reason: str) ->
     assert is_transcript_complete([{"type": "assistant", "message": {"stop_reason": stop_reason, "content": []}}])
 
 
+def test_transcript_is_complete_with_trailing_metadata() -> None:
+    assert is_transcript_complete(
+        [
+            {"type": "assistant", "message": {"stop_reason": "end_turn", "content": []}},
+            {"type": "system", "subtype": "turn_duration"},
+        ]
+    )
+
+
 def test_transcript_is_not_complete_without_finished_assistant_turn() -> None:
     assert not is_transcript_complete(
         [

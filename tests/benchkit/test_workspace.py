@@ -1,10 +1,13 @@
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
 
 from agentcache.benchmarks.benchkit.dataset import Task
 from agentcache.benchmarks.benchkit.workspace import (
+    WorkspaceProcessOwner,
     _run_command,
     ensure_repo_cache,
     export_patch,
@@ -207,6 +210,24 @@ def test_export_patch_includes_untracked_binary_without_changing_index(tmp_path:
     assert "diff --git a/new.bin b/new.bin" in patch
     assert "GIT binary patch" in patch
     assert (tmp_path / ".git" / "index").read_bytes() == index_before
+
+
+def test_workspace_process_owner_stops_command_at_deadline(tmp_path: Path) -> None:
+    marker = tmp_path / "late.txt"
+    owner = WorkspaceProcessOwner(time.monotonic() + 0.1)
+
+    with pytest.raises(TimeoutError, match="timed out"):
+        owner.run(
+            [
+                sys.executable,
+                "-c",
+                f"import pathlib,time; time.sleep(1); pathlib.Path({str(marker)!r}).write_text('late')",
+            ],
+            cwd=tmp_path,
+        )
+
+    time.sleep(0.2)
+    assert not marker.exists()
 
 
 def test_run_command_failure_includes_command_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,14 +1,15 @@
 """Aggregate raw request facts into request metrics and observed topology."""
 
 from collections.abc import Iterable
-from dataclasses import dataclass
 
 from numpy import quantile
+from pydantic import ConfigDict
+from pydantic.dataclasses import dataclass
 
 from ...request_proxy.request_trace import RequestFact
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class LatencyStats:
     """Store typed latency distribution summaries."""
 
@@ -18,7 +19,7 @@ class LatencyStats:
     p99: float | None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class RequestMetrics:
     """Store request-edge counts, token totals, and latency statistics."""
 
@@ -34,7 +35,7 @@ class RequestMetrics:
     ttft_seconds: LatencyStats
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class ObservedTopology:
     """Store actors observed for one Claude session."""
 

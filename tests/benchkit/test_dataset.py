@@ -56,6 +56,22 @@ def test_load_tasks_preserves_selection_order_and_applies_total(tmp_path: Path) 
     assert [task.instance_id for task in tasks] == ["task-c", "task-a"]
 
 
+@pytest.mark.parametrize("instance_id", ["../escape", "/absolute", "C:\\escape", "CON", "task/name"])
+def test_task_rejects_unsafe_instance_id(instance_id: str) -> None:
+    with pytest.raises(ValueError, match="instance_id"):
+        dataset.Task(instance_id, "owner/repo", "abc", "fix it")
+
+
+def test_load_tasks_rejects_duplicate_selection(tmp_path: Path) -> None:
+    index = tmp_path / "instances.jsonl"
+    selection = tmp_path / "tasks.txt"
+    index.write_text('{"instance_id":"task-a"}\n', encoding="utf-8")
+    selection.write_text("task-a\ntask-a\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Duplicate selected"):
+        dataset.load_tasks(index, selection)
+
+
 def test_prepare_swebench_writes_local_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         dataset,
