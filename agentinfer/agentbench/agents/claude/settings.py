@@ -22,12 +22,16 @@ def bootstrap_claude_state(config_dir: Path) -> None:
     )
 
 
-def build_claude_settings(api_base_url: str) -> dict[str, object]:
+def build_claude_settings(api_base_url: str, model: str) -> dict[str, object]:
     """Build the non-secret Claude settings.json payload for a benchmark run."""
 
     return {
         "env": {
             "ANTHROPIC_BASE_URL": api_base_url,
+            "CLAUDE_CODE_SUBAGENT_MODEL": model,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": model,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
             "DISABLE_AUTOUPDATER": "1",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         },
@@ -42,6 +46,7 @@ def build_claude_settings(api_base_url: str) -> dict[str, object]:
 def build_claude_env(
     claude_state_dir: Path,
     api_base_url: str,
+    model: str,
 ) -> dict[str, str]:
     """Build environment variables passed to Claude Code."""
 
@@ -51,6 +56,10 @@ def build_claude_env(
     return {
         "ANTHROPIC_BASE_URL": api_base_url,
         "ANTHROPIC_AUTH_TOKEN": token,
+        "CLAUDE_CODE_SUBAGENT_MODEL": model,
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": model,
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
         "DISABLE_AUTOUPDATER": "1",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "CLAUDE_CONFIG_DIR": str(claude_state_dir),

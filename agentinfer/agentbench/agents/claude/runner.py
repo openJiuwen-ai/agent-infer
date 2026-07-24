@@ -247,10 +247,14 @@ async def run_claude(request: AgentRunRequest) -> AgentRunResult:
     await asyncio.to_thread(bootstrap_claude_state, claude_state_dir)
 
     settings_path = artifact_dir / "claude-settings.json"
-    settings = build_claude_settings(request.api_base_url)
+    settings = build_claude_settings(request.api_base_url, request.model)
     await _write_text_async(settings_path, json.dumps(settings, indent=2))
 
-    assignments = build_claude_env(claude_state_dir, request.api_base_url)
+    assignments = build_claude_env(
+        claude_state_dir,
+        request.api_base_url,
+        request.model,
+    )
     command = [
         str(request.executable),
         "--session-id",

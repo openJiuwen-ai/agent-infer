@@ -41,6 +41,23 @@ def _agent_result(session_id: str) -> AgentRunResult:
     )
 
 
+class _Progress:
+    def __init__(self, **kwargs) -> None:
+        self.options = kwargs
+        self.updates = []
+        self.postfixes = []
+        self.closed = False
+
+    def update(self, value: int) -> None:
+        self.updates.append(value)
+
+    def set_postfix(self, **values: str) -> None:
+        self.postfixes.append(values)
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def test_baseline_skips_router_control_and_serializes_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("agentinfer.agentbench.benchkit.runner.prepare_workspace", lambda *_args: None)
     monkeypatch.setattr(
@@ -146,7 +163,7 @@ def _patch_successful_run(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(
         "agentinfer.agentbench.benchkit.runner.collect_source_control",
-        lambda _cwd: EvidenceCapture("source_control", None, False, "unavailable", {}),
+        lambda _source_path: EvidenceCapture("source_control", None, False, "unavailable", {}),
     )
     monkeypatch.setattr(
         "agentinfer.agentbench.benchkit.runner.load_correctness_artifact",
@@ -289,6 +306,46 @@ def test_run_timeout_includes_cancelled_task_in_summary(tmp_path: Path, monkeypa
     assert result["termination_reason"] == "cancelled"
 
 
+def test_run_tasks_reports_progress_and_closes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from agentinfer.agentbench.benchkit import runner
+
+    task = _task()
+    context = _context(tmp_path, router=False)
+    context = RunContext(context.config, context.output_dir, context.trace_path, (task,))
+    progress = _Progress(total=0)
+    monkeypatch.setattr(runner, "tqdm", lambda **_kwargs: progress)
+    monkeypatch.setattr(runner, "ensure_repo_cache", lambda *_args: None)
+    monkeypatch.setattr(runner, "_run_single_task", lambda *_args: asyncio.sleep(0))
+
+    asyncio.run(runner._run_tasks(context, "http://proxy", []))
+
+    assert progress.updates == [1]
+    assert progress.postfixes == [{"last": "instance"}]
+    assert progress.closed is True
+
+
+def test_run_tasks_closes_progress_after_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from agentinfer.agentbench.benchkit import runner
+
+    task = _task()
+    context = _context(tmp_path, router=False)
+    context = RunContext(context.config, context.output_dir, context.trace_path, (task,))
+    progress = _Progress(total=0)
+    monkeypatch.setattr(runner, "tqdm", lambda **_kwargs: progress)
+    monkeypatch.setattr(runner, "ensure_repo_cache", lambda *_args: None)
+
+    async def fail(*_args):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(runner, "_run_single_task", fail)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        asyncio.run(runner._run_tasks(context, "http://proxy", []))
+
+    assert progress.updates == [1]
+    assert progress.closed is True
+
+
 def test_repository_and_workspace_preparation_use_threads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from agentinfer.agentbench.benchkit import runner
 
@@ -315,6 +372,50 @@ def test_repository_and_workspace_preparation_use_threads(tmp_path: Path, monkey
 
     assert calls == [runner.ensure_repo_cache, runner.prepare_workspace]
     assert len(results) == 1
+
+
+def test_run_artifacts_index_raw_evidence_without_embedding_payloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agentinfer.agentbench.benchkit import runner
+    from agentinfer.agentbench.benchkit.metrics.schema import EvidenceCapture
+
+    _patch_successful_run(monkeypatch)
+    samples = iter(("prometheus-start-payload", "prometheus-end-payload"))
+
+    async def vllm(_url):
+        return EvidenceCapture("vllm", None, True, None, {"text": next(samples)})
+
+    monkeypatch.setattr(runner, "capture_vllm_metrics", vllm)
+    monkeypatch.setattr(
+        runner,
+        "collect_environment",
+        lambda: EvidenceCapture("environment", None, True, None, {"hostname": "raw-host"}),
+    )
+    monkeypatch.setattr(
+        runner,
+        "collect_source_control",
+        lambda _path: EvidenceCapture("source_control", None, True, None, {"commit": "raw-commit"}),
+    )
+
+    asyncio.run(runner.run_benchmark(_run_config(tmp_path), cli_metadata={"entrypoint": "test"}))
+
+    run_dir = tmp_path / "run"
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    serialized = json.dumps({"manifest": manifest, "summary": summary})
+
+    assert (run_dir / "evidence" / "vllm_metrics_start.prom").read_text() == "prometheus-start-payload"
+    assert (run_dir / "evidence" / "vllm_metrics_end.prom").read_text() == "prometheus-end-payload"
+    assert json.loads((run_dir / "evidence" / "environment.json").read_text()) == {"hostname": "raw-host"}
+    assert json.loads((run_dir / "evidence" / "source_control.json").read_text()) == {"commit": "raw-commit"}
+    assert "prometheus-start-payload" not in serialized
+    assert "prometheus-end-payload" not in serialized
+    assert "raw-host" not in serialized
+    assert "raw-commit" not in serialized
+    assert all(row["metadata"] == {} for row in manifest["evidence"])
+    assert all(row["metadata"] == {} for rows in summary["source_health"]["sources"].values() for row in rows)
+    assert summary["cli"] == {"entrypoint": "test"}
 
 
 def test_non_graceful_proxy_close_fails_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

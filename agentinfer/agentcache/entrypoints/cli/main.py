@@ -1,12 +1,28 @@
-"""Delegate commands to the upstream vLLM CLI."""
+"""Delegate vLLM commands while intercepting explicit AgentInfer benchmarks."""
 
 import sys
+from pathlib import Path
+
+
+def _is_bench_delegation(argv: list[str]) -> bool:
+    """Return whether argv requests the explicit AgentInfer benchmark path."""
+
+    offset = 1 if argv and Path(argv[0]).name == "vllm" else 0
+    return (
+        len(argv) >= offset + 3
+        and argv[offset : offset + 2] == ["bench", "serve"]
+        and "--agentinfer" in argv[offset + 2 :]
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Delegate unchanged to upstream vLLM."""
+    """Route AgentInfer benchmarks or delegate unchanged to upstream vLLM."""
 
     raw_argv = list(sys.argv if argv is None else argv)
+    if _is_bench_delegation(raw_argv):
+        from agentinfer.agentcache.entrypoints.bench import main as benchmark_main
+
+        return benchmark_main(raw_argv)
     return _delegate_vllm(raw_argv)
 
 

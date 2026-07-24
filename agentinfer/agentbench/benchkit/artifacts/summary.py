@@ -46,6 +46,7 @@ class RunSummary:
     correctness: CorrectnessSummary
     source_health: SourceHealth
     lifecycle: LifecycleSummary
+    cli: dict[str, object] | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)

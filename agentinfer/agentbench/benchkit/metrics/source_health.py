@@ -1,7 +1,6 @@
 """Evaluate availability and applicability of raw evidence captures."""
 
 from collections.abc import Iterable, Mapping
-from dataclasses import asdict
 
 from .schema import EvidenceCapture, SourceHealth
 
@@ -16,8 +15,12 @@ def evaluate_captures(captures: Iterable[EvidenceCapture]) -> SourceHealth:
     for row in rows:
         sources.setdefault(row.source, []).append(
             {
-                **asdict(row),
+                "source": row.source,
                 "path": str(row.path) if row.path is not None else None,
+                "available": row.available,
+                "reason": row.reason,
+                "metadata": {},
+                "applicable": row.applicable,
             }
         )
     return SourceHealth(

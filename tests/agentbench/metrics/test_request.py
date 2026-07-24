@@ -75,21 +75,35 @@ def test_aggregate_request_metrics_handles_empty_and_zero_input() -> None:
     zero = aggregate_request_metrics([_fact(input_tokens=0, cache_creation_tokens=0, cached_tokens=0)])
 
     assert empty.requests == 0
+    assert empty.cache_creation_input_tokens is None
+    assert empty.cached_input_tokens is None
     assert empty.latency_seconds == LatencyStats(None, None, None, None)
     assert empty.ttft_seconds == LatencyStats(None, None, None, None)
     assert empty.prefix_cache_hit_rate is None
+    assert zero.cache_creation_input_tokens == 0
+    assert zero.cached_input_tokens == 0
     assert zero.prefix_cache_hit_rate is None
 
 
 def test_aggregate_request_metrics_preserves_cache_telemetry_availability() -> None:
     missing = _fact(cache_creation_tokens=None, cached_tokens=None)
-    explicit = _fact(request_id="r2", input_tokens=5, cache_creation_tokens=1, cached_tokens=4)
+    read_only = _fact(request_id="r2", input_tokens=5, cache_creation_tokens=None, cached_tokens=4)
+    creation_only = _fact(request_id="r3", input_tokens=3, cache_creation_tokens=1, cached_tokens=None)
 
-    assert aggregate_request_metrics([missing]).prefix_cache_hit_rate is None
-    mixed = aggregate_request_metrics([missing, explicit])
-    assert mixed.cache_creation_input_tokens == 1
-    assert mixed.cached_input_tokens == 4
-    assert mixed.prefix_cache_hit_rate == 4 / 10
+    missing_metrics = aggregate_request_metrics([missing])
+    assert missing_metrics.cache_creation_input_tokens is None
+    assert missing_metrics.cached_input_tokens is None
+    assert missing_metrics.prefix_cache_hit_rate is None
+
+    read_metrics = aggregate_request_metrics([read_only])
+    assert read_metrics.cache_creation_input_tokens is None
+    assert read_metrics.cached_input_tokens == 4
+    assert read_metrics.prefix_cache_hit_rate is None
+
+    creation_metrics = aggregate_request_metrics([creation_only])
+    assert creation_metrics.cache_creation_input_tokens == 1
+    assert creation_metrics.cached_input_tokens is None
+    assert creation_metrics.prefix_cache_hit_rate is None
 
 
 def test_derive_session_topology_filters_and_sorts_actors() -> None:

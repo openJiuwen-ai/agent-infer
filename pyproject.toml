@@ -2,7 +2,7 @@
 name = "agentinfer"
 version = "0.1.0"
 requires-python = ">=3.10"
-dependencies = ["datasets", "fastapi", "httpx", "numpy", "prometheus-client", "PyYAML", "pydantic", "uvicorn"]
+dependencies = ["datasets", "fastapi", "httpx", "numpy", "prometheus-client", "PyYAML", "pydantic", "tqdm", "uvicorn"]
 
 [tool.setuptools.packages.find]
 include = ["agentinfer*"]

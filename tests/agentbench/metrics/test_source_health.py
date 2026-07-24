@@ -20,16 +20,14 @@ def test_evaluate_captures_separates_unavailable_and_not_applicable() -> None:
     assert health.sources["environment"][0]["path"] == "environment.json"
 
 
-def test_evaluate_captures_preserves_duplicate_sources() -> None:
+def test_evaluate_captures_strips_raw_metadata_from_duplicate_sources() -> None:
     captures = [
-        EvidenceCapture("vllm", None, True, None, {"snapshot": "start"}),
-        EvidenceCapture("vllm", None, True, None, {"snapshot": "end"}),
+        EvidenceCapture("vllm", Path("start.prom"), True, None, {"text": "raw start"}),
+        EvidenceCapture("vllm", Path("end.prom"), True, None, {"text": "raw end"}),
     ]
 
     health = evaluate_captures(captures)
 
     assert health.available == 2
-    assert [row["metadata"] for row in health.sources["vllm"]] == [
-        {"snapshot": "start"},
-        {"snapshot": "end"},
-    ]
+    assert [row["path"] for row in health.sources["vllm"]] == ["start.prom", "end.prom"]
+    assert [row["metadata"] for row in health.sources["vllm"]] == [{}, {}]

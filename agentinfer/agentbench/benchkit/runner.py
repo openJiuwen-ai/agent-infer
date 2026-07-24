@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TypeVar
 
 import httpx
+from tqdm import tqdm
 
 from ..agents import AgentRunRequest, AgentRunResult, run_agent
 from ..agents.outcomes import AgentRunOutcome, TerminationReason
@@ -170,7 +171,7 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
                     lambda: atomic_write_json(environment_capture.path, environment_capture.metadata),
                 )
 
-        source_capture = finalize_sync("source_control", lambda: collect_source_control(Path.cwd()))
+        source_capture = finalize_sync("source_control", lambda: collect_source_control(Path(__file__).resolve()))
         if source_capture is not None:
             source_capture = _capture_with_path(source_capture, output_dir / "evidence" / "source_control.json")
             captures.append(source_capture)
@@ -213,7 +214,7 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
                     {
                         "available": correctness_capture.available if correctness_capture else False,
                         "reason": correctness_capture.reason if correctness_capture else "collection failed",
-                        "metadata": dict(correctness_capture.metadata) if correctness_capture else {},
+                        "metadata": {},
                     },
                     evaluate_captures(captures),
                     lifecycle_payload,
@@ -259,9 +260,15 @@ async def _run_tasks(
         await asyncio.to_thread(ensure_repo_cache, task, cache, owner)
     semaphore = asyncio.Semaphore(config.experiment.max_concurrency)
 
+    progress = tqdm(total=len(context.tasks), desc="benchmark", unit="task")
+
     async def bounded(task: Task) -> None:
         async with semaphore:
-            await _run_single_task(context, task, api_base_url, cache, results, owner)
+            try:
+                await _run_single_task(context, task, api_base_url, cache, results, owner)
+            finally:
+                progress.update(1)
+                progress.set_postfix(last=task.instance_id)
 
     tasks = [asyncio.create_task(bounded(task)) for task in context.tasks]
     try:
@@ -273,6 +280,8 @@ async def _run_tasks(
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
+    finally:
+        progress.close()
 
 
 async def _run_single_task(
@@ -450,9 +459,14 @@ def _trace_capture(path: Path, close_result) -> EvidenceCapture:
 
 
 def _capture_dict(capture: EvidenceCapture) -> dict:
-    value = asdict(capture)
-    value["path"] = str(capture.path) if capture.path is not None else None
-    return value
+    return {
+        "source": capture.source,
+        "path": str(capture.path) if capture.path is not None else None,
+        "available": capture.available,
+        "reason": capture.reason,
+        "metadata": {},
+        "applicable": capture.applicable,
+    }
 
 
 async def check_preflight(config: AgentBenchConfig) -> None:

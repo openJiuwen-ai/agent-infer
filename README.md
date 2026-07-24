@@ -5,7 +5,7 @@ LLM serving engines such as vLLM.
 
 ## Installation
 
-AgentInfer requires Python 3.10 or later and vLLM 0.22.1.
+AgentInfer requires Python 3.10 or later and vLLM 0.23.0.
 
 Clone the repository and install in development mode:
 

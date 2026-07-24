@@ -28,8 +28,8 @@ class RequestMetrics:
     failed_requests: int
     input_tokens: int
     output_tokens: int
-    cache_creation_input_tokens: int
-    cached_input_tokens: int
+    cache_creation_input_tokens: int | None
+    cached_input_tokens: int | None
     prefix_cache_hit_rate: float | None
     latency_seconds: LatencyStats
     ttft_seconds: LatencyStats
@@ -61,11 +61,13 @@ def aggregate_request_metrics(facts: Iterable[RequestFact]) -> RequestMetrics:
     rows = list(facts)
     success = [row for row in rows if row.status == "success"]
     input_tokens = sum(row.input_tokens or 0 for row in success)
+    creation_rows = [row for row in success if row.cache_creation_tokens is not None]
+    cached_rows = [row for row in success if row.cached_tokens is not None]
     cache_rows = [row for row in success if row.cache_creation_tokens is not None or row.cached_tokens is not None]
     cache_input = sum(row.input_tokens or 0 for row in cache_rows)
-    cache_creation = sum(row.cache_creation_tokens or 0 for row in cache_rows)
-    cached = sum(row.cached_tokens or 0 for row in cache_rows)
-    eligible_input = cache_input + cache_creation + cached
+    cache_creation = sum(row.cache_creation_tokens or 0 for row in creation_rows) if creation_rows else None
+    cached = sum(row.cached_tokens or 0 for row in cached_rows) if cached_rows else None
+    eligible_input = cache_input + (cache_creation or 0) + (cached or 0)
     return RequestMetrics(
         len(rows),
         len(success),
@@ -74,7 +76,7 @@ def aggregate_request_metrics(facts: Iterable[RequestFact]) -> RequestMetrics:
         sum(row.output_tokens or 0 for row in success),
         cache_creation,
         cached,
-        cached / eligible_input if cache_rows and eligible_input else None,
+        cached / eligible_input if cache_creation is not None and cached is not None and eligible_input else None,
         _stats([row.latency_seconds for row in rows]),
         _stats([row.ttft_seconds for row in rows if row.ttft_seconds is not None]),
     )

@@ -21,6 +21,8 @@ def write_run(
     completed: int = 1,
     duration: float = 10.0,
     requests: int = 2,
+    cache_creation: int | None = 0,
+    cached_input: int | None = 5,
     router_events: dict[str, int] | None = None,
     vllm_available: bool = False,
 ) -> None:
@@ -32,9 +34,9 @@ def write_run(
         0,
         10,
         4,
-        0,
-        5,
-        0.5,
+        cache_creation,
+        cached_input,
+        0.5 if cache_creation is not None and cached_input is not None else None,
         LatencyStats(1.0, 1.0, 1.0, 1.0),
         LatencyStats(0.2, 0.2, 0.2, 0.2),
     )
@@ -74,6 +76,39 @@ def test_compare_finalized_artifacts_and_router_schema(tmp_path: Path) -> None:
     assert result["metrics"]["ttft_p99_seconds"]["baseline"] == 0.2
     assert result["metadata"]["baseline_router"] == {"applicable": False, "events": {}}
     assert result["metadata"]["candidate_router"] == {"applicable": True, "events": {"admit": 2}}
+
+
+def test_compare_accepts_cli_metadata_in_finalized_summary(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    write_run(run_dir, "baseline")
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    summary["cli"] = {
+        "entrypoint": "vllm bench serve --agentinfer",
+        "argv": ["bench", "serve", "--agentinfer", "run"],
+    }
+    (run_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+
+    loaded = load_summary(run_dir)
+
+    assert loaded["cli"] == summary["cli"]
+
+
+def test_compare_excludes_null_cache_creation_samples(tmp_path: Path) -> None:
+    baseline = []
+    for index, value in enumerate((None, 4)):
+        path = tmp_path / f"baseline-{index}"
+        write_run(path, "baseline", cache_creation=value)
+        baseline.append(path)
+    candidate = tmp_path / "candidate"
+    write_run(candidate, "candidate", cache_creation=None)
+
+    result = json.loads(compare(baseline, candidate, as_json=True))
+    metric = result["metrics"]["cache_creation_input_tokens"]
+
+    assert metric["baseline"] == 4
+    assert metric["n_baseline"] == 1
+    assert metric["candidate"] is None
+    assert metric["n_candidate"] == 0
 
 
 def test_compare_rejects_legacy_handwritten_shape(tmp_path: Path) -> None:

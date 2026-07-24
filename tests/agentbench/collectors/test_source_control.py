@@ -5,18 +5,31 @@ import pytest
 from agentinfer.agentbench.benchkit.collectors.source_control import collect_source_control
 
 
-def test_collect_source_control_reports_commit_and_dirty_state(tmp_path, monkeypatch) -> None:
+def test_collect_source_control_resolves_root_from_imported_path(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "checkout" / "agentinfer" / "module.py"
+    source.parent.mkdir(parents=True)
+    source.touch()
+    root = tmp_path / "checkout"
+    calls = []
     responses = [
+        subprocess.CompletedProcess([], 0, stdout=f"{root}\n", stderr=""),
         subprocess.CompletedProcess([], 0, stdout="abc123\n", stderr=""),
         subprocess.CompletedProcess([], 0, stdout=" M changed.py\n", stderr=""),
     ]
-    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: responses.pop(0))
 
-    capture = collect_source_control(tmp_path)
+    def run(command, **kwargs):
+        calls.append(command)
+        return responses.pop(0)
 
+    monkeypatch.setattr(subprocess, "run", run)
+
+    capture = collect_source_control(source)
+
+    assert calls[0] == ["git", "-C", str(source.parent), "rev-parse", "--show-toplevel"]
+    assert calls[1][:3] == ["git", "-C", str(root)]
     assert capture.available is True
     assert capture.path is None
-    assert capture.metadata == {"commit": "abc123", "dirty": True}
+    assert capture.metadata == {"root": str(root), "commit": "abc123", "dirty": True}
 
 
 @pytest.mark.parametrize(
@@ -33,7 +46,7 @@ def test_collect_source_control_converts_process_failures_to_evidence(tmp_path, 
 
     monkeypatch.setattr(subprocess, "run", fail)
 
-    capture = collect_source_control(tmp_path)
+    capture = collect_source_control(tmp_path / "imported" / "agentinfer")
 
     assert capture.available is False
     assert capture.path is None

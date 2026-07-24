@@ -25,9 +25,13 @@ def test_bootstrap_writes_onboarding_and_trust_state(tmp_path: Path) -> None:
 def test_settings_never_contain_auth_token(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "unique-secret")
 
-    settings = build_claude_settings("http://proxy")
+    settings = build_claude_settings("http://proxy", "glm-5")
 
     assert settings["env"]["ANTHROPIC_BASE_URL"] == "http://proxy"
+    assert settings["env"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "glm-5"
+    assert settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "glm-5"
+    assert settings["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "glm-5"
+    assert settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "glm-5"
     assert "unique-secret" not in json.dumps(settings)
     assert "ANTHROPIC_AUTH_TOKEN" not in settings["env"]
 
@@ -38,15 +42,19 @@ def test_launch_environment_contains_task_local_state_and_token(
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "unique-secret")
 
-    env = build_claude_env(tmp_path, "http://proxy")
+    env = build_claude_env(tmp_path, "http://proxy", "glm-5")
 
     assert env["ANTHROPIC_AUTH_TOKEN"] == "unique-secret"
     assert env["ANTHROPIC_BASE_URL"] == "http://proxy"
     assert env["CLAUDE_CONFIG_DIR"] == str(tmp_path)
+    assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == "glm-5"
+    assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "glm-5"
+    assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "glm-5"
+    assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "glm-5"
 
 
 def test_launch_environment_requires_auth_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
 
     with pytest.raises(RuntimeError, match="ANTHROPIC_AUTH_TOKEN"):
-        build_claude_env(tmp_path, "http://proxy")
+        build_claude_env(tmp_path, "http://proxy", "glm-5")
