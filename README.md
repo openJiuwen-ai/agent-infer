@@ -1,30 +1,29 @@
-# AgentCache
+# AgentInfer
 
 Efficient cache management for agent workflows, designed to plug into
 LLM serving engines such as vLLM.
 
 ## Installation
 
-AgentCache requires Python 3.10 or later and vLLM 0.22.1.
+AgentInfer requires Python 3.10 or later and vLLM 0.22.1.
 
 Clone the repository and install in development mode:
 
 ```bash
-git clone https://github.com/JiusiServe/AgentCache.git
-cd AgentCache
+git clone https://github.com/JiusiServe/AgentInfer.git
+cd AgentInfer
 pip install -e .
 ```
 
-Once installed, the `vllm-acache` CLI command is available.  It wraps the
-standard vLLM CLI with the agent-aware scheduler already patched in:
+Once installed, the `vllm` CLI delegates standard commands to upstream vLLM while loading AgentCache:
 
 ```bash
-vllm-acache serve meta-llama/Llama-3.1-8B-Instruct
+vllm serve meta-llama/Llama-3.1-8B-Instruct
 ```
 
-When `import agentcache` is executed, vLLM `EngineArgs` are automatically
+When `import agentinfer` is executed, vLLM `EngineArgs` are automatically
 patched to use the `AgentAwareScheduler` by default, so any code or script
-that imports `agentcache` before instantiating a vLLM engine gets the
+that imports `agentinfer` before instantiating a vLLM engine gets the
 agent-aware scheduling behaviour without additional configuration.
 
 ## Custom Scheduler and Request Queue
@@ -37,7 +36,7 @@ AgentCache layers on top of vLLM's scheduler and request-queue primitives:
 |----------------------|--------------------------------------------------|
 | `AgentAwareQueue`    | Extends `RequestQueue` — FCFS by default         |
 | `AgentAwareScheduler`| Extends vLLM `Scheduler`, uses `AgentAwareQueue` |
-| `agentcache.LLM`     | Thin wrapper around `vllm.LLM`                   |
+| `agentinfer.LLM`     | Thin wrapper around `vllm.LLM`                   |
 
 `AgentAwareQueue` currently delegates every operation to a standard
 `FCFSRequestQueue`.  The identical FCFS behaviour exists so that subclasses
@@ -47,17 +46,17 @@ itself.
 
 ### Using the Wrapper
 
-The simplest way to opt in is to use `agentcache.LLM` instead of
+The simplest way to opt in is to use `agentinfer.LLM` instead of
 `vllm.LLM`:
 
 ```python
-import agentcache
+import agentinfer
 
-llm = agentcache.LLM(model="meta-llama/Llama-3.1-8B-Instruct")
+llm = agentinfer.LLM(model="meta-llama/Llama-3.1-8B-Instruct")
 ```
 
-Because `import agentcache` patches `EngineArgs`, instantiating
-`agentcache.LLM` (or `vllm.LLM` after the import) automatically selects
+Because `import agentinfer` patches `EngineArgs`, instantiating
+`agentinfer.LLM` (or `vllm.LLM` after the import) automatically selects
 `AgentAwareScheduler`, which creates an `AgentAwareQueue` as its waiting
 queue.
 
@@ -66,7 +65,7 @@ queue.
 Subclass `AgentAwareQueue` and override the methods you need:
 
 ```python
-from agentcache.core.request_queue import AgentAwareQueue
+from agentinfer.agentcache.core.request_queue import AgentAwareQueue
 
 class PriorityAgentQueue(AgentAwareQueue):
     def pop_request(self):
@@ -79,7 +78,7 @@ class PriorityAgentQueue(AgentAwareQueue):
 Subclass `AgentAwareScheduler` to wire in a custom queue:
 
 ```python
-from agentcache.core.scheduler import AgentAwareScheduler
+from agentinfer.agentcache.core.scheduler import AgentAwareScheduler
 
 class PriorityScheduler(AgentAwareScheduler):
     def __init__(self, *args, **kwargs):
@@ -94,7 +93,7 @@ from vllm.engine.arg_utils import EngineArgs
 
 args = EngineArgs(model="meta-llama/Llama-3.1-8B-Instruct",
                   scheduler_cls="mymodule.PriorityScheduler")
-llm = agentcache.LLM(engine_args=args)
+llm = agentinfer.LLM(engine_args=args)
 ```
 
 ### Extension Points Summary

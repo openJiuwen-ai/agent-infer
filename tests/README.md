@@ -1,11 +1,11 @@
-# AgentCache Tests
+# AgentInfer Tests
 
 Mirrors [vllm-project/vllm](https://github.com/vllm-project/vllm)
-test structure under `tests/v1/core/`.
+test structure under `tests/agentcache/core/`.
 
 ## Test files
 
-### `tests/v1/core/test_agent_scheduler.py`
+### `tests/agentcache/core/test_agent_scheduler.py`
 
 Unit tests for `AgentAwareScheduler` resolution and the `EngineArgs` patch.
 
@@ -18,9 +18,9 @@ Unit tests for `AgentAwareScheduler` resolution and the `EngineArgs` patch.
 | `test_patch_sets_scheduler_cls_when_none` | `EngineArgs.__post_init__` defaults to `AgentAwareScheduler` when `scheduler_cls` is `None` |
 | `test_patch_preserves_explicit_scheduler_cls` | Explicit `scheduler_cls` is not overwritten by the patch |
 
-### `tests/v1/core/test_agent_scheduler_e2e.py`
+### `tests/agentcache/core/test_agent_scheduler_e2e.py`
 
-In-process end-to-end test using `agentcache.LLM`
+In-process end-to-end test using `agentinfer.LLM`
 (wraps `vllm.LLM`) with a tiny model.
 
 | Test | What it verifies |
@@ -28,9 +28,9 @@ In-process end-to-end test using `agentcache.LLM`
 | `test_agent_scheduler_is_configured` | `scheduler_cls` is set to `AgentAwareScheduler` in the running engine config |
 | `test_generation_works` | Text generation produces output |
 
-### `tests/v1/core/test_agent_scheduler_serve_e2e.py`
+### `tests/agentcache/core/test_agent_scheduler_serve_e2e.py`
 
-Subprocess end-to-end test via `vllm-acache serve` with a real model.
+Subprocess end-to-end test via `vllm serve` with a real model.
 
 | Test | What it verifies |
 | ---- | ---------------- |
@@ -52,23 +52,23 @@ pip install -e .
 ### Run all tests
 
 ```bash
-pytest tests/v1/ -v
+pytest tests/agentcache/ tests/agentbench/ -v
 ```
 
 ### Run unit tests only (no GPU needed)
 
 ```bash
-pytest tests/v1/core/test_agent_scheduler.py -v
+pytest tests/agentcache/core/test_agent_scheduler.py -v
 ```
 
 ### Run in-process E2E test (requires GPU, tiny model)
 
 ```bash
-pytest tests/v1/core/test_agent_scheduler_e2e.py -v
+pytest tests/agentcache/core/test_agent_scheduler_e2e.py -v
 ```
 
 ### Run serve E2E test (requires GPU, real model ~1.3 GB)
 
 ```bash
-pytest tests/v1/core/test_agent_scheduler_serve_e2e.py -v
+pytest tests/agentcache/core/test_agent_scheduler_serve_e2e.py -v
 ```
