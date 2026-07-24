@@ -106,6 +106,7 @@ class TransitionController:
 
     def __init__(self, apply_transition: Callable[[TransitionRequest], TransitionResult]) -> None:
         self._apply_transition = apply_transition
+        self._applied_requests: list[TransitionRequest] = []
 
     def apply(self, request: TransitionRequest) -> TransitionResult:
         """Apply a typed transition and reject a mismatched runtime result.
@@ -116,7 +117,15 @@ class TransitionController:
         result = self._apply_transition(request)
         if result.kind is not request.kind or result.program != request.program:
             raise ValueError("transition result does not match its request")
+        if result.applied:
+            self._applied_requests.append(request)
         return result
+
+    def take_applied_requests(self) -> tuple[TransitionRequest, ...]:
+        """Return and clear the accepted transition ledger since the previous call."""
+        requests = tuple(self._applied_requests)
+        self._applied_requests.clear()
+        return requests
 
     def admit(self, program: ProgramRef, *, reason: str, backend_id: str) -> TransitionResult:
         """Request admission of a Program to the configured backend."""

@@ -568,6 +568,8 @@ def test_transition_helpers_preserve_program_generation_reason_and_backend() -> 
         TransitionRequest(TransitionKind.RESUME, ref, "waiting", "backend-a"),
         TransitionRequest(TransitionKind.RELEASE, ref, "finished"),
     ]
+    assert controller.take_applied_requests() == tuple(calls)
+    assert controller.take_applied_requests() == ()
 
 
 def test_transition_request_validates_backend_usage() -> None:

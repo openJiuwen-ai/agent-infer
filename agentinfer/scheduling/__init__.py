@@ -15,6 +15,10 @@ from agentinfer.scheduling.events import SchedulingEvent, SchedulingEventKind, S
 from agentinfer.scheduling.factors import StrategyFactors
 from agentinfer.scheduling.identity import AgentIdentity, MetadataError, encode_agent_identity, parse_agent_identity
 from agentinfer.scheduling.lifecycle import ProgramLifecycle
+from agentinfer.scheduling.program_registry import ProgramRegistry, StaleProgramReferenceError
+from agentinfer.scheduling.program_runtime import RuntimeProgram
+from agentinfer.scheduling.request_pool import RequestPool, RequestPoolEntry, RequestPoolStatus
+from agentinfer.scheduling.runtime import ProgramScheduler
 from agentinfer.scheduling.snapshot import SchedulingSnapshot
 from agentinfer.scheduling.strategy import SchedulingStrategy
 from agentinfer.scheduling.transitions import (
@@ -34,11 +38,17 @@ __all__ = [
     "DpRankInfo",
     "MetadataError",
     "ProgramLifecycle",
+    "ProgramRegistry",
     "ProgramRef",
     "ProgramState",
     "ProgramStatus",
     "ProgramTokenObservation",
     "ProgramView",
+    "ProgramScheduler",
+    "RequestPool",
+    "RequestPoolEntry",
+    "RequestPoolStatus",
+    "RuntimeProgram",
     "SchedulingEvent",
     "SchedulingEventKind",
     "SchedulingSnapshot",
@@ -46,6 +56,7 @@ __all__ = [
     "SharedPrefixAttribution",
     "StrategyDiagnostic",
     "StrategyFactors",
+    "StaleProgramReferenceError",
     "TokenObservationSource",
     "TransitionController",
     "TransitionKind",
