@@ -14,13 +14,25 @@ def test_config_rejects_invalid_segment_and_capacity_bounds() -> None:
         ProgressTTLConfig(target_min_segment_rounds=8, target_max_segment_rounds=7)
     with pytest.raises(ValueError, match="resume_capacity_ratio"):
         ProgressTTLConfig(resume_capacity_ratio=0)
+    with pytest.raises(ValueError, match="uncached_ratio_default"):
+        ProgressTTLConfig(uncached_ratio_default=1.1)
 
 
-def test_config_defaults_keep_privilege_and_lookahead_disabled() -> None:
+def test_config_defaults_match_the_two_l20_reference_policy() -> None:
     config = ProgressTTLConfig()
 
-    assert config.pause_capacity_lookahead_rounds == 0
-    assert config.privileged_lookahead_rounds == 0
+    assert config.target_min_segment_rounds == 9
+    assert config.target_max_segment_rounds == 14
+    assert config.resume_capacity_ratio == 0.9
+    assert config.resume_reclaim_acting_programs is True
+    assert config.pause_capacity_ratio == 0.95
+    assert config.pause_capacity_lookahead_rounds == 2
+    assert config.privileged_lookahead_rounds == 14
+
+
+def test_config_rejects_non_boolean_resume_reclaim_switch() -> None:
+    with pytest.raises(ValueError, match="resume_reclaim_acting_programs"):
+        ProgressTTLConfig(resume_reclaim_acting_programs=1)
 
 
 def update(
@@ -50,6 +62,17 @@ def update(
 
 def test_global_factors_is_policy_owned_without_a_router_compatibility_base() -> None:
     assert ProgressTTLGlobalFactors.__bases__ == (object,)
+
+
+def test_global_factors_reject_invalid_window_and_initial_numeric_values() -> None:
+    with pytest.raises(ValueError, match="window sizes"):
+        ProgressTTLGlobalFactors(request_window_size=32)
+    with pytest.raises(ValueError, match="window growth and eviction"):
+        ProgressTTLGlobalFactors(max_evictions_per_update=0)
+    with pytest.raises(ValueError, match="min_update_window_fraction"):
+        ProgressTTLGlobalFactors(min_update_window_fraction=0)
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        ProgressTTLGlobalFactors(avg_request_latency_seconds=float("nan"))
 
 
 def test_stats_wait_for_half_window_before_replacing_cold_start_values() -> None:

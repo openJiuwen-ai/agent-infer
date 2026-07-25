@@ -16,8 +16,8 @@ from dataclasses import dataclass
 class ProgressTTLConfig:
     """Policy-owned Progress-TTL parameters."""
 
-    target_min_segment_rounds: int = 7
-    target_max_segment_rounds: int = 12
+    target_min_segment_rounds: int = 9
+    target_max_segment_rounds: int = 14
     ttl_min_seconds: float = 10.0
     ttl_max_seconds: float = 120.0
     ttl_prefill_seconds_per_1k_uncached_tokens: float = 0.29
@@ -27,10 +27,11 @@ class ProgressTTLConfig:
     resume_fairness_weight: float = 1.0
     resume_resource_penalty_weight: float = 1.0
     capacity_safety_margin_tokens: int = 0
-    resume_capacity_ratio: float = 1.0
-    pause_capacity_ratio: float = 1.0
-    pause_capacity_lookahead_rounds: float = 0.0
-    privileged_lookahead_rounds: float = 0.0
+    resume_capacity_ratio: float = 0.9
+    resume_reclaim_acting_programs: bool = True
+    pause_capacity_ratio: float = 0.95
+    pause_capacity_lookahead_rounds: float = 2.0
+    privileged_lookahead_rounds: float = 14.0
     privileged_max_context_tokens: int = 262_144
     decode_buffer_tokens: int = 100
     force_resume_timeout_seconds: float = 1800.0
@@ -63,8 +64,12 @@ class ProgressTTLConfig:
             raise ValueError("ttl_decode_throughput_alpha must be between 0 and 1")
         if not math.isfinite(self.resume_capacity_ratio) or not 0 < self.resume_capacity_ratio <= 1:
             raise ValueError("resume_capacity_ratio must be in (0, 1]")
+        if not isinstance(self.resume_reclaim_acting_programs, bool):
+            raise ValueError("resume_reclaim_acting_programs must be a boolean")
         if not math.isfinite(self.pause_capacity_ratio) or not 0 < self.pause_capacity_ratio <= 1:
             raise ValueError("pause_capacity_ratio must be in (0, 1]")
+        if not 0 <= self.uncached_ratio_default <= 1:
+            raise ValueError("uncached_ratio_default must be between 0 and 1")
         if self.capacity_safety_margin_tokens < 0 or self.decode_buffer_tokens < 0:
             raise ValueError("Progress-TTL token margins must be non-negative")
         if self.privileged_max_context_tokens <= 0:

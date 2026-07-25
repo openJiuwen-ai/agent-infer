@@ -4,10 +4,10 @@
 
 ``SchedulingStrategy`` is the package's intentional abstract surface. For each decision, the caller holds its
 scheduling lock and passes one immutable ``SchedulingSnapshot``, one policy-owned ``StrategyFactors``, and one lock-scoped
-``TransitionController`` directly to the Hook. A concrete policy computes a complete admission, resume, or capacity
-repair plan from that fixed snapshot and updates its local capacity projection after each applied transition; it does
-not refresh runtime state during the Hook. Committed runtime events use a separate single callback path so strategy
-accounting is not applied twice.
+``TransitionController`` directly to the Hook. A concrete policy computes a complete admission, post-completion yield,
+resume, or capacity-repair plan from that fixed snapshot and updates its local capacity projection after each applied
+transition; it does not refresh runtime state during the Hook. Committed runtime events use a separate single callback
+path so strategy accounting is not applied twice.
 
 The base class defines no score, capacity threshold, host runtime I/O, mutable Program operation, or concrete policy fields.
 It also exposes ``next_check_at()`` and ``handle_scheduled_check()`` as an optional timer contract: the caller may
@@ -87,6 +87,26 @@ class SchedulingStrategy(Generic[StrategyGlobalFactorsT, StrategyProgramFactorsT
             snapshot: Fixed backend, Program, and waiting-pool facts for this locked Hook.
             strategy_factors: Policy-owned decision factors protected by the caller's scheduling lock.
             transitions: Lock-scoped capability for caller-owned core state changes.
+        """
+
+    def handle_request_completion(
+        self,
+        snapshot: SchedulingSnapshot,
+        strategy_factors: StrategyFactors[StrategyGlobalFactorsT, StrategyProgramFactorsT],
+        transitions: TransitionController,
+        completed: ProgramRef,
+    ) -> None:
+        """Optionally yield the Program after its committed request accounting.
+
+        The caller invokes this Hook with fresh facts after dispatching ``REQUEST_FINISHED``. A delayed pause already
+        committed while the request was reasoning takes precedence, so the runtime skips this Hook when it can apply
+        that pause immediately. The default policy does not yield on request completion.
+
+        Args:
+            snapshot: Fresh runtime facts after final token and status accounting.
+            strategy_factors: Updated policy decision factors protected by the caller's scheduling lock.
+            transitions: Lock-scoped capability for caller-owned core state changes.
+            completed: Exact Program generation whose request just completed.
         """
 
     def on_schedule_cycle_start(

@@ -18,8 +18,10 @@ class ProgressTTLProgramFactors:
     """Decision factors for one exact Program generation's progress, TTL, privilege, and fairness."""
 
     segment_served_rounds: int = 0
+    segment_started_at_monotonic_s: float | None = None
     segment_prompt_tokens: int = 0
     segment_completion_tokens: int = 0
+    last_request_prompt_tokens: int = 0
     last_segment_served_rounds: int = 0
     last_segment_prompt_tokens: int = 0
     last_segment_completion_tokens: int = 0
@@ -43,6 +45,7 @@ class ProgressTTLProgramFactors:
             self.segment_served_rounds,
             self.segment_prompt_tokens,
             self.segment_completion_tokens,
+            self.last_request_prompt_tokens,
             self.last_segment_served_rounds,
             self.last_segment_prompt_tokens,
             self.last_segment_completion_tokens,
@@ -50,6 +53,7 @@ class ProgressTTLProgramFactors:
         if min(counters) < 0:
             raise ValueError("Progress-TTL Program counters must be non-negative")
         timestamps = (
+            self.segment_started_at_monotonic_s,
             self.wait_started_at_monotonic_s,
             self.request_wait_started_at_monotonic_s,
             self.acting_since_monotonic_s,

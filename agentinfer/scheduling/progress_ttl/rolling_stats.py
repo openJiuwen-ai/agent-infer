@@ -65,6 +65,34 @@ class ProgressTTLGlobalFactors:
     _pause_served_rounds: deque[int] = field(default_factory=deque, init=False, repr=False)
     _pause_served_rounds_sum: int = field(default=0, init=False, repr=False)
 
+    def __post_init__(self) -> None:
+        """Validate bounded-window controls and finite initial decision values."""
+        if self.request_count < 0:
+            raise ValueError("request_count must be non-negative")
+        if not 1 <= self.min_request_window_size <= self.request_window_size <= self.max_request_window_size:
+            raise ValueError("request window sizes must satisfy 1 <= min <= current <= max")
+        if self.request_window_per_active_program <= 0 or self.max_evictions_per_update <= 0:
+            raise ValueError("request window growth and eviction limits must be positive")
+        if not math.isfinite(self.min_update_window_fraction) or not 0 < self.min_update_window_fraction <= 1:
+            raise ValueError("min_update_window_fraction must be in (0, 1]")
+        decision_values = (
+            self.avg_prompt_tokens,
+            self.avg_completion_tokens,
+            self.avg_total_tokens,
+            self.avg_router_queue_seconds,
+            self.avg_request_latency_seconds,
+            self.avg_active_programs,
+            self.avg_waiting_programs,
+            self.avg_segment_served_rounds_on_pause,
+            self.avg_input_token_growth_per_round,
+            self.avg_inter_request_gap_seconds,
+            self.avg_reasoning_seconds,
+            self.avg_acting_seconds,
+            self.cold_prefill_cost_seconds,
+        )
+        if any(not math.isfinite(value) or value < 0 for value in decision_values):
+            raise ValueError("initial Progress-TTL decision values must be finite and non-negative")
+
     def update_request(
         self,
         *,

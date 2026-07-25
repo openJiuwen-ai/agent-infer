@@ -52,6 +52,7 @@ class _AdmissionStrategy(SchedulingStrategy[_GlobalFactors, _ProgramFactors]):
 
     def __init__(self, *, admit: bool) -> None:
         self.admit = admit
+        self.completed_programs: list[ProgramRef] = []
 
     def handle_admission(
         self,
@@ -81,6 +82,15 @@ class _AdmissionStrategy(SchedulingStrategy[_GlobalFactors, _ProgramFactors]):
         transitions: TransitionController,
     ) -> None:
         return None
+
+    def handle_request_completion(
+        self,
+        snapshot: SchedulingSnapshot,
+        strategy_factors: StrategyFactors[_GlobalFactors, _ProgramFactors],
+        transitions: TransitionController,
+        completed: ProgramRef,
+    ) -> None:
+        self.completed_programs.append(completed)
 
     def handle_scheduling_event(self, strategy_factors, event) -> None:
         strategy_factors.global_factors.event_kinds.append(event.kind.value)
@@ -254,6 +264,7 @@ def test_runtime_admits_and_completes_without_success_semantics() -> None:
     assert scheduler.registry.require(ref).state is ProgramState.ACTIVE
     assert scheduler.registry.require(ref).status is ProgramStatus.ACTING
     assert scheduler.retained_request_count == 0
+    assert scheduler.strategy.completed_programs == [ref]
 
 
 def test_runtime_uses_the_single_dp_rank_capacity_and_dispatch_target() -> None:

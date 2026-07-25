@@ -239,6 +239,13 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
         )
         if program.marked_for_pause and current_status is ProgramStatus.ACTING:
             self._apply_transition(TransitionRequest(TransitionKind.PAUSE, program.ref, "marked_pause_completion"))
+        else:
+            self.strategy.handle_request_completion(
+                self._snapshot(),
+                self.strategy_factors,
+                TransitionController(self._apply_transition),
+                program.ref,
+            )
 
     def on_response_completion(self, program_id: str, lifecycle: ProgramLifecycle) -> bool:
         """Apply an optional API-layer lifecycle fact after response semantic parsing.
