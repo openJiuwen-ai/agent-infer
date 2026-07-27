@@ -15,6 +15,17 @@ cd AgentInfer
 pip install -e .
 ```
 
+### Build a wheel
+
+Install the build tools and build the wheel from the repository root:
+
+```bash
+python -m pip install --upgrade build setuptools wheel
+python -m build --wheel
+```
+
+The wheel is written to `dist/`; its version comes from `project.version` in `pyproject.toml`.
+
 Once installed, the `vllm` CLI delegates standard commands to upstream vLLM while loading AgentCache:
 
 ```bash
