@@ -20,6 +20,11 @@ _METRIC_SPECS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("mean_task_duration_seconds", ("tasks", "duration_seconds", "mean")),
     ("p50_task_duration_seconds", ("tasks", "duration_seconds", "p50")),
     ("p95_task_duration_seconds", ("tasks", "duration_seconds", "p95")),
+    ("p99_task_duration_seconds", ("tasks", "duration_seconds", "p99")),
+    ("run_wall_time_seconds", ("run_wall_time_seconds",)),
+    ("request_throughput_per_second", ("request_throughput_per_second",)),
+    ("input_token_throughput_per_second", ("input_token_throughput_per_second",)),
+    ("output_token_throughput_per_second", ("output_token_throughput_per_second",)),
     ("requests", ("requests", "requests")),
     ("successful_requests", ("requests", "successful_requests")),
     ("failed_requests", ("requests", "failed_requests")),
@@ -58,7 +63,17 @@ def load_summary(run_dir: Path) -> dict[str, Any]:
         raise ValueError(f"run artifacts in {run_dir} identify different runs")
     if manifest.status != "completed" or summary.lifecycle.status != "completed":
         raise ValueError(f"run in {run_dir} did not complete successfully")
-    return asdict(summary)
+    if manifest.finished_at is None:
+        raise ValueError(f"completed run in {run_dir} has no finish timestamp")
+    result = asdict(summary)
+    wall_time = (manifest.finished_at - manifest.created_at).total_seconds()
+    if wall_time <= 0:
+        raise ValueError(f"completed run in {run_dir} has non-positive wall time")
+    result["run_wall_time_seconds"] = wall_time
+    result["request_throughput_per_second"] = summary.requests.requests / wall_time
+    result["input_token_throughput_per_second"] = summary.requests.input_tokens / wall_time
+    result["output_token_throughput_per_second"] = summary.requests.output_tokens / wall_time
+    return result
 
 
 def _as_dirs(runs: Path | str | list[Path] | list[str]) -> list[Path]:

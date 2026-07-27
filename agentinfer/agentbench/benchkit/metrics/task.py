@@ -33,5 +33,6 @@ def aggregate_task_results(results: Iterable[AgentRunResult]) -> TaskMetrics:
             "mean": sum(durations) / len(durations) if durations else None,
             "p50": float(quantile(durations, 0.5)) if durations else None,
             "p95": float(quantile(durations, 0.95)) if durations else None,
+            "p99": float(quantile(durations, 0.99)) if durations else None,
         },
     )

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -16,7 +18,6 @@ from agentinfer.agentbench.benchkit.metrics.vllm import VllmMetrics
 
 def write_run(
     run_dir: Path,
-    mode: str,
     *,
     completed: int = 1,
     duration: float = 10.0,
@@ -27,7 +28,12 @@ def write_run(
     vllm_available: bool = False,
 ) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
-    task_metrics = TaskMetrics(completed, 0, completed, {"mean": duration, "p50": duration, "p95": duration})
+    task_metrics = TaskMetrics(
+        completed,
+        0,
+        completed,
+        {"mean": duration, "p50": duration, "p95": duration, "p99": duration},
+    )
     request_metrics = RequestMetrics(
         requests,
         requests,
@@ -49,28 +55,37 @@ def write_run(
         {},
         {},
     )
-    health = SourceHealth(1, 0, 1 if mode == "baseline" else 0, (), {})
+    router = RouterMetrics(router_events) if router_events is not None else None
+    health = SourceHealth(1, 0, 1 if router is None else 0, (), {})
     summary = build_run_summary(
         run_dir.name,
-        mode,
         task_metrics,
         request_metrics,
-        RouterMetrics(router_events or {}) if mode == "candidate" else None,
+        router,
         vllm,
         {"available": False, "reason": "artifact missing", "metadata": {}},
         health,
         {"status": "completed", "error": None, "proxy_close": None},
     )
     (run_dir / "summary.json").write_text(json.dumps(summary.to_dict()), encoding="utf-8")
-    manifest = finalize_run_manifest(build_run_manifest(run_dir.name, {"mode": mode}), ())
+    manifest = finalize_run_manifest(build_run_manifest(run_dir.name, {}), ())
+    manifest = replace(manifest, finished_at=manifest.created_at + timedelta(seconds=duration))
     (run_dir / "manifest.json").write_text(json.dumps(manifest.to_dict()), encoding="utf-8")
 
 
 def test_compare_finalized_artifacts_and_router_schema(tmp_path: Path) -> None:
-    write_run(tmp_path / "baseline", "baseline", duration=12)
-    write_run(tmp_path / "candidate", "candidate", duration=8, router_events={"admit": 2})
+    write_run(tmp_path / "baseline", duration=12)
+    write_run(tmp_path / "candidate", duration=8, router_events={"admit": 2})
     result = json.loads(compare(tmp_path / "baseline", tmp_path / "candidate", as_json=True))
     assert result["metrics"]["mean_task_duration_seconds"]["delta_absolute"] == -4
+    assert result["metrics"]["run_wall_time_seconds"]["baseline"] == 12
+    assert result["metrics"]["run_wall_time_seconds"]["candidate"] == 8
+    assert result["metrics"]["run_wall_time_seconds"]["delta_absolute"] == -4
+    assert result["metrics"]["request_throughput_per_second"]["baseline"] == pytest.approx(2 / 12)
+    assert result["metrics"]["request_throughput_per_second"]["candidate"] == pytest.approx(2 / 8)
+    assert result["metrics"]["input_token_throughput_per_second"]["baseline"] == pytest.approx(10 / 12)
+    assert result["metrics"]["output_token_throughput_per_second"]["candidate"] == pytest.approx(4 / 8)
+    assert result["metrics"]["p99_task_duration_seconds"]["delta_absolute"] == -4
     assert result["metrics"]["cache_creation_input_tokens"]["baseline"] == 0
     assert result["metrics"]["latency_p99_seconds"]["baseline"] == 1.0
     assert result["metrics"]["ttft_p99_seconds"]["baseline"] == 0.2
@@ -80,7 +95,7 @@ def test_compare_finalized_artifacts_and_router_schema(tmp_path: Path) -> None:
 
 def test_compare_accepts_cli_metadata_in_finalized_summary(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
-    write_run(run_dir, "baseline")
+    write_run(run_dir)
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
     summary["cli"] = {
         "entrypoint": "vllm bench serve --agentinfer",
@@ -97,10 +112,10 @@ def test_compare_excludes_null_cache_creation_samples(tmp_path: Path) -> None:
     baseline = []
     for index, value in enumerate((None, 4)):
         path = tmp_path / f"baseline-{index}"
-        write_run(path, "baseline", cache_creation=value)
+        write_run(path, cache_creation=value)
         baseline.append(path)
     candidate = tmp_path / "candidate"
-    write_run(candidate, "candidate", cache_creation=None)
+    write_run(candidate, cache_creation=None)
 
     result = json.loads(compare(baseline, candidate, as_json=True))
     metric = result["metrics"]["cache_creation_input_tokens"]
@@ -123,8 +138,8 @@ def test_compare_rejects_legacy_handwritten_shape(tmp_path: Path) -> None:
 def test_compare_rejects_invalid_artifact_identity_and_confidence(tmp_path: Path) -> None:
     baseline = tmp_path / "baseline"
     candidate = tmp_path / "candidate"
-    write_run(baseline, "baseline")
-    write_run(candidate, "candidate")
+    write_run(baseline)
+    write_run(candidate)
 
     summary = json.loads((baseline / "summary.json").read_text(encoding="utf-8"))
     summary["run_id"] = "other-run"
@@ -138,7 +153,7 @@ def test_compare_rejects_invalid_artifact_identity_and_confidence(tmp_path: Path
 
 def test_compare_rejects_failed_run(tmp_path: Path) -> None:
     baseline = tmp_path / "baseline"
-    write_run(baseline, "baseline")
+    write_run(baseline)
     manifest = json.loads((baseline / "manifest.json").read_text(encoding="utf-8"))
     manifest["status"] = "failed"
     (baseline / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -148,12 +163,12 @@ def test_compare_rejects_failed_run(tmp_path: Path) -> None:
 
 
 def test_compare_accepts_same_mode_and_optional_router_metrics(tmp_path: Path) -> None:
-    write_run(tmp_path / "first-baseline", "baseline")
-    write_run(tmp_path / "second-baseline", "baseline")
+    write_run(tmp_path / "first-baseline")
+    write_run(tmp_path / "second-baseline")
     baseline_result = json.loads(compare(tmp_path / "first-baseline", tmp_path / "second-baseline", as_json=True))
 
-    write_run(tmp_path / "first-candidate", "candidate", router_events={"admit": 1})
-    write_run(tmp_path / "second-candidate", "candidate", router_events={"admit": 2})
+    write_run(tmp_path / "first-candidate", router_events={"admit": 1})
+    write_run(tmp_path / "second-candidate", router_events={"admit": 2})
     candidate_result = json.loads(compare(tmp_path / "first-candidate", tmp_path / "second-candidate", as_json=True))
 
     assert baseline_result["metadata"]["baseline_router"]["applicable"] is False
@@ -174,11 +189,11 @@ def test_compare_multi_run_variance(tmp_path: Path) -> None:
     candidate = []
     for index, value in enumerate((10.0, 11.0, 12.0)):
         path = tmp_path / f"b{index}"
-        write_run(path, "baseline", duration=value)
+        write_run(path, duration=value)
         baseline.append(path)
     for index, value in enumerate((6.0, 7.0, 8.0)):
         path = tmp_path / f"c{index}"
-        write_run(path, "candidate", duration=value)
+        write_run(path, duration=value)
         candidate.append(path)
     metric = json.loads(compare(baseline, candidate, as_json=True))["metrics"]["mean_task_duration_seconds"]
     assert metric["n_baseline"] == metric["n_candidate"] == 3
@@ -187,8 +202,8 @@ def test_compare_multi_run_variance(tmp_path: Path) -> None:
 
 
 def test_compare_includes_vllm_only_when_available(tmp_path: Path) -> None:
-    write_run(tmp_path / "baseline", "baseline", vllm_available=True)
-    write_run(tmp_path / "candidate", "candidate", vllm_available=True)
+    write_run(tmp_path / "baseline", vllm_available=True)
+    write_run(tmp_path / "candidate", vllm_available=True)
     result = json.loads(compare(tmp_path / "baseline", tmp_path / "candidate", as_json=True))
     assert result["metrics"]["vllm_queue_time_mean_seconds"]["baseline"] == 0.4
 
@@ -196,8 +211,8 @@ def test_compare_includes_vllm_only_when_available(tmp_path: Path) -> None:
 def test_compare_treats_malformed_cold_evidence_as_unconfirmed(tmp_path: Path) -> None:
     baseline = tmp_path / "baseline"
     candidate = tmp_path / "candidate"
-    write_run(baseline, "baseline")
-    write_run(candidate, "candidate")
+    write_run(baseline)
+    write_run(candidate)
     for run_dir in (baseline, candidate):
         evidence = run_dir / "evidence"
         evidence.mkdir()
@@ -215,8 +230,8 @@ def test_compare_treats_malformed_cold_evidence_as_unconfirmed(tmp_path: Path) -
 def test_compare_requires_prefix_query_evidence_for_cold_confirmation(tmp_path: Path) -> None:
     baseline = tmp_path / "baseline"
     candidate = tmp_path / "candidate"
-    write_run(baseline, "baseline")
-    write_run(candidate, "candidate")
+    write_run(baseline)
+    write_run(candidate)
     for run_dir in (baseline, candidate):
         evidence = run_dir / "evidence"
         evidence.mkdir()

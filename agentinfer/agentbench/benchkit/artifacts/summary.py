@@ -38,7 +38,6 @@ class RouterSummary:
 class RunSummary:
     schema_version: Literal["1"]
     run_id: str
-    mode: Literal["baseline", "candidate"]
     tasks: TaskMetrics
     requests: RequestMetrics
     router: RouterSummary
@@ -54,7 +53,6 @@ class RunSummary:
 
 def build_run_summary(
     run_id: str,
-    mode: Literal["baseline", "candidate"],
     tasks: TaskMetrics,
     requests: RequestMetrics,
     router: RouterMetrics | None,
@@ -66,7 +64,6 @@ def build_run_summary(
     return RunSummary(
         "1",
         run_id,
-        mode,
         tasks,
         requests,
         RouterSummary(router is not None, dict(router.events) if router else {}),

@@ -28,7 +28,7 @@ def test_aggregate_task_results_uses_execution_outcomes_and_patch_evidence() -> 
     assert metrics.completed == 1
     assert metrics.failed == 2
     assert metrics.with_patch == 2
-    assert metrics.duration_seconds == {"mean": 20.0, "p50": 20.0, "p95": 29.0}
+    assert metrics.duration_seconds == {"mean": 20.0, "p50": 20.0, "p95": 29.0, "p99": 29.8}
 
 
 def test_aggregate_task_results_handles_empty_input() -> None:
@@ -37,4 +37,4 @@ def test_aggregate_task_results_handles_empty_input() -> None:
     assert metrics.completed == 0
     assert metrics.failed == 0
     assert metrics.with_patch == 0
-    assert metrics.duration_seconds == {"mean": None, "p50": None, "p95": None}
+    assert metrics.duration_seconds == {"mean": None, "p50": None, "p95": None, "p99": None}

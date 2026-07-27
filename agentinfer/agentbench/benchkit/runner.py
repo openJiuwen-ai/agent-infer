@@ -202,7 +202,6 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
                 "summary_build",
                 lambda: build_run_summary(
                     run_id,
-                    "candidate" if config.router.enabled else "baseline",
                     aggregate_task_results(results),
                     aggregate_request_metrics(facts),
                     (
@@ -485,7 +484,6 @@ def summarize_run(run_dir: Path, config: AgentBenchConfig) -> RunSummary:
     facts = load_request_facts(run_dir / "requests.jsonl")
     return build_run_summary(
         run_dir.name,
-        "candidate" if config.router.enabled else "baseline",
         aggregate_task_results([]),
         aggregate_request_metrics(facts),
         aggregate_router_events([]) if config.router.enabled else None,
