@@ -10,6 +10,7 @@ runtime assumes its Adapter serializes calls under one mutation boundary.
 
 from __future__ import annotations
 
+import logging
 import math
 import time
 import uuid
@@ -19,10 +20,11 @@ from typing import Generic
 from agentinfer.scheduling.admission_outcome import AdmissionDisposition
 from agentinfer.scheduling.backend import BackendInfo, BackendPoolInfo, DispatchTarget, DpRankInfo
 from agentinfer.scheduling.domain import ProgramRef, ProgramState, ProgramStatus
-from agentinfer.scheduling.events import SchedulingEvent, SchedulingEventKind
+from agentinfer.scheduling.events import SchedulingEvent, SchedulingEventKind, StrategyDiagnostic
 from agentinfer.scheduling.factors import StrategyFactors, StrategyGlobalFactorsT, StrategyProgramFactorsT
 from agentinfer.scheduling.identity import AgentIdentity
 from agentinfer.scheduling.lifecycle import ProgramLifecycle
+from agentinfer.scheduling.observability import SchedulerObservabilityConfig
 from agentinfer.scheduling.program_registry import ProgramRegistry
 from agentinfer.scheduling.request_pool import RequestPool, RequestPoolEntry, RequestPoolStatus, RetainedRequestT
 from agentinfer.scheduling.snapshot import SchedulingSnapshot
@@ -34,6 +36,8 @@ from agentinfer.scheduling.transitions import (
     TransitionRequest,
     TransitionResult,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -57,6 +61,7 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
         strategy_factors: StrategyFactors[StrategyGlobalFactorsT, StrategyProgramFactorsT],
         backend_pool_info: BackendPoolInfo,
         schedule_interval_seconds: float = 5.0,
+        observability: SchedulerObservabilityConfig | None = None,
     ) -> None:
         backend, dp_rank = self._embedded_backend_rank(backend_pool_info)
         if not math.isfinite(schedule_interval_seconds) or schedule_interval_seconds <= 0:
@@ -73,6 +78,8 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
         self._event_sequence = 0
         self._cycle_dirty = False
         self._schedule_interval_seconds = schedule_interval_seconds
+        self._observability = observability or SchedulerObservabilityConfig()
+        self._next_observability_log_at_monotonic_s = 0.0
         self._next_periodic_check_at_monotonic_s = 0.0
         self._next_check_at_monotonic_s = self._strategy_next_check_at()
 
@@ -154,15 +161,29 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
             TransitionController(self._apply_transition),
             program.ref,
         )
-        if outcome.disposition is AdmissionDisposition.QUEUED:
-            return False
-        entry = self.request_pool.get(request_id)
-        if entry is not None and entry.status is RequestPoolStatus.WAITING:
-            self.request_pool.admit(request_id, self._dispatch_target)
-        immediate = self.request_pool.consume_admitted_request(request_id)
-        if immediate is None:
-            raise RuntimeError("admitted request was not committed to RequestPool.recent_admit")
-        return True
+        admitted = outcome.disposition is not AdmissionDisposition.QUEUED
+        if admitted:
+            entry = self.request_pool.get(request_id)
+            if entry is not None and entry.status is RequestPoolStatus.WAITING:
+                self.request_pool.admit(request_id, self._dispatch_target)
+            immediate = self.request_pool.consume_admitted_request(request_id)
+            if immediate is None:
+                raise RuntimeError("admitted request was not committed to RequestPool.recent_admit")
+        if self._observability.enabled:
+            logger.info(
+                "AgentInfer admission request=%s program=%s generation=%d disposition=%s reason=%s "
+                "required_tokens=%d reserve_tokens=%d deficit_tokens=%d retained_requests=%d",
+                request_id,
+                program.ref.program_id,
+                program.ref.generation,
+                outcome.disposition.value,
+                outcome.reason,
+                outcome.required_tokens,
+                outcome.reserve_tokens,
+                outcome.deficit_tokens,
+                self.retained_request_count,
+            )
+        return admitted
 
     def schedule_cycle(self, backend_pool_info: BackendPoolInfo) -> None:
         """Run resume, capacity repair, and due TTL checks from fresh backend facts."""
@@ -173,6 +194,7 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
         controller = TransitionController(self._apply_transition)
         snapshot = self._snapshot()
         self.strategy.on_schedule_cycle_start(snapshot, self.strategy_factors)
+        self._log_periodic_diagnostics(snapshot, now)
         self.strategy.schedule_resume(snapshot, self.strategy_factors, controller)
         snapshot = self._advance_snapshot(snapshot, controller.take_applied_requests())
         self.strategy.repair_capacity(snapshot, self.strategy_factors, controller)
@@ -444,7 +466,43 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
 
     def _dispatch_event(self, event: SchedulingEvent) -> None:
         self.strategy.handle_scheduling_event(self.strategy_factors, event)
+        if self._observability.enabled:
+            fields = " ".join(f"{key}={value}" for key, value in event.fields)
+            logger.info(
+                "AgentInfer event kind=%s reason=%s program=%s generation=%s previous_state=%s current_state=%s "
+                "previous_status=%s current_status=%s fields=%s",
+                event.kind.value,
+                event.reason,
+                event.program.program_id if event.program is not None else None,
+                event.program.generation if event.program is not None else None,
+                event.previous_state.value if event.previous_state is not None else None,
+                event.current_state.value if event.current_state is not None else None,
+                event.previous_status.value if event.previous_status is not None else None,
+                event.current_status.value if event.current_status is not None else None,
+                fields,
+            )
+            for diagnostic in self.strategy.event_diagnostics(event, self.strategy_factors):
+                self._log_diagnostic(diagnostic)
         self._next_check_at_monotonic_s = self._strategy_next_check_at()
+
+    def _log_periodic_diagnostics(self, snapshot: SchedulingSnapshot, now_monotonic_s: float) -> None:
+        """Emit strategy calculations no more often than the configured interval."""
+        if not self._observability.enabled or now_monotonic_s < self._next_observability_log_at_monotonic_s:
+            return
+        for diagnostic in self.strategy.diagnostics(snapshot, self.strategy_factors):
+            self._log_diagnostic(diagnostic)
+        self._next_observability_log_at_monotonic_s = now_monotonic_s + self._observability.log_interval_seconds
+
+    @staticmethod
+    def _log_diagnostic(diagnostic: StrategyDiagnostic) -> None:
+        """Serialize one enabled diagnostic without changing its typed source record."""
+        fields = " ".join(f"{key}={value}" for key, value in diagnostic.fields)
+        logger.info(
+            "AgentInfer diagnostic name=%s reason=%s %s",
+            diagnostic.name,
+            diagnostic.reason,
+            fields,
+        )
 
     def _strategy_next_check_at(self) -> float | None:
         """Return one strategy deadline after validating the runtime timer contract."""

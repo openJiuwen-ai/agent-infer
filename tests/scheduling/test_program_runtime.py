@@ -25,9 +25,11 @@ from agentinfer.scheduling import (
     RequestPool,
     RequestPoolEntry,
     RuntimeProgram,
+    SchedulerObservabilityConfig,
     SchedulingSnapshot,
     SchedulingStrategy,
     StaleProgramReferenceError,
+    StrategyDiagnostic,
     StrategyFactors,
     TransitionController,
 )
@@ -53,6 +55,7 @@ class _AdmissionStrategy(SchedulingStrategy[_GlobalFactors, _ProgramFactors]):
     def __init__(self, *, admit: bool) -> None:
         self.admit = admit
         self.completed_programs: list[ProgramRef] = []
+        self.diagnostic_calls = 0
 
     def handle_admission(
         self,
@@ -91,6 +94,14 @@ class _AdmissionStrategy(SchedulingStrategy[_GlobalFactors, _ProgramFactors]):
         completed: ProgramRef,
     ) -> None:
         self.completed_programs.append(completed)
+
+    def diagnostics(
+        self,
+        snapshot: SchedulingSnapshot,
+        strategy_factors: StrategyFactors[_GlobalFactors, _ProgramFactors],
+    ) -> tuple[StrategyDiagnostic, ...]:
+        self.diagnostic_calls += 1
+        return (StrategyDiagnostic("test_state", "periodic_sample", (("programs", len(snapshot.programs)),)),)
 
     def handle_scheduling_event(self, strategy_factors, event) -> None:
         strategy_factors.global_factors.event_kinds.append(event.kind.value)
@@ -225,6 +236,59 @@ def test_runtime_rejects_non_finite_strategy_deadline() -> None:
             StrategyFactors(_GlobalFactors([])),
             _backend(),
         )
+
+
+def test_observability_is_disabled_by_default(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level("INFO")
+    scheduler = _scheduler(admit=True)
+
+    scheduler.on_request_arrival("r1", AgentIdentity("p1"), 100, _backend(), "native")
+
+    assert "AgentInfer admission" not in caplog.text
+    assert "AgentInfer event" not in caplog.text
+
+
+def test_observability_logs_events_and_throttles_periodic_diagnostics(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("INFO")
+    strategy = _AdmissionStrategy(admit=True)
+    scheduler = ProgramScheduler(
+        strategy,
+        StrategyFactors(_GlobalFactors([])),
+        _backend(),
+        observability=SchedulerObservabilityConfig(enabled=True, log_interval_seconds=30),
+    )
+    scheduler.on_request_arrival("r1", AgentIdentity("p1"), 100, _backend(), "native")
+    snapshot = scheduler._snapshot()
+
+    scheduler._log_periodic_diagnostics(snapshot, 10)
+    scheduler._log_periodic_diagnostics(snapshot, 20)
+    scheduler._log_periodic_diagnostics(snapshot, 40)
+
+    assert "AgentInfer admission request=r1 program=p1" in caplog.text
+    assert "retained_requests=0" in caplog.text
+    assert "AgentInfer event kind=request_admitted" in caplog.text
+    assert "fields=backend_id=vllm-local marked_for_pause=False" in caplog.text
+    assert caplog.text.count("AgentInfer diagnostic name=test_state") == 2
+    assert strategy.diagnostic_calls == 2
+
+
+def test_observability_reports_queued_request_as_retained(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level("INFO")
+    scheduler = ProgramScheduler(
+        _AdmissionStrategy(admit=False),
+        StrategyFactors(_GlobalFactors([])),
+        _backend(),
+        observability=SchedulerObservabilityConfig(enabled=True),
+    )
+
+    admitted = scheduler.on_request_arrival("r1", AgentIdentity("p1"), 100, _backend(), "native")
+
+    assert admitted is False
+    assert scheduler.retained_request_count == 1
+    assert "disposition=queued" in caplog.text
+    assert "retained_requests=1" in caplog.text
 
 
 def test_registry_retains_child_before_parent_edge_and_generation() -> None:

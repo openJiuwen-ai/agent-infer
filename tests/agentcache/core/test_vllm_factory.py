@@ -70,11 +70,36 @@ def test_factory_uses_two_l20_reference_defaults_without_policy_overrides() -> N
     assert controller.strategy.config.pause_capacity_ratio == 0.95
     assert controller.strategy.config.pause_capacity_lookahead_rounds == 2
     assert controller.strategy.config.privileged_lookahead_rounds == 14
+    assert controller._observability.enabled is False
+    assert controller._observability.log_interval_seconds == 5
+
+
+def test_factory_applies_observability_controls() -> None:
+    controller = build_progress_ttl_controller(
+        backend(),
+        {"observability": {"enabled": True, "log_interval_seconds": 15}},
+    )
+
+    assert controller._observability.enabled is True
+    assert controller._observability.log_interval_seconds == 15
 
 
 def test_factory_rejects_non_mapping_policy_settings() -> None:
     with pytest.raises(ValueError, match="must be an object"):
         build_progress_ttl_controller(backend(), {"progress_ttl": "invalid"})
+
+
+@pytest.mark.parametrize(
+    ("settings", "message"),
+    [
+        ({"observability": "invalid"}, "observability must be an object"),
+        ({"observability": {"enabled": 1}}, "observability.enabled must be a boolean"),
+        ({"observability": {"log_interval_seconds": 0}}, "log_interval_seconds must be finite and positive"),
+    ],
+)
+def test_factory_rejects_invalid_observability_controls(settings: object, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        build_progress_ttl_controller(backend(), settings)
 
 
 @pytest.mark.parametrize(

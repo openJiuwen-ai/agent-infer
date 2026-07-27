@@ -174,6 +174,20 @@ def test_identity_middleware_writes_canonical_agent_hint_to_vllm_xargs() -> None
     assert dict(captured_scope["headers"])[b"content-length"] == str(len(captured_body)).encode()
 
 
+def test_middleware_initialization_explicitly_attaches_vllm_logging(tmp_path, monkeypatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(api_adapter, "attach_agentinfer_to_vllm_logging", lambda: calls.append("attach"))
+    monkeypatch.setenv(LIFECYCLE_SOCKET_ENV, str(tmp_path / "lifecycle.sock"))
+
+    async def app(scope, receive, send) -> None:
+        return None
+
+    AgentCacheIdentityMiddleware(app)
+    AgentCacheLifecycleMiddleware(app)
+
+    assert calls == ["attach", "attach"]
+
+
 def test_identity_middleware_carries_anthropic_headers_to_internal_vllm_xargs() -> None:
     """Anthropic Messages must preserve canonical identity through vLLM's Chat conversion."""
     from vllm.entrypoints.anthropic.protocol import AnthropicMessagesRequest

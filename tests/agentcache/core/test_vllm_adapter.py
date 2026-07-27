@@ -186,6 +186,7 @@ def test_async_bridge_does_not_multiply_resolved_context_parallel_block_size_twi
     with (
         patch.object(AsyncScheduler, "__init__", initialize),
         patch.object(Scheduler, "get_request_counts", return_value=(0, 0)),
+        patch("agentinfer.agentcache.core.scheduler.attach_agentinfer_to_vllm_logging") as attach_logging,
     ):
         resolved_block_size = 16 * 4 * 2
         bridge = AgentCacheAsyncSchedulerBridge(
@@ -197,6 +198,7 @@ def test_async_bridge_does_not_multiply_resolved_context_parallel_block_size_twi
         )
         rank = bridge._agentcache.backend_pool_info(bridge).backends[0].dp_ranks[0]
 
+    attach_logging.assert_called_once_with()
     assert rank.total_hbm_kv_tokens == 10 * resolved_block_size
 
 

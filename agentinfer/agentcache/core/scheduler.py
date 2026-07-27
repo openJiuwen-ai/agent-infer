@@ -22,6 +22,7 @@ from vllm.v1.request import Request, RequestStatus
 
 from agentinfer.agentcache.core.api_adapter import LIFECYCLE_SOCKET_ENV, UnixLifecycleReceiver
 from agentinfer.agentcache.core.request_queue import AgentAwareQueue
+from agentinfer.agentcache.core.vllm_logging import attach_agentinfer_to_vllm_logging
 from agentinfer.scheduling.backend import BackendInfo, BackendPoolInfo, DispatchTarget, DpRankInfo
 from agentinfer.scheduling.identity import AgentIdentity, JsonMapping, JsonObject, parse_agent_identity
 from agentinfer.scheduling.lifecycle import ProgramLifecycle
@@ -91,6 +92,7 @@ class _VllmAdmissionHooks:
     """Composition helper shared by the two single-inheritance native bridges."""
 
     def __init__(self, owner: Scheduler, vllm_config: object, kv_cache_config: object, block_size: int) -> None:
+        attach_agentinfer_to_vllm_logging()
         additional = getattr(vllm_config, "additional_config", {})
         settings = additional.get("agentcache", {}) if isinstance(additional, dict) else {}
         if not isinstance(settings, dict):

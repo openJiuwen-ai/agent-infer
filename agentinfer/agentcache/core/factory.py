@@ -10,6 +10,7 @@ from vllm.v1.request import Request
 
 from agentinfer.scheduling.backend import BackendPoolInfo
 from agentinfer.scheduling.identity import JsonMapping
+from agentinfer.scheduling.observability import SchedulerObservabilityConfig
 from agentinfer.scheduling.progress_ttl import (
     ProgressTTLConfig,
     ProgressTTLGlobalFactors,
@@ -144,6 +145,23 @@ def build_progress_ttl_controller(
         ),
     )
     components = build_progress_ttl_strategy(config)
+    observability_raw = settings.get("observability", {})
+    if not isinstance(observability_raw, dict):
+        raise ValueError("additional_config.agentcache.observability must be an object")
+    observability = SchedulerObservabilityConfig(
+        enabled=_bool_setting(
+            observability_raw,
+            "enabled",
+            False,
+            scope="agentcache.observability",
+        ),
+        log_interval_seconds=_float_setting(
+            observability_raw,
+            "log_interval_seconds",
+            5.0,
+            scope="agentcache.observability",
+        ),
+    )
     schedule_interval_seconds = _float_setting(
         settings,
         "schedule_interval_seconds",
@@ -155,6 +173,7 @@ def build_progress_ttl_controller(
         components.initial_factors,
         backend_pool_info,
         schedule_interval_seconds=schedule_interval_seconds,
+        observability=observability,
     )
 
 
@@ -166,11 +185,17 @@ def _int_setting(settings: JsonMapping, name: str, default: int) -> int:
     return value
 
 
-def _bool_setting(settings: JsonMapping, name: str, default: bool) -> bool:
-    """Read an exact boolean policy value."""
+def _bool_setting(
+    settings: JsonMapping,
+    name: str,
+    default: bool,
+    *,
+    scope: str = "progress_ttl",
+) -> bool:
+    """Read an exact boolean value from one configuration scope."""
     value = settings.get(name, default)
     if not isinstance(value, bool):
-        raise ValueError(f"progress_ttl.{name} must be a boolean")
+        raise ValueError(f"{scope}.{name} must be a boolean")
     return value
 
 

@@ -26,6 +26,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Protocol, TypeAlias, cast
 
+from agentinfer.agentcache.core.vllm_logging import attach_agentinfer_to_vllm_logging
 from agentinfer.scheduling.identity import (
     JsonObject,
     MetadataError,
@@ -285,6 +286,7 @@ class AgentCacheIdentityMiddleware:
     """Transport resolved OpenAI Chat or Anthropic identity to EngineCore."""
 
     def __init__(self, app: AsgiApp) -> None:
+        attach_agentinfer_to_vllm_logging()
         self.app = app
 
     async def __call__(self, scope: dict[str, object], receive: AsgiReceive, send: AsgiSend) -> None:
@@ -338,6 +340,7 @@ class AgentCacheLifecycleMiddleware:
     """Observe response lifecycle after vLLM tool parsing without rewriting ASGI messages."""
 
     def __init__(self, app: AsgiApp) -> None:
+        attach_agentinfer_to_vllm_logging()
         self.app = app
         socket_path = os.environ.get(LIFECYCLE_SOCKET_ENV)
         if not socket_path:

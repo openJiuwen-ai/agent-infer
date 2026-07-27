@@ -22,7 +22,7 @@ from typing import ClassVar, Generic
 
 from agentinfer.scheduling.admission_outcome import AdmissionOutcome
 from agentinfer.scheduling.domain import ProgramRef
-from agentinfer.scheduling.events import SchedulingEvent, SchedulingEventKind
+from agentinfer.scheduling.events import SchedulingEvent, SchedulingEventKind, StrategyDiagnostic
 from agentinfer.scheduling.factors import StrategyFactors, StrategyGlobalFactorsT, StrategyProgramFactorsT
 from agentinfer.scheduling.snapshot import SchedulingSnapshot
 from agentinfer.scheduling.transitions import TransitionController
@@ -120,6 +120,32 @@ class SchedulingStrategy(Generic[StrategyGlobalFactorsT, StrategyProgramFactorsT
             snapshot: Fixed runtime facts for the new scheduling cycle.
             strategy_factors: Policy-owned decision factors protected by the caller's scheduling lock.
         """
+
+    def diagnostics(
+        self,
+        snapshot: SchedulingSnapshot,
+        strategy_factors: StrategyFactors[StrategyGlobalFactorsT, StrategyProgramFactorsT],
+    ) -> tuple[StrategyDiagnostic, ...]:
+        """Return opt-in, observation-only calculations for one periodic sample.
+
+        Args:
+            snapshot: Fixed runtime facts for the sampled scheduling boundary.
+            strategy_factors: Policy-owned decision factors protected by the caller's scheduling lock.
+        """
+        return ()
+
+    def event_diagnostics(
+        self,
+        event: SchedulingEvent,
+        strategy_factors: StrategyFactors[StrategyGlobalFactorsT, StrategyProgramFactorsT],
+    ) -> tuple[StrategyDiagnostic, ...]:
+        """Return opt-in calculations derived after one committed event.
+
+        Args:
+            event: Committed runtime fact already applied to the strategy factors.
+            strategy_factors: Updated policy-owned factors protected by the caller's scheduling lock.
+        """
+        return ()
 
     def next_check_at(
         self,

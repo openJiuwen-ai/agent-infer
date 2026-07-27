@@ -233,6 +233,38 @@ def test_fixed_growth_overrides_rolling_growth_for_capacity_projection() -> None
     assert second_reserve == 75
 
 
+def test_capacity_diagnostic_reports_rolling_growth_but_projects_effective_fixed_growth() -> None:
+    components = build_progress_ttl_strategy(
+        ProgressTTLConfig(
+            target_min_segment_rounds=2,
+            use_fixed_input_token_growth=True,
+            fixed_input_token_growth_per_round=25,
+        )
+    )
+    active = view(
+        "active",
+        state=ProgramState.ACTIVE,
+        status=ProgramStatus.ACTING,
+        backend_id="backend",
+    )
+    components.initial_factors.set_program_factors(
+        active.ref,
+        ProgressTTLProgramFactors(segment_served_rounds=1),
+    )
+    components.initial_factors.global_factors.avg_input_token_growth_per_round = 999
+
+    diagnostic = components.strategy.diagnostics(
+        snapshot(active),
+        components.initial_factors,
+    )[0]
+    fields = dict(diagnostic.fields)
+
+    assert fields["rolling_growth"] == 999
+    assert fields["capacity_growth"] == 25
+    assert fields["remaining_growth_rounds"] == 1
+    assert fields["projected_active_reserve"] == 25
+
+
 def test_resume_ignores_paused_acting_program_without_a_pending_request() -> None:
     components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0))
     components.initial_factors.global_factors.avg_input_token_growth_per_round = 0
@@ -594,6 +626,46 @@ def test_request_completion_counts_round_and_arms_then_expires_ttl() -> None:
     due = replace(snapshot(program), observed_at_monotonic_s=105.0)
     components.strategy.handle_scheduled_check(due, components.initial_factors, controller(calls))
     assert [(call.kind, call.reason) for call in calls] == [(TransitionKind.PAUSE, "progress_ttl_expired")]
+
+
+def test_request_completion_exposes_armed_ttl_diagnostic() -> None:
+    components = build_progress_ttl_strategy(
+        ProgressTTLConfig(
+            ttl_min_seconds=5,
+            ttl_max_seconds=5,
+        )
+    )
+    program = view(
+        "program",
+        state=ProgramState.ACTIVE,
+        status=ProgramStatus.ACTING,
+        backend_id="backend",
+    )
+    finished = SchedulingEvent(
+        event_id="finished",
+        sequence=1,
+        kind=SchedulingEventKind.REQUEST_FINISHED,
+        occurred_at_monotonic_s=100.0,
+        reason="completed",
+        program=program.ref,
+        current_status=ProgramStatus.ACTING,
+        fields=(("total_tokens", 1000), ("prompt_tokens", 900), ("completion_tokens", 100)),
+    )
+
+    components.strategy.handle_scheduling_event(components.initial_factors, finished)
+    diagnostics = components.strategy.event_diagnostics(finished, components.initial_factors)
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].name == "progress_ttl_armed"
+    assert dict(diagnostics[0].fields) == {
+        "program": "program",
+        "generation": 0,
+        "total_tokens": 1000,
+        "acting_since": 100.0,
+        "ttl_seconds": 5.0,
+        "ttl_deadline": 105.0,
+        "is_privileged": False,
+    }
 
 
 def test_periodic_check_rebuilds_missing_acting_deadline_from_acting_since() -> None:

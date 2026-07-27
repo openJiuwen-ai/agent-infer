@@ -15,7 +15,7 @@ from dataclasses import replace
 
 from agentinfer.scheduling.admission_outcome import AdmissionDisposition, AdmissionOutcome
 from agentinfer.scheduling.domain import ProgramRef, ProgramState, ProgramStatus, ProgramView
-from agentinfer.scheduling.events import SchedulingEvent
+from agentinfer.scheduling.events import SchedulingEvent, SchedulingEventKind, StrategyDiagnostic
 from agentinfer.scheduling.factors import StrategyFactors
 from agentinfer.scheduling.progress_ttl.config import ProgressTTLConfig
 from agentinfer.scheduling.progress_ttl.factors import ProgressTTLProgramFactors
@@ -33,6 +33,84 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
 
     def __init__(self, config: ProgressTTLConfig) -> None:
         self.config = config
+
+    def diagnostics(
+        self,
+        snapshot: SchedulingSnapshot,
+        strategy_factors: ProgressTTLFactors,
+    ) -> tuple[StrategyDiagnostic, ...]:
+        """Describe the current Program mix and capacity projection without changing policy state."""
+        active = self._active_programs(snapshot)
+        paused = [program for program in snapshot.programs if program.state is ProgramState.PAUSED]
+        remaining_rounds = sum(
+            max(
+                0.0,
+                self._target_growth_rounds(self._program_factors(strategy_factors, program.ref).is_privileged)
+                - float(self._effective_segment_rounds(strategy_factors, program.ref)),
+            )
+            for program in active
+        )
+        rolling_growth = max(0.0, strategy_factors.global_factors.avg_input_token_growth_per_round)
+        capacity_growth = self._capacity_growth_per_round(strategy_factors)
+        projected_reserve = self.config.capacity_safety_margin_tokens + math.ceil(capacity_growth * remaining_rounds)
+        effective_capacity = (
+            int(snapshot.total_kv_tokens * self.config.resume_capacity_ratio)
+            if snapshot.total_kv_tokens is not None
+            else None
+        )
+        return (
+            StrategyDiagnostic(
+                "progress_ttl_state",
+                "periodic_sample",
+                (
+                    ("active", len(active)),
+                    ("active_reasoning", sum(program.status is ProgramStatus.REASONING for program in active)),
+                    ("active_acting", sum(program.status is ProgramStatus.ACTING for program in active)),
+                    ("paused", len(paused)),
+                    ("paused_reasoning", sum(program.status is ProgramStatus.REASONING for program in paused)),
+                    ("paused_acting", sum(program.status is ProgramStatus.ACTING for program in paused)),
+                    ("waiting_programs", len(snapshot.waiting_programs)),
+                    ("used_tokens", sum(self._capacity_tokens(program) for program in active)),
+                    ("total_kv_tokens", snapshot.total_kv_tokens),
+                    ("resume_effective_capacity", effective_capacity),
+                    ("rolling_growth", rolling_growth),
+                    ("capacity_growth", capacity_growth),
+                    ("remaining_growth_rounds", remaining_rounds),
+                    ("projected_active_reserve", projected_reserve),
+                ),
+            ),
+        )
+
+    def event_diagnostics(
+        self,
+        event: SchedulingEvent,
+        strategy_factors: ProgressTTLFactors,
+    ) -> tuple[StrategyDiagnostic, ...]:
+        """Describe a newly armed acting TTL after request accounting is committed."""
+        if event.program is None or event.kind is not SchedulingEventKind.REQUEST_FINISHED:
+            return ()
+        sidecar = self._program_factors(strategy_factors, event.program)
+        if (
+            event.current_status is not ProgramStatus.ACTING
+            or sidecar.acting_since_monotonic_s is None
+            or sidecar.ttl_deadline_monotonic_s is None
+        ):
+            return ()
+        return (
+            StrategyDiagnostic(
+                "progress_ttl_armed",
+                "request_finished",
+                (
+                    ("program", event.program.program_id),
+                    ("generation", event.program.generation),
+                    ("total_tokens", event.field("total_tokens")),
+                    ("acting_since", sidecar.acting_since_monotonic_s),
+                    ("ttl_seconds", sidecar.ttl_deadline_monotonic_s - sidecar.acting_since_monotonic_s),
+                    ("ttl_deadline", sidecar.ttl_deadline_monotonic_s),
+                    ("is_privileged", sidecar.is_privileged),
+                ),
+            ),
+        )
 
     def handle_admission(
         self,

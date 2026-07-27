@@ -16,6 +16,7 @@ from agentinfer.scheduling.factors import StrategyFactors
 from agentinfer.scheduling.headers import AgentRequestIdentity, select_router_headers
 from agentinfer.scheduling.identity import AgentIdentity, MetadataError, encode_agent_identity, parse_agent_identity
 from agentinfer.scheduling.lifecycle import ProgramLifecycle
+from agentinfer.scheduling.observability import SchedulerObservabilityConfig
 from agentinfer.scheduling.program_registry import ProgramRegistry, StaleProgramReferenceError
 from agentinfer.scheduling.program_runtime import RuntimeProgram
 from agentinfer.scheduling.request_pool import RequestPool, RequestPoolEntry, RequestPoolStatus
@@ -55,6 +56,7 @@ __all__ = [
     "SchedulingEventKind",
     "SchedulingSnapshot",
     "SchedulingStrategy",
+    "SchedulerObservabilityConfig",
     "SharedPrefixAttribution",
     "StrategyDiagnostic",
     "StrategyFactors",

@@ -94,8 +94,28 @@ vllm serve Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8 \
   --scheduler-cls agentinfer.agentcache.core.scheduler.AgentCacheAsyncSchedulerBridge \
   --middleware agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware \
   --middleware agentinfer.agentcache.core.api_adapter.AgentCacheLifecycleMiddleware \
-  --additional-config "{\"agentcache\":{\"backend_id\":\"vllm-local\",\"lifecycle_socket_path\":\"$LIFECYCLE_SOCKET\",\"controller_factory\":\"agentinfer.agentcache.core.factory.build_progress_ttl_controller\",\"schedule_interval_seconds\":5,\"progress_ttl\":{\"target_min_segment_rounds\":9,\"target_max_segment_rounds\":14,\"resume_capacity_ratio\":0.9,\"pause_capacity_ratio\":0.95,\"pause_capacity_lookahead_rounds\":2,\"privileged_lookahead_rounds\":14,\"privileged_max_context_tokens\":262144}}}"
+  --additional-config \
+  '{"agentcache":{"controller_factory":"agentinfer.agentcache.core.factory.build_progress_ttl_controller"}}'
 ```
+
+Optional runtime diagnostics use the `additional_config.agentcache.observability` namespace:
+
+```json
+{
+  "observability": {
+    "enabled": true
+  }
+}
+```
+
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `enabled` | `false` | Emit decision-event logs and periodic Progress-TTL state diagnostics. |
+| `log_interval_seconds` | `5.0` | Set the minimum interval between periodic diagnostics without changing the scheduling interval. |
+
+AgentInfer reuses vLLM's existing handlers, so do not set `VLLM_LOGGING_CONFIG_PATH`.
+
+Native Uvicorn startup and access logs remain enabled unless `--disable-uvicorn-access-log` is passed.
 
 In another terminal, run the same BenchKit workload:
 
