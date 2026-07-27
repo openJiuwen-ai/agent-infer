@@ -1,1 +1,1 @@
-"""AgentCache runtime component for AgentInfer."""
+"""AgentCache component for inference-engine runtime integration."""

@@ -33,6 +33,8 @@ class ProgressTTLConfig:
     pause_capacity_lookahead_rounds: float = 2.0
     privileged_lookahead_rounds: float = 14.0
     privileged_max_context_tokens: int = 262_144
+    use_fixed_input_token_growth: bool = False
+    fixed_input_token_growth_per_round: int = 1024
     decode_buffer_tokens: int = 100
     force_resume_timeout_seconds: float = 1800.0
     paused_program_ttl_seconds: float = 1800.0
@@ -74,3 +76,11 @@ class ProgressTTLConfig:
             raise ValueError("Progress-TTL token margins must be non-negative")
         if self.privileged_max_context_tokens <= 0:
             raise ValueError("privileged_max_context_tokens must be positive")
+        if not isinstance(self.use_fixed_input_token_growth, bool):
+            raise ValueError("use_fixed_input_token_growth must be a boolean")
+        if (
+            isinstance(self.fixed_input_token_growth_per_round, bool)
+            or not isinstance(self.fixed_input_token_growth_per_round, int)
+            or self.fixed_input_token_growth_per_round < 0
+        ):
+            raise ValueError("fixed_input_token_growth_per_round must be a non-negative integer")

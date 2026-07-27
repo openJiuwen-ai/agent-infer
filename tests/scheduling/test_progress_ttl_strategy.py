@@ -192,6 +192,47 @@ def test_admission_and_resume_reserve_the_same_minimum_segment_growth() -> None:
     assert [call.kind for call in fitting_resume_calls] == [TransitionKind.RESUME]
 
 
+def test_fixed_growth_overrides_rolling_growth_for_capacity_projection() -> None:
+    components = build_progress_ttl_strategy(
+        ProgressTTLConfig(
+            target_min_segment_rounds=2,
+            use_fixed_input_token_growth=True,
+            fixed_input_token_growth_per_round=25,
+        )
+    )
+    active = view(
+        "active",
+        state=ProgramState.ACTIVE,
+        status=ProgramStatus.ACTING,
+        backend_id="backend",
+    )
+    candidate = view(
+        "candidate",
+        state=ProgramState.PAUSED,
+        status=ProgramStatus.REASONING,
+    )
+    components.initial_factors.set_program_factors(
+        active.ref,
+        ProgressTTLProgramFactors(segment_served_rounds=1),
+    )
+    components.initial_factors.global_factors.avg_input_token_growth_per_round = 999
+
+    first_reserve = components.strategy._continuous_growth_reserve_tokens(
+        (active,),
+        components.initial_factors,
+        candidate=candidate,
+    )
+    components.initial_factors.global_factors.avg_input_token_growth_per_round = 10_000
+    second_reserve = components.strategy._continuous_growth_reserve_tokens(
+        (active,),
+        components.initial_factors,
+        candidate=candidate,
+    )
+
+    assert first_reserve == 75
+    assert second_reserve == 75
+
+
 def test_resume_ignores_paused_acting_program_without_a_pending_request() -> None:
     components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0))
     components.initial_factors.global_factors.avg_input_token_growth_per_round = 0

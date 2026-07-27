@@ -806,7 +806,7 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
             0.0,
             self.config.privileged_lookahead_rounds - self.config.pause_capacity_lookahead_rounds,
         )
-        growth = max(0.0, state.global_factors.avg_input_token_growth_per_round)
+        growth = self._capacity_growth_per_round(state)
         per_program = math.ceil(growth * extra_rounds)
         return sum(
             min(
@@ -863,8 +863,14 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
             served = self._program_factors(strategy_factors, program.ref).segment_served_rounds
             target = self._target_growth_rounds(self._program_factors(strategy_factors, program.ref).is_privileged)
             remaining_rounds += max(0.0, target - float(served))
-        growth = max(0.0, strategy_factors.global_factors.avg_input_token_growth_per_round)
+        growth = self._capacity_growth_per_round(strategy_factors)
         return self.config.capacity_safety_margin_tokens + math.ceil(growth * remaining_rounds)
+
+    def _capacity_growth_per_round(self, state: ProgressTTLFactors) -> float:
+        """Return fixed deployment growth when enabled, otherwise the rolling workload estimate."""
+        if self.config.use_fixed_input_token_growth:
+            return float(self.config.fixed_input_token_growth_per_round)
+        return max(0.0, state.global_factors.avg_input_token_growth_per_round)
 
     def _target_growth_rounds(self, privileged: bool) -> float:
         """Return the shared float round domain, preserving fractional privileged lookahead."""
@@ -885,7 +891,7 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
 
     def _pause_lookahead_tokens_per_active_program(self, strategy_factors: ProgressTTLFactors) -> int:
         """Return recent context growth reserved for each continuing active Program."""
-        growth = strategy_factors.global_factors.avg_input_token_growth_per_round
+        growth = self._capacity_growth_per_round(strategy_factors)
         return math.ceil(growth * self.config.pause_capacity_lookahead_rounds)
 
     def _required_tokens(self, program: ProgramView) -> int:

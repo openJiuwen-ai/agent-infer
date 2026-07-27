@@ -28,6 +28,21 @@ def test_config_defaults_match_the_two_l20_reference_policy() -> None:
     assert config.pause_capacity_ratio == 0.95
     assert config.pause_capacity_lookahead_rounds == 2
     assert config.privileged_lookahead_rounds == 14
+    assert config.use_fixed_input_token_growth is False
+    assert config.fixed_input_token_growth_per_round == 1024
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("use_fixed_input_token_growth", 1, "use_fixed_input_token_growth"),
+        ("fixed_input_token_growth_per_round", True, "fixed_input_token_growth_per_round"),
+        ("fixed_input_token_growth_per_round", -1, "fixed_input_token_growth_per_round"),
+    ],
+)
+def test_config_rejects_invalid_fixed_growth_settings(field: str, value: object, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        ProgressTTLConfig(**{field: value})
 
 
 def test_config_rejects_non_boolean_resume_reclaim_switch() -> None:
