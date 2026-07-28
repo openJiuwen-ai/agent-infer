@@ -17,7 +17,7 @@ environment. The model must support Anthropic `POST /v1/messages`.
 
 ```bash
 source /path/to/vllm/.venv/bin/activate
-python -m pip install --no-deps -e /path/to/AgentInfer
+python -m pip install -e /path/to/AgentInfer
 ```
 
 Explicit `vllm bench serve --agentinfer` commands go to BenchKit; ordinary `vllm` commands continue to upstream vLLM.

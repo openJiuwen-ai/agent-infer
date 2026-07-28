@@ -7,6 +7,9 @@ dependencies = ["datasets", "fastapi", "httpx", "numpy", "prometheus-client", "P
 [tool.setuptools.packages.find]
 include = ["agentinfer*"]
 
+[tool.setuptools.package-data]
+agentinfer = ["agentbench/configs/swebench_vllm.yaml"]
+
 [project.scripts]
 vllm = "agentinfer.agentcache.entrypoints.cli.main:main"
 
