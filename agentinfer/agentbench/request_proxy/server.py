@@ -83,7 +83,11 @@ class RequestProxyServer:
         self.shutdown_token = shutdown_token
         self.shutdown_timeout_seconds = shutdown_timeout_seconds
         self.shutdown_callback = shutdown_callback
-        self.client = httpx.AsyncClient(timeout=request_timeout_seconds, trust_env=False)
+        self.client = httpx.AsyncClient(
+            timeout=request_timeout_seconds,
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=0),
+            trust_env=False,
+        )
         self.accepting = True
         self._active_requests = 0
         self._active_condition = asyncio.Condition()
@@ -131,7 +135,9 @@ class RequestProxyServer:
                 self._submit_safely(identity, request_id, started, started_clock, None, None, {}, "request cancelled")
                 raise
             except Exception as exc:
-                self._submit_safely(identity, request_id, started, started_clock, None, None, {}, str(exc))
+                self._submit_safely(
+                    identity, request_id, started, started_clock, None, None, {}, f"{type(exc).__name__}: {exc}"
+                )
                 raise
 
             content_type = response.headers.get("content-type", "").lower()
@@ -170,7 +176,14 @@ class RequestProxyServer:
                     raise
                 except Exception as exc:
                     self._submit_safely(
-                        identity, request_id, started, started_clock, response.status_code, None, {}, str(exc)
+                        identity,
+                        request_id,
+                        started,
+                        started_clock,
+                        response.status_code,
+                        None,
+                        {},
+                        f"{type(exc).__name__}: {exc}",
                     )
                     raise
 
@@ -217,7 +230,7 @@ class RequestProxyServer:
                     error = "request cancelled"
                     raise
                 except Exception as exc:
-                    error = str(exc)
+                    error = f"{type(exc).__name__}: {exc}"
                     raise
 
             release_here = False

@@ -3,7 +3,7 @@ import gzip
 import json
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -66,6 +66,18 @@ def _runner_fakes(
         tmp_path / "err",
     )
     return config, instances
+
+
+def test_upstream_client_disables_keepalive_reuse(tmp_path: Path):
+    writer = RequestTraceWriter(tmp_path / "requests.jsonl")
+
+    with patch("agentinfer.agentbench.request_proxy.server.httpx.AsyncClient", wraps=httpx.AsyncClient) as client:
+        server = RequestProxyServer("http://router", "run", writer, 10, "token")
+
+    limits = client.call_args.kwargs["limits"]
+    assert limits.max_connections == 100
+    assert limits.max_keepalive_connections == 0
+    asyncio.run(server.client.aclose())
 
 
 def test_server_runner_closes_proxy_and_writer_when_uvicorn_fails(
@@ -471,7 +483,7 @@ def test_upstream_send_failure_records_request_fact(tmp_path: Path):
         row = json.loads((tmp_path / "requests.jsonl").read_text())
         assert row["status"] == "error"
         assert row["status_code"] is None
-        assert "connect failed" in row["error"]
+        assert row["error"] == "ConnectError: connect failed"
 
     asyncio.run(run())
 
@@ -550,6 +562,6 @@ def test_stream_read_failure_records_error_and_releases_shutdown(tmp_path: Path)
         row = json.loads((tmp_path / "requests.jsonl").read_text(encoding="utf-8"))
         assert row["status"] == "error"
         assert row["status_code"] == 200
-        assert "stream exploded" in row["error"]
+        assert row["error"] == "ReadError: stream exploded"
 
     asyncio.run(run())
