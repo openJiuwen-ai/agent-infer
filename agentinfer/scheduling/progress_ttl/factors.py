@@ -22,6 +22,9 @@ class ProgressTTLProgramFactors:
     segment_prompt_tokens: int = 0
     segment_completion_tokens: int = 0
     last_request_prompt_tokens: int = 0
+    segment_share_tokens: int = 0
+    rounds_since_ttl_pause: int = 0
+    previous_ttl_seconds: float | None = None
     last_segment_served_rounds: int = 0
     last_segment_prompt_tokens: int = 0
     last_segment_completion_tokens: int = 0
@@ -32,6 +35,7 @@ class ProgressTTLProgramFactors:
     request_wait_started_at_monotonic_s: float | None = None
     acting_since_monotonic_s: float | None = None
     ttl_deadline_monotonic_s: float | None = None
+    ttl_expiry_observed: bool = False
     release_deadline_monotonic_s: float | None = None
     last_pause_at_monotonic_s: float | None = None
     last_resume_at_monotonic_s: float | None = None
@@ -46,6 +50,8 @@ class ProgressTTLProgramFactors:
             self.segment_prompt_tokens,
             self.segment_completion_tokens,
             self.last_request_prompt_tokens,
+            self.segment_share_tokens,
+            self.rounds_since_ttl_pause,
             self.last_segment_served_rounds,
             self.last_segment_prompt_tokens,
             self.last_segment_completion_tokens,
@@ -64,5 +70,11 @@ class ProgressTTLProgramFactors:
         )
         if any(value is not None and (not math.isfinite(value) or value < 0) for value in timestamps):
             raise ValueError("Progress-TTL timestamps must be finite and non-negative")
+        if self.previous_ttl_seconds is not None and (
+            not math.isfinite(self.previous_ttl_seconds) or self.previous_ttl_seconds < 0
+        ):
+            raise ValueError("previous_ttl_seconds must be finite and non-negative when provided")
+        if not isinstance(self.ttl_expiry_observed, bool):
+            raise ValueError("ttl_expiry_observed must be a boolean")
         if not math.isfinite(self.last_inter_request_gap_seconds) or self.last_inter_request_gap_seconds < 0:
             raise ValueError("last_inter_request_gap_seconds must be finite and non-negative")

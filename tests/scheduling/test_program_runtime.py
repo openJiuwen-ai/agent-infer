@@ -3,6 +3,7 @@
 """Tests for generation-safe Programs, retained requests, and runtime lifecycle."""
 
 from dataclasses import dataclass
+from unittest.mock import PropertyMock, patch
 
 import pytest
 
@@ -236,6 +237,19 @@ def test_runtime_rejects_non_finite_strategy_deadline() -> None:
             StrategyFactors(_GlobalFactors([])),
             _backend(),
         )
+
+
+def test_schedule_cycle_time_gate_avoids_registry_inspection_on_native_hot_path() -> None:
+    scheduler = _scheduler(admit=True)
+    scheduler._next_periodic_check_at_monotonic_s = 10
+
+    with patch.object(
+        ProgramRegistry,
+        "has_programs",
+        new_callable=PropertyMock,
+        side_effect=AssertionError("registry inspected"),
+    ):
+        assert scheduler.needs_schedule_cycle(9) is False
 
 
 def test_observability_is_disabled_by_default(caplog: pytest.LogCaptureFixture) -> None:

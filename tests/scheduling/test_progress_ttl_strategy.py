@@ -28,6 +28,7 @@ from agentinfer.scheduling import (
 from agentinfer.scheduling.progress_ttl import (
     ProgressTTLConfig,
     ProgressTTLGlobalFactors,
+    ProgressTTLMode,
     ProgressTTLProgramFactors,
     ProgressTTLStrategy,
 )
@@ -50,6 +51,54 @@ def build_progress_ttl_strategy(config: ProgressTTLConfig) -> SimpleNamespace:
         strategy=ProgressTTLStrategy(config),
         initial_factors=StrategyFactors(global_factors=ProgressTTLGlobalFactors()),
     )
+
+
+def complete_growth_window(
+    factors: StrategyFactors[ProgressTTLGlobalFactors, ProgressTTLProgramFactors], rounds: int
+) -> None:
+    """Fill the request window with deterministic samples before testing workload-derived capacity lookahead."""
+    stats = factors.global_factors
+    for _ in range(stats.request_window_size):
+        stats.update_request(
+            prompt_tokens=100,
+            cached_prefix_tokens=0,
+            completion_tokens=10,
+            total_tokens=110,
+            request_latency_seconds=1,
+            active_programs=1,
+            waiting_programs=0,
+            input_token_growth=10,
+            inter_request_gap_seconds=1,
+            rounds_since_ttl_pause=rounds,
+        )
+
+
+def test_shared_prefix_freshness_uses_configured_global_kv_pool_turnovers() -> None:
+    components = build_progress_ttl_strategy(
+        ProgressTTLConfig(shared_prefix_freshness_warmup_seconds=100, shared_prefix_freshness_kv_turnovers=2)
+    )
+    factors = components.initial_factors
+    factors.global_factors.request_window_size = 1
+    factors.global_factors.update_request(
+        prompt_tokens=1000,
+        cached_prefix_tokens=600,
+        completion_tokens=200,
+        total_tokens=1200,
+        request_latency_seconds=4,
+        active_programs=2,
+        waiting_programs=0,
+        input_token_growth=200,
+        inter_request_gap_seconds=1,
+    )
+    candidate = view("candidate", state=ProgramState.PAUSED, status=ProgramStatus.REASONING, tokens=8000)
+    running_one = view("running-one", state=ProgramState.ACTIVE, status=ProgramStatus.REASONING, backend_id="backend")
+    running_two = view("running-two", state=ProgramState.ACTIVE, status=ProgramStatus.REASONING, backend_id="backend")
+
+    freshness = components.strategy.shared_prefix_freshness_seconds(
+        snapshot(candidate, running_one, running_two), factors, candidate
+    )
+
+    assert freshness == pytest.approx(2 * 1000 * 4 / 2 / 400)
 
 
 def view(
@@ -131,6 +180,7 @@ def test_admission_and_resume_reserve_the_same_minimum_segment_growth() -> None:
             resume_capacity_ratio=1,
         )
     )
+    complete_growth_window(components.initial_factors, rounds=1)
     components.initial_factors.global_factors.avg_input_token_growth_per_round = 150
     active = view(
         "active",
@@ -200,6 +250,7 @@ def test_fixed_growth_overrides_rolling_growth_for_capacity_projection() -> None
             fixed_input_token_growth_per_round=25,
         )
     )
+    complete_growth_window(components.initial_factors, rounds=1)
     active = view(
         "active",
         state=ProgramState.ACTIVE,
@@ -251,6 +302,7 @@ def test_capacity_diagnostic_reports_rolling_growth_but_projects_effective_fixed
         active.ref,
         ProgressTTLProgramFactors(segment_served_rounds=1),
     )
+    complete_growth_window(components.initial_factors, rounds=1)
     components.initial_factors.global_factors.avg_input_token_growth_per_round = 999
 
     diagnostic = components.strategy.diagnostics(
@@ -263,6 +315,27 @@ def test_capacity_diagnostic_reports_rolling_growth_but_projects_effective_fixed
     assert fields["capacity_growth"] == 25
     assert fields["remaining_growth_rounds"] == 1
     assert fields["projected_active_reserve"] == 25
+
+
+def test_cold_request_window_uses_zero_growth_lookahead_for_all_programs() -> None:
+    components = build_progress_ttl_strategy(ProgressTTLConfig(target_min_segment_rounds=9, decode_buffer_tokens=0))
+    components.initial_factors.global_factors.avg_input_token_growth_per_round = 100
+    candidate = view("candidate", state=ProgramState.PAUSED, status=ProgramStatus.REASONING)
+
+    non_privileged_reserve = components.strategy._continuous_growth_reserve_tokens(
+        (),
+        components.initial_factors,
+        candidate=candidate,
+    )
+    privileged_reserve = components.strategy._continuous_growth_reserve_tokens(
+        (),
+        components.initial_factors,
+        candidate=candidate,
+        candidate_privileged=True,
+    )
+
+    assert non_privileged_reserve == 0
+    assert privileged_reserve == 0
 
 
 def test_resume_ignores_paused_acting_program_without_a_pending_request() -> None:
@@ -567,6 +640,7 @@ def test_privileged_program_uses_longer_growth_target_in_shared_capacity_project
             privileged_lookahead_rounds=4,
         )
     )
+    complete_growth_window(components.initial_factors, rounds=2)
     components.initial_factors.global_factors.avg_input_token_growth_per_round = 100
     active = view(
         "active",
@@ -596,6 +670,8 @@ def test_request_completion_counts_round_and_arms_then_expires_ttl() -> None:
             target_max_segment_rounds=2,
             ttl_min_seconds=5,
             ttl_max_seconds=5,
+            ttl_max_cache_miss_impact_ratio=1,
+            ttl_prefill_seconds_per_1k_uncached_tokens=6,
         )
     )
     program = view(
@@ -633,6 +709,8 @@ def test_request_completion_exposes_armed_ttl_diagnostic() -> None:
         ProgressTTLConfig(
             ttl_min_seconds=5,
             ttl_max_seconds=5,
+            ttl_prefill_seconds_per_1k_uncached_tokens=10,
+            ttl_decode_throughput_alpha=1,
         )
     )
     program = view(
@@ -657,15 +735,14 @@ def test_request_completion_exposes_armed_ttl_diagnostic() -> None:
 
     assert len(diagnostics) == 1
     assert diagnostics[0].name == "progress_ttl_armed"
-    assert dict(diagnostics[0].fields) == {
-        "program": "program",
-        "generation": 0,
-        "total_tokens": 1000,
-        "acting_since": 100.0,
-        "ttl_seconds": 5.0,
-        "ttl_deadline": 105.0,
-        "is_privileged": False,
-    }
+    fields = dict(diagnostics[0].fields)
+    assert fields["program"] == "program"
+    assert fields["generation"] == 0
+    assert fields["total_tokens"] == 1000
+    assert fields["acting_since"] == 100.0
+    assert fields["ttl_seconds"] == 5.0
+    assert fields["ttl_deadline"] == 105.0
+    assert fields["is_privileged"] is False
 
 
 def test_periodic_check_rebuilds_missing_acting_deadline_from_acting_since() -> None:
@@ -1233,15 +1310,13 @@ def test_pause_lookahead_reserve_scales_with_active_program_count() -> None:
     assert two_active_calls[0].kind is TransitionKind.PAUSE
 
 
-def test_ttl_impact_multiplier_scales_avoided_prefill_cost() -> None:
+def test_adaptive_cache_miss_impact_uses_uncached_prompt_tokens() -> None:
     components = build_progress_ttl_strategy(
         ProgressTTLConfig(
             ttl_min_seconds=0,
             ttl_max_seconds=100,
             ttl_prefill_seconds_per_1k_uncached_tokens=1,
             ttl_decode_throughput_alpha=1,
-            uncached_ratio_default=1,
-            ttl_impact_multiplier=2,
         )
     )
     program = view(
@@ -1258,14 +1333,143 @@ def test_ttl_impact_multiplier_scales_avoided_prefill_cost() -> None:
         reason="completed",
         program=program.ref,
         current_status=ProgramStatus.ACTING,
-        fields=(("total_tokens", 1000), ("previous_context_tokens", 0)),
+        fields=(("prompt_tokens", 1000), ("total_tokens", 1000), ("previous_context_tokens", 0)),
     )
 
     components.strategy.handle_scheduling_event(components.initial_factors, event)
 
     sidecar = components.initial_factors.for_program(program.ref)
     assert sidecar is not None
-    assert sidecar.ttl_deadline_monotonic_s == 102
+    assert sidecar.ttl_deadline_monotonic_s == 101
+
+
+def test_ttl_impact_ratio_cap_overrides_configured_minimum() -> None:
+    components = build_progress_ttl_strategy(
+        ProgressTTLConfig(
+            ttl_min_seconds=10,
+            ttl_max_seconds=100,
+            ttl_max_cache_miss_impact_ratio=0.5,
+            ttl_prefill_seconds_per_1k_uncached_tokens=1,
+            ttl_decode_throughput_alpha=1,
+        )
+    )
+    program = view(
+        "program",
+        state=ProgramState.ACTIVE,
+        status=ProgramStatus.ACTING,
+        backend_id="backend",
+    )
+    event = SchedulingEvent(
+        event_id="finished",
+        sequence=1,
+        kind=SchedulingEventKind.REQUEST_FINISHED,
+        occurred_at_monotonic_s=100,
+        reason="completed",
+        program=program.ref,
+        current_status=ProgramStatus.ACTING,
+        fields=(("prompt_tokens", 1000), ("total_tokens", 1000), ("previous_context_tokens", 0)),
+    )
+
+    components.strategy.handle_scheduling_event(components.initial_factors, event)
+
+    sidecar = components.initial_factors.for_program(program.ref)
+    assert sidecar is not None
+    assert sidecar.ttl_deadline_monotonic_s == 100.5
+
+
+def test_off_mode_directly_admits_without_capacity_or_queueing() -> None:
+    components = build_progress_ttl_strategy(ProgressTTLConfig(mode=ProgressTTLMode.OFF, decode_buffer_tokens=0))
+    program = view("queued", state=ProgramState.PAUSED, status=ProgramStatus.REASONING, tokens=100)
+    calls: list[TransitionRequest] = []
+
+    outcome = components.strategy.handle_admission(
+        snapshot(program, capacity=1),
+        components.initial_factors,
+        controller(calls),
+        program.ref,
+    )
+
+    assert outcome.disposition is AdmissionDisposition.ADMITTED
+    assert outcome.reason == "progress_ttl_off_direct"
+    assert [call.kind for call in calls] == [TransitionKind.ADMIT]
+
+
+def test_off_mode_warns_when_paused_reasoning_resume_is_rejected(caplog: pytest.LogCaptureFixture) -> None:
+    components = build_progress_ttl_strategy(ProgressTTLConfig(mode=ProgressTTLMode.OFF))
+    program = view("paused", state=ProgramState.PAUSED, status=ProgramStatus.REASONING)
+    calls: list[TransitionRequest] = []
+
+    def reject_transition(request: TransitionRequest) -> TransitionResult:
+        calls.append(request)
+        return TransitionResult(
+            kind=request.kind,
+            program=request.program,
+            applied=False,
+            reason="resume_requires_paused",
+        )
+
+    components.strategy.schedule_resume(
+        snapshot(program),
+        components.initial_factors,
+        TransitionController(reject_transition),
+    )
+
+    assert [call.kind for call in calls] == [TransitionKind.RESUME]
+    assert "Progress-TTL transition rejected" in caplog.text
+    assert "resume_requires_paused" in caplog.text
+
+
+def test_off_mode_records_due_ttl_without_transitioning_program_state() -> None:
+    components = build_progress_ttl_strategy(ProgressTTLConfig(mode=ProgressTTLMode.OFF, ttl_min_seconds=1))
+    program = view("acting", state=ProgramState.ACTIVE, status=ProgramStatus.ACTING, backend_id="backend")
+    components.initial_factors.set_program_factors(
+        program.ref,
+        ProgressTTLProgramFactors(
+            rounds_since_ttl_pause=5,
+            acting_since_monotonic_s=1,
+            ttl_deadline_monotonic_s=10,
+        ),
+    )
+    calls: list[TransitionRequest] = []
+
+    components.strategy.handle_scheduled_check(
+        snapshot(program),
+        components.initial_factors,
+        controller(calls),
+    )
+
+    factors = components.initial_factors.for_program(program.ref)
+    assert factors is not None
+    assert calls == []
+    assert factors.rounds_since_ttl_pause == 0
+    assert factors.pause_reason == "progress_ttl_theoretical_expired"
+    assert factors.ttl_expiry_observed is True
+
+
+def test_native_running_usage_is_combined_with_share_adjusted_acting_reservations() -> None:
+    components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0))
+    reasoning = view(
+        "reasoning",
+        state=ProgramState.ACTIVE,
+        status=ProgramStatus.REASONING,
+        tokens=900,
+        backend_id="backend",
+    )
+    acting = replace(
+        view("acting", state=ProgramState.ACTIVE, status=ProgramStatus.ACTING, tokens=500, backend_id="backend"),
+        tokens=ProgramTokenObservation(estimated_context_tokens=500, shared_prefix_tokens=200),
+    )
+    observed = SchedulingSnapshot(
+        observed_at_monotonic_s=100,
+        backend_id="backend",
+        total_kv_tokens=1000,
+        native_used_kv_tokens=600,
+        native_waiting_kv_tokens=250,
+        programs=(reasoning, acting),
+        waiting_programs=(),
+    )
+
+    assert components.strategy._remaining_tokens(observed, 1.0) == -150
 
 
 def test_resume_score_uses_rolling_latency_load_and_last_request_gap() -> None:

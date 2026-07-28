@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 from vllm.v1.core.sched.async_scheduler import AsyncScheduler
 from vllm.v1.core.sched.scheduler import Scheduler
+from vllm.v1.engine import EngineCoreEvent, EngineCoreEventType
 
 from agentinfer.agentcache.core.scheduler import AgentCacheAsyncSchedulerBridge, _metadata_from_request, _resolve_object
 from agentinfer.scheduling.backend import DispatchTarget
@@ -23,6 +24,8 @@ class _Controller:
         self.pool: RequestPool[object] = RequestPool()
         self.schedule_calls = 0
         self.completed: list[tuple[str, int]] = []
+        self.prefix_observations: list[tuple[str, int]] = []
+        self.prefix_candidates: list[tuple[str, object]] = []
 
     @property
     def retained_request_count(self) -> int:
@@ -49,8 +52,14 @@ class _Controller:
     def consume_admitted_requests(self):
         return self.pool.consume_admitted()
 
+    def prefix_cache_candidates(self):
+        return tuple(self.prefix_candidates)
+
     def on_stream_output(self, request_id, total_output_tokens) -> None:
         return None
+
+    def on_prefix_cache_observation(self, request_id, cached_prefix_tokens) -> None:
+        self.prefix_observations.append((request_id, cached_prefix_tokens))
 
     def on_request_completion(self, request_id, total_tokens) -> None:
         self.completed.append((request_id, total_tokens))
@@ -122,8 +131,13 @@ def test_async_bridge_retains_then_releases_to_native_waiting() -> None:
     def initialize(scheduler, *args, **kwargs) -> None:
         scheduler.waiting = object()
         scheduler.requests = {}
+        scheduler.kv_cache_manager = SimpleNamespace(
+            prefix_cache_lookup_enabled=lambda request: True,
+            coordinator=SimpleNamespace(find_longest_cache_hit=lambda hashes, maximum: ((), 48)),
+        )
 
     def native_add(scheduler, request) -> None:
+        request.events.append(EngineCoreEvent.new_event(EngineCoreEventType.QUEUED, 10.0))
         native_requests.append(request)
 
     request = SimpleNamespace(
@@ -132,30 +146,41 @@ def test_async_bridge_retains_then_releases_to_native_waiting() -> None:
         num_prompt_tokens=100,
         sampling_params=SimpleNamespace(extra_args={"agentic_context": '{"task_id":"task","agent_id":"lead"}'}),
         trace_headers={},
+        events=[],
     )
     with (
         patch.object(AsyncScheduler, "__init__", initialize),
         patch.object(Scheduler, "add_request", native_add),
         patch.object(Scheduler, "get_request_counts", return_value=(0, 0)),
         patch.object(Scheduler, "get_num_unfinished_requests", return_value=0),
-        patch.object(Scheduler, "schedule", return_value="native-output"),
+        patch.object(
+            Scheduler,
+            "schedule",
+            side_effect=(
+                SimpleNamespace(scheduled_new_reqs=(SimpleNamespace(req_id="request-1", num_computed_tokens=64),)),
+                SimpleNamespace(scheduled_new_reqs=()),
+            ),
+        ),
     ):
         bridge = AgentCacheAsyncSchedulerBridge(config, SimpleNamespace(num_blocks=10), object(), 16, 16)
         controller = bridge._agentcache.controller
         assert isinstance(controller, _Controller)
         native_waiting = bridge.waiting
         bridge.add_request(request)
+        controller.prefix_candidates.append(("request-1", request))
 
         assert native_requests == []
         assert bridge.get_num_unfinished_requests() == 1
-        assert bridge.schedule() == "native-output"
-        assert bridge.schedule() == "native-output"
+        assert bridge.schedule().scheduled_new_reqs[0].req_id == "request-1"
+        assert bridge.schedule().scheduled_new_reqs == ()
         rank = bridge._agentcache.backend_pool_info(bridge).backends[0].dp_ranks[0]
 
     assert native_requests == [request]
+    assert request.events == [EngineCoreEvent.new_event(EngineCoreEventType.QUEUED, 1.0)]
     assert bridge.waiting is native_waiting
     assert controller.retained_request_count == 0
     assert controller.schedule_calls == 1
+    assert controller.prefix_observations == [("request-1", 64)]
     assert rank.dp_rank == 3
     assert rank.total_hbm_kv_tokens == 160
 
@@ -200,6 +225,49 @@ def test_async_bridge_does_not_multiply_resolved_context_parallel_block_size_twi
 
     attach_logging.assert_called_once_with()
     assert rank.total_hbm_kv_tokens == 10 * resolved_block_size
+
+
+def test_async_bridge_reports_running_usage_and_native_waiting_token_estimate() -> None:
+    config = SimpleNamespace(
+        scheduler_config=SimpleNamespace(async_scheduling=True),
+        parallel_config=SimpleNamespace(data_parallel_index=0),
+        additional_config={},
+    )
+
+    def initialize(scheduler, *args, **kwargs) -> None:
+        scheduler.waiting = [SimpleNamespace(num_tokens=120), SimpleNamespace(num_tokens=80)]
+        scheduler.skipped_waiting = [SimpleNamespace(num_tokens=40)]
+        scheduler.kv_cache_manager = SimpleNamespace(usage=lambda: 0.5)
+
+    with (
+        patch.object(AsyncScheduler, "__init__", initialize),
+        patch.object(Scheduler, "get_request_counts", return_value=(1, 3)),
+    ):
+        bridge = AgentCacheAsyncSchedulerBridge(config, SimpleNamespace(num_blocks=10), object(), 16, 16)
+        rank = bridge._agentcache.backend_pool_info(bridge).backends[0].dp_ranks[0]
+
+    assert rank.used_hbm_kv_tokens == 80
+    assert rank.waiting_hbm_kv_tokens == 240
+
+
+def test_async_bridge_accepts_numeric_kv_usage_property() -> None:
+    config = SimpleNamespace(
+        scheduler_config=SimpleNamespace(async_scheduling=True),
+        parallel_config=SimpleNamespace(data_parallel_index=0),
+        additional_config={},
+    )
+
+    def initialize(scheduler, *args, **kwargs) -> None:
+        scheduler.kv_cache_manager = SimpleNamespace(usage=0.5)
+
+    with (
+        patch.object(AsyncScheduler, "__init__", initialize),
+        patch.object(Scheduler, "get_request_counts", return_value=(1, 0)),
+    ):
+        bridge = AgentCacheAsyncSchedulerBridge(config, SimpleNamespace(num_blocks=10), object(), 16, 16)
+        rank = bridge._agentcache.backend_pool_info(bridge).backends[0].dp_ranks[0]
+
+    assert rank.used_hbm_kv_tokens == 80
 
 
 @pytest.mark.parametrize(

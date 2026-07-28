@@ -73,6 +73,8 @@ class ProgramTokenObservation:
     Args:
         estimated_context_tokens: Router-side estimate of current context tokens.
         estimated_next_round_tokens: Estimated token growth for the next model round.
+        shared_prefix_tokens: Prefix tokens observed as already cached for this Program's current segment.
+        shared_prefix_fresh_until_monotonic_s: Deadline before which the runtime retains this shared-prefix observation.
         actual_resident_tokens: Optional backend-observed resident KV tokens.
         actual_allocated_blocks: Optional backend-observed allocated KV blocks.
         block_size_tokens: Token count represented by one observed KV block.
@@ -83,6 +85,8 @@ class ProgramTokenObservation:
 
     estimated_context_tokens: int
     estimated_next_round_tokens: int = 0
+    shared_prefix_tokens: int = 0
+    shared_prefix_fresh_until_monotonic_s: float | None = None
     actual_resident_tokens: int | None = None
     actual_allocated_blocks: int | None = None
     block_size_tokens: int | None = None
@@ -95,6 +99,7 @@ class ProgramTokenObservation:
         counts = (
             self.estimated_context_tokens,
             self.estimated_next_round_tokens,
+            self.shared_prefix_tokens,
             self.actual_resident_tokens,
             self.actual_allocated_blocks,
         )
@@ -106,6 +111,11 @@ class ProgramTokenObservation:
             not math.isfinite(self.observed_at_monotonic_s) or self.observed_at_monotonic_s < 0
         ):
             raise ValueError("observation timestamp must be finite and non-negative")
+        if self.shared_prefix_fresh_until_monotonic_s is not None and (
+            not math.isfinite(self.shared_prefix_fresh_until_monotonic_s)
+            or self.shared_prefix_fresh_until_monotonic_s < 0
+        ):
+            raise ValueError("shared-prefix freshness deadline must be finite and non-negative")
 
 
 @dataclass(frozen=True)

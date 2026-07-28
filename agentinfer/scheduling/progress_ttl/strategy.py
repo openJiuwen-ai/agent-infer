@@ -17,9 +17,9 @@ from agentinfer.scheduling.admission_outcome import AdmissionDisposition, Admiss
 from agentinfer.scheduling.domain import ProgramRef, ProgramState, ProgramStatus, ProgramView
 from agentinfer.scheduling.events import SchedulingEvent, SchedulingEventKind, StrategyDiagnostic
 from agentinfer.scheduling.factors import StrategyFactors
-from agentinfer.scheduling.progress_ttl.config import ProgressTTLConfig
+from agentinfer.scheduling.progress_ttl.config import ProgressTTLConfig, ProgressTTLMode
 from agentinfer.scheduling.progress_ttl.factors import ProgressTTLProgramFactors
-from agentinfer.scheduling.progress_ttl.rolling_stats import ProgressTTLGlobalFactors
+from agentinfer.scheduling.progress_ttl.rolling_stats import ProgressTTLGlobalFactors, TTLEstimate
 from agentinfer.scheduling.snapshot import SchedulingSnapshot
 from agentinfer.scheduling.strategy import SchedulingStrategy
 from agentinfer.scheduling.transitions import TransitionController, TransitionResult
@@ -45,7 +45,10 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
         remaining_rounds = sum(
             max(
                 0.0,
-                self._target_growth_rounds(self._program_factors(strategy_factors, program.ref).is_privileged)
+                self._target_growth_rounds(
+                    strategy_factors,
+                    self._program_factors(strategy_factors, program.ref).is_privileged,
+                )
                 - float(self._effective_segment_rounds(strategy_factors, program.ref)),
             )
             for program in active
@@ -58,6 +61,18 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
             if snapshot.total_kv_tokens is not None
             else None
         )
+        acting_reserved_tokens = sum(
+            self._capacity_tokens(program) for program in active if program.status is ProgramStatus.ACTING
+        )
+        if snapshot.native_used_kv_tokens is None:
+            used_tokens = sum(self._capacity_tokens(program) for program in active)
+            capacity_source = "program_estimate"
+        else:
+            used_tokens = (
+                snapshot.native_used_kv_tokens + acting_reserved_tokens + (snapshot.native_waiting_kv_tokens or 0)
+            )
+            capacity_source = "native_usage_plus_acting_plus_waiting"
+        global_factors = strategy_factors.global_factors
         return (
             StrategyDiagnostic(
                 "progress_ttl_state",
@@ -70,11 +85,26 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
                     ("paused_reasoning", sum(program.status is ProgramStatus.REASONING for program in paused)),
                     ("paused_acting", sum(program.status is ProgramStatus.ACTING for program in paused)),
                     ("waiting_programs", len(snapshot.waiting_programs)),
-                    ("used_tokens", sum(self._capacity_tokens(program) for program in active)),
+                    ("capacity_source", capacity_source),
+                    ("used_tokens", used_tokens),
+                    ("native_used_tokens", snapshot.native_used_kv_tokens),
+                    ("acting_reserved_tokens", acting_reserved_tokens),
+                    ("native_waiting_tokens", snapshot.native_waiting_kv_tokens),
                     ("total_kv_tokens", snapshot.total_kv_tokens),
                     ("resume_effective_capacity", effective_capacity),
                     ("rolling_growth", rolling_growth),
                     ("capacity_growth", capacity_growth),
+                    ("rolling_cached_prefix_tokens", global_factors.avg_cached_prefix_tokens),
+                    ("rolling_uncached_prompt_tokens", global_factors.avg_uncached_prompt_tokens),
+                    ("rolling_completion_tokens", global_factors.avg_completion_tokens),
+                    ("mode", self.config.mode.value),
+                    ("transitions_enabled", self._transitions_enabled(strategy_factors)),
+                    ("request_window_samples", global_factors.request_sample_count),
+                    ("request_window_size", global_factors.request_window_size),
+                    ("continuity_window_samples", global_factors.continuity_sample_count),
+                    ("continuity_window_complete", global_factors.continuity_window_complete),
+                    ("continuity_utility_seconds", global_factors.continuity_utility_seconds),
+                    ("continuity_enabled", global_factors.continuity_enabled),
                     ("remaining_growth_rounds", remaining_rounds),
                     ("projected_active_reserve", projected_reserve),
                 ),
@@ -104,12 +134,53 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
                     ("program", event.program.program_id),
                     ("generation", event.program.generation),
                     ("total_tokens", event.field("total_tokens")),
+                    ("prompt_tokens", event.field("prompt_tokens")),
+                    ("shared_prefix_tokens", sidecar.segment_share_tokens),
+                    (
+                        "cache_miss_impact_seconds",
+                        self._cache_miss_impact_seconds(
+                            sidecar.last_request_prompt_tokens,
+                            sidecar.segment_share_tokens,
+                        ),
+                    ),
                     ("acting_since", sidecar.acting_since_monotonic_s),
                     ("ttl_seconds", sidecar.ttl_deadline_monotonic_s - sidecar.acting_since_monotonic_s),
                     ("ttl_deadline", sidecar.ttl_deadline_monotonic_s),
+                    ("continuity_window_samples", strategy_factors.global_factors.continuity_sample_count),
+                    ("continuity_window_complete", strategy_factors.global_factors.continuity_window_complete),
+                    ("continuity_utility_seconds", strategy_factors.global_factors.continuity_utility_seconds),
+                    ("continuity_enabled", strategy_factors.global_factors.continuity_enabled),
+                    ("mode", self.config.mode.value),
                     ("is_privileged", sidecar.is_privileged),
                 ),
             ),
+        )
+
+    def shared_prefix_freshness_seconds(
+        self,
+        snapshot: SchedulingSnapshot,
+        strategy_factors: ProgressTTLFactors,
+        program: ProgramView,
+    ) -> float:
+        """Estimate the lifetime of one shared-prefix observation from KV-pool turnover."""
+        del program
+        global_factors = strategy_factors.global_factors
+        if not global_factors.request_window_complete:
+            return self.config.shared_prefix_freshness_warmup_seconds
+        active_reasoning = sum(
+            view.state is ProgramState.ACTIVE
+            and view.status is ProgramStatus.REASONING
+            and view.backend_id == snapshot.backend_id
+            for view in snapshot.programs
+        )
+        if active_reasoning <= 0 or snapshot.total_kv_tokens is None or global_factors.avg_uncached_prompt_tokens <= 0:
+            return self.config.shared_prefix_freshness_warmup_seconds
+        return (
+            self.config.shared_prefix_freshness_kv_turnovers
+            * snapshot.total_kv_tokens
+            * global_factors.avg_request_latency_seconds
+            / active_reasoning
+            / global_factors.avg_uncached_prompt_tokens
         )
 
     def handle_admission(
@@ -123,6 +194,8 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
         view = snapshot.program(candidate)
         if view is None:
             raise ValueError("admission candidate is absent from the scheduling snapshot")
+        if not self._transitions_enabled(strategy_factors):
+            return self._admit_without_pt(transitions, view, snapshot.backend_id)
         self._reconcile_privileges(snapshot, strategy_factors)
         required = self._required_tokens(view)
         if view.state is ProgramState.ACTIVE and view.backend_id == snapshot.backend_id:
@@ -183,7 +256,19 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
         strategy_factors: ProgressTTLFactors,
         transitions: TransitionController,
     ) -> None:
-        """Resume score-ordered Programs, using eligible acting capacity only when required."""
+        """Resume paused reasoning Programs while off, otherwise score-order reasoning Programs under capacity."""
+        if not self._transitions_enabled(strategy_factors):
+            for program in snapshot.programs:
+                # Keep paused acting Programs paused: their retention and TTL
+                # state must survive an auto on -> off transition.  A later
+                # request changes such a Program to reasoning and the off-mode
+                # admission path then activates it directly.
+                if program.state is not ProgramState.PAUSED or program.status is not ProgramStatus.REASONING:
+                    continue
+                self._transition_applied(
+                    transitions.resume(program.ref, reason="progress_ttl_off_resume", backend_id=snapshot.backend_id)
+                )
+            return
         self._reconcile_privileges(snapshot, strategy_factors)
         remaining = self._remaining_tokens(snapshot, self.config.resume_capacity_ratio)
         if remaining is None:
@@ -279,6 +364,8 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
         transitions: TransitionController,
     ) -> None:
         """Restore pause headroom by segment-tenure priority across both Program statuses."""
+        if not self._transitions_enabled(strategy_factors):
+            return
         self._reconcile_privileges(snapshot, strategy_factors)
         self._promote_progress_privileges(snapshot, strategy_factors)
         active = [program for program in self._active_programs(snapshot) if not program.marked_for_pause]
@@ -339,7 +426,9 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
         transitions: TransitionController,
         completed: ProgramRef,
     ) -> None:
-        """Yield a maximum-round ordinary Program when queued resume demand is not covered by pending pauses."""
+        """Yield a maximum-round ordinary Program only while Progress-TTL transitions are enabled."""
+        if not self._transitions_enabled(strategy_factors):
+            return
         program = snapshot.program(completed)
         if (
             program is None
@@ -384,10 +473,15 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
             deadline
             for _, state in strategy_factors.program_factors
             for deadline in (
-                state.ttl_deadline_monotonic_s,
+                (
+                    state.ttl_deadline_monotonic_s
+                    if self._transitions_enabled(strategy_factors) or not state.ttl_expiry_observed
+                    else None
+                ),
                 (
                     state.acting_since_monotonic_s + self.config.ttl_max_seconds
                     if state.acting_since_monotonic_s is not None
+                    and (self._transitions_enabled(strategy_factors) or not state.ttl_expiry_observed)
                     else None
                 ),
                 state.release_deadline_monotonic_s,
@@ -409,7 +503,12 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
         for program in snapshot.programs:
             sidecar = self._program_factors(strategy_factors, program.ref)
             fallback_deadline = (
-                sidecar.acting_since_monotonic_s + self._ttl_seconds(program.tokens.estimated_context_tokens)
+                sidecar.acting_since_monotonic_s
+                + self._ttl_seconds(
+                    strategy_factors,
+                    sidecar.last_request_prompt_tokens or program.tokens.estimated_context_tokens,
+                    sidecar.segment_share_tokens,
+                )
                 if sidecar.acting_since_monotonic_s is not None
                 else None
             )
@@ -427,6 +526,11 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
                 and program.status is ProgramStatus.ACTING
                 and program.ref not in protected_targets
             ):
+                if not self._transitions_enabled(strategy_factors):
+                    if not sidecar.ttl_expiry_observed:
+                        self._record_theoretical_ttl_expiry(strategy_factors, program.ref, now)
+                    protected_targets.add(program.ref)
+                    continue
                 target = self._same_task_ttl_privilege_target(snapshot, program) if sidecar.is_privileged else None
                 self._require_applied(transitions.pause(program.ref, reason="progress_ttl_expired"))
                 self._set_privileged(strategy_factors, program.ref, False, reason="ttl_pause_source")
@@ -500,10 +604,17 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
         total_tokens = self._event_int(event.field("total_tokens")) or prompt_tokens + completion_tokens
         previous_context_tokens = self._event_int(event.field("previous_context_tokens"))
         context_growth_tokens = max(0, total_tokens - previous_context_tokens)
+        shared_prefix_tokens = min(
+            prompt_tokens,
+            self._event_int(event.field("shared_prefix_tokens")),
+        )
+        current = self._program_factors(strategy_factors, event.program)
+        rounds_since_ttl_pause = current.rounds_since_ttl_pause + 1
         global_factors = strategy_factors.global_factors
         inter_request_gap_seconds = self._event_float(event.field("inter_request_gap_seconds"))
         global_factors.update_request(
             prompt_tokens=prompt_tokens,
+            cached_prefix_tokens=shared_prefix_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
             request_latency_seconds=self._event_float(event.field("request_latency_seconds")),
@@ -511,14 +622,33 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
             waiting_programs=self._event_int(event.field("waiting_programs")),
             input_token_growth=context_growth_tokens,
             inter_request_gap_seconds=inter_request_gap_seconds,
+            rounds_since_ttl_pause=rounds_since_ttl_pause,
         )
-        current = self._program_factors(strategy_factors, event.program)
+        cache_miss_impact_seconds = self._cache_miss_impact_seconds(prompt_tokens, shared_prefix_tokens)
+        if current.previous_ttl_seconds is not None and inter_request_gap_seconds > 0:
+            continuity_window_was_complete = global_factors.continuity_window_complete
+            global_factors.observe_continuity(
+                interval_seconds=inter_request_gap_seconds,
+                cache_miss_impact_seconds=cache_miss_impact_seconds,
+                assigned_ttl_seconds=current.previous_ttl_seconds,
+            )
+            if not continuity_window_was_complete and global_factors.continuity_window_complete:
+                global_factors.recalibrate_continuity_window(
+                    minimum_seconds=self.config.ttl_min_seconds,
+                    maximum_seconds=self.config.ttl_max_seconds,
+                    impact_ratio=self.config.ttl_max_cache_miss_impact_ratio,
+                )
+            global_factors.update_continuity_mode(
+                enable_threshold_seconds=self.config.auto_enable_utility_seconds,
+                disable_threshold_seconds=self.config.auto_disable_utility_seconds,
+            )
+        ttl_estimate = self._ttl_estimate(strategy_factors, prompt_tokens, shared_prefix_tokens)
         rounds = current.segment_served_rounds + 1
         ttl_deadline = None
         acting_since = None
         if event.current_status is ProgramStatus.ACTING:
             acting_since = event.occurred_at_monotonic_s
-            ttl_deadline = event.occurred_at_monotonic_s + self._ttl_seconds(total_tokens)
+            ttl_deadline = event.occurred_at_monotonic_s + ttl_estimate.ttl_seconds
         strategy_factors.set_program_factors(
             event.program,
             replace(
@@ -527,7 +657,11 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
                 segment_prompt_tokens=current.segment_prompt_tokens + prompt_tokens,
                 segment_completion_tokens=current.segment_completion_tokens + completion_tokens,
                 last_request_prompt_tokens=prompt_tokens,
-                is_evictable_after_min_rounds=rounds >= self.config.target_min_segment_rounds,
+                segment_share_tokens=shared_prefix_tokens,
+                rounds_since_ttl_pause=rounds_since_ttl_pause,
+                previous_ttl_seconds=ttl_estimate.ttl_seconds,
+                ttl_expiry_observed=False,
+                is_evictable_after_min_rounds=rounds >= self._protected_min_segment_rounds(strategy_factors),
                 acting_since_monotonic_s=acting_since,
                 ttl_deadline_monotonic_s=ttl_deadline,
                 release_deadline_monotonic_s=None,
@@ -557,9 +691,13 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
                 request_wait_started_at_monotonic_s=None,
                 acting_since_monotonic_s=None,
                 ttl_deadline_monotonic_s=None,
+                ttl_expiry_observed=False,
                 release_deadline_monotonic_s=(event.occurred_at_monotonic_s + self.config.paused_program_ttl_seconds),
                 last_pause_at_monotonic_s=event.occurred_at_monotonic_s,
                 pause_reason=event.reason,
+                rounds_since_ttl_pause=(
+                    0 if event.reason == "progress_ttl_expired" else current.rounds_since_ttl_pause
+                ),
                 is_privileged=False,
                 privilege_reason=f"{event.reason}_pause_clear",
             ),
@@ -934,12 +1072,15 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
         Programs contribute only their remaining rounds. Admission and resume call this same projection so neither
         path can fill capacity with current contexts while omitting the near-term growth required by the policy.
         """
-        remaining_rounds = self._target_growth_rounds(candidate_privileged)
+        remaining_rounds = self._target_growth_rounds(strategy_factors, candidate_privileged)
         for program in active_programs:
             if program.ref == candidate.ref:
                 continue
             served = self._program_factors(strategy_factors, program.ref).segment_served_rounds
-            target = self._target_growth_rounds(self._program_factors(strategy_factors, program.ref).is_privileged)
+            target = self._target_growth_rounds(
+                strategy_factors,
+                self._program_factors(strategy_factors, program.ref).is_privileged,
+            )
             remaining_rounds += max(0.0, target - float(served))
         growth = self._capacity_growth_per_round(strategy_factors)
         return self.config.capacity_safety_margin_tokens + math.ceil(growth * remaining_rounds)
@@ -950,21 +1091,93 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
             return float(self.config.fixed_input_token_growth_per_round)
         return max(0.0, state.global_factors.avg_input_token_growth_per_round)
 
-    def _target_growth_rounds(self, privileged: bool) -> float:
-        """Return the shared float round domain, preserving fractional privileged lookahead."""
+    def _transitions_enabled(self, state: ProgressTTLFactors) -> bool:
+        """Return whether Progress-TTL may apply lifecycle transitions in the selected mode."""
+        if self.config.mode is ProgressTTLMode.ON:
+            return True
+        if self.config.mode is ProgressTTLMode.OFF:
+            return False
+        return state.global_factors.continuity_enabled
+
+    def _admit_without_pt(
+        self,
+        transitions: TransitionController,
+        candidate: ProgramView,
+        backend_id: str,
+    ) -> AdmissionOutcome:
+        """Admit directly while Progress-TTL transitions are disabled."""
+        required = self._required_tokens(candidate)
+        if candidate.state is ProgramState.ACTIVE and candidate.backend_id == backend_id:
+            return AdmissionOutcome(
+                AdmissionDisposition.ADMITTED,
+                "progress_ttl_off_already_active",
+                required_tokens=required,
+            )
+        result = transitions.admit(candidate.ref, reason="progress_ttl_off_direct", backend_id=backend_id)
+        if not result.applied:
+            return AdmissionOutcome(
+                AdmissionDisposition.QUEUED,
+                "progress_ttl_off_direct_transition_rejected",
+                required_tokens=required,
+            )
+        return AdmissionOutcome(
+            AdmissionDisposition.ADMITTED,
+            "progress_ttl_off_direct",
+            required_tokens=required,
+            transitioned_programs=(candidate.ref,),
+        )
+
+    def _record_theoretical_ttl_expiry(
+        self,
+        state: ProgressTTLFactors,
+        ref: ProgramRef,
+        now_monotonic_s: float,
+    ) -> None:
+        """Record an off-mode TTL boundary without changing the Program state."""
+        current = self._program_factors(state, ref)
+        state.set_program_factors(
+            ref,
+            replace(
+                current,
+                rounds_since_ttl_pause=0,
+                ttl_expiry_observed=True,
+                last_pause_at_monotonic_s=now_monotonic_s,
+                pause_reason="progress_ttl_theoretical_expired",
+            ),
+        )
+
+    def _protected_min_segment_rounds(self, state: ProgressTTLFactors) -> int:
+        """Return the workload-derived non-privileged protection target."""
+        return state.global_factors.protected_min_segment_rounds(self.config.target_min_segment_rounds)
+
+    def _target_growth_rounds(self, state: ProgressTTLFactors, privileged: bool) -> float:
+        """Return workload-derived lookahead bounded by the configured policy cap."""
+        if not state.global_factors.request_window_complete:
+            return 0.0
+        estimated_rounds = state.global_factors.estimated_continuity_rounds()
         if privileged:
-            return max(0.0, self.config.privileged_lookahead_rounds)
-        return float(self.config.target_min_segment_rounds)
+            return min(float(estimated_rounds), self.config.privileged_lookahead_rounds)
+        return min(float(estimated_rounds), float(self.config.target_min_segment_rounds))
 
     def _remaining_tokens(self, snapshot: SchedulingSnapshot, capacity_ratio: float) -> int | None:
         if snapshot.total_kv_tokens is None:
             return None
         effective_capacity = int(snapshot.total_kv_tokens * capacity_ratio)
-        used = sum(
-            self._capacity_tokens(program)
-            for program in snapshot.programs
-            if program.state is ProgramState.ACTIVE and program.backend_id == snapshot.backend_id
-        )
+        if snapshot.native_used_kv_tokens is None:
+            used = sum(
+                self._capacity_tokens(program)
+                for program in snapshot.programs
+                if program.state is ProgramState.ACTIVE and program.backend_id == snapshot.backend_id
+            )
+        else:
+            acting_reserved = sum(
+                self._capacity_tokens(program)
+                for program in snapshot.programs
+                if program.state is ProgramState.ACTIVE
+                and program.status is ProgramStatus.ACTING
+                and program.backend_id == snapshot.backend_id
+            )
+            used = snapshot.native_used_kv_tokens + acting_reserved + (snapshot.native_waiting_kv_tokens or 0)
         return effective_capacity - used
 
     def _pause_lookahead_tokens_per_active_program(self, strategy_factors: ProgressTTLFactors) -> int:
@@ -974,7 +1187,7 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
 
     def _required_tokens(self, program: ProgramView) -> int:
         return (
-            program.tokens.estimated_context_tokens
+            max(0, program.tokens.estimated_context_tokens - program.tokens.shared_prefix_tokens)
             + program.tokens.estimated_next_round_tokens
             + self.config.decode_buffer_tokens
         )
@@ -984,7 +1197,10 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
         return self._program_factors(state, ref).segment_served_rounds
 
     def _capacity_tokens(self, program: ProgramView) -> int:
-        return program.tokens.estimated_context_tokens + self.config.decode_buffer_tokens
+        return (
+            max(0, program.tokens.estimated_context_tokens - program.tokens.shared_prefix_tokens)
+            + self.config.decode_buffer_tokens
+        )
 
     def _pause_priority_score(
         self,
@@ -1001,12 +1217,36 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
             input_tokens = sidecar.last_request_prompt_tokens
         return duration * self._resource_scale(input_tokens, state.global_factors.avg_prompt_tokens)
 
-    def _ttl_seconds(self, total_tokens: int) -> float:
-        uncached = max(0, int(total_tokens * self.config.uncached_ratio_default))
+    def _cache_miss_impact_seconds(self, prompt_tokens: int, shared_prefix_tokens: int) -> float:
+        """Estimate cold-prefill and decode-interference cost for private input KV."""
+        uncached = max(0, prompt_tokens - shared_prefix_tokens)
         cold_prefill = self.config.ttl_prefill_seconds_per_1k_uncached_tokens * uncached / 1000.0
         decode_interference = (1.0 - self.config.ttl_decode_throughput_alpha) * cold_prefill
-        total_impact = (cold_prefill + decode_interference) * self.config.ttl_impact_multiplier
-        return min(self.config.ttl_max_seconds, max(self.config.ttl_min_seconds, total_impact))
+        return cold_prefill + decode_interference
+
+    def _ttl_seconds(
+        self,
+        state: ProgressTTLFactors,
+        prompt_tokens: int,
+        shared_prefix_tokens: int,
+    ) -> float:
+        """Return the adaptive, impact-bounded acting TTL."""
+        return self._ttl_estimate(state, prompt_tokens, shared_prefix_tokens).ttl_seconds
+
+    def _ttl_estimate(
+        self,
+        state: ProgressTTLFactors,
+        prompt_tokens: int,
+        shared_prefix_tokens: int,
+    ) -> TTLEstimate:
+        """Return a fitted TTL and disable candidates with negative expected utility."""
+        impact_seconds = self._cache_miss_impact_seconds(prompt_tokens, shared_prefix_tokens)
+        return state.global_factors.estimate_ttl(
+            impact_seconds=impact_seconds,
+            minimum_seconds=self.config.ttl_min_seconds,
+            maximum_seconds=self.config.ttl_max_seconds,
+            impact_ratio=self.config.ttl_max_cache_miss_impact_ratio,
+        )
 
     def _select_capacity_fit(
         self,
@@ -1089,6 +1329,20 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
     def _require_applied(result: TransitionResult) -> None:
         if not result.applied:
             raise RuntimeError(f"Progress-TTL transition rejected: {result.kind.value}: {result.reason}")
+
+    @staticmethod
+    def _transition_applied(result: TransitionResult) -> bool:
+        """Return whether a state change succeeded and warn instead of terminating the host on rejection."""
+        if result.applied:
+            return True
+        logger.warning(
+            "Progress-TTL transition rejected kind=%s program=%s generation=%d reason=%s",
+            result.kind.value,
+            result.program.program_id,
+            result.program.generation,
+            result.reason,
+        )
+        return False
 
     @staticmethod
     def _queue(

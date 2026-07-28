@@ -14,6 +14,7 @@ from agentinfer.scheduling.observability import SchedulerObservabilityConfig
 from agentinfer.scheduling.progress_ttl import (
     ProgressTTLConfig,
     ProgressTTLGlobalFactors,
+    ProgressTTLMode,
     ProgressTTLProgramFactors,
     build_progress_ttl_strategy,
 )
@@ -21,7 +22,6 @@ from agentinfer.scheduling.runtime import ProgramScheduler
 
 _FIXED_PROGRESS_TTL_SETTINGS = frozenset(
     {
-        "uncached_ratio_default",
         "resume_fairness_weight",
         "resume_resource_penalty_weight",
         "capacity_safety_margin_tokens",
@@ -31,13 +31,18 @@ _FIXED_PROGRESS_TTL_SETTINGS = frozenset(
 
 _CONFIGURABLE_PROGRESS_TTL_SETTINGS = frozenset(
     {
+        "mode",
         "target_min_segment_rounds",
         "target_max_segment_rounds",
         "ttl_min_seconds",
         "ttl_max_seconds",
+        "ttl_max_cache_miss_impact_ratio",
+        "auto_enable_utility_seconds",
+        "auto_disable_utility_seconds",
         "ttl_prefill_seconds_per_1k_uncached_tokens",
-        "ttl_impact_multiplier",
         "ttl_decode_throughput_alpha",
+        "shared_prefix_freshness_warmup_seconds",
+        "shared_prefix_freshness_kv_turnovers",
         "resume_capacity_ratio",
         "resume_reclaim_acting_programs",
         "pause_capacity_ratio",
@@ -50,6 +55,8 @@ _CONFIGURABLE_PROGRESS_TTL_SETTINGS = frozenset(
         "paused_program_ttl_seconds",
     }
 )
+
+_REMOVED_PROGRESS_TTL_SETTINGS = frozenset({"ttl_impact_multiplier", "uncached_ratio_default"})
 
 
 def build_progress_ttl_controller(
@@ -68,30 +75,55 @@ def build_progress_ttl_controller(
     if fixed_settings:
         joined = ", ".join(fixed_settings)
         raise ValueError(f"progress_ttl settings are fixed implementation values and cannot be configured: {joined}")
+    removed_settings = sorted(_REMOVED_PROGRESS_TTL_SETTINGS.intersection(raw))
+    if removed_settings:
+        joined = ", ".join(removed_settings)
+        raise ValueError(f"progress_ttl settings were removed and must not be configured: {joined}")
     unknown_settings = sorted(set(raw).difference(_CONFIGURABLE_PROGRESS_TTL_SETTINGS))
     if unknown_settings:
         joined = ", ".join(unknown_settings)
         raise ValueError(f"progress_ttl settings are not supported: {joined}")
     defaults = ProgressTTLConfig()
     config = ProgressTTLConfig(
+        mode=_mode_setting(raw, "mode", defaults.mode),
         target_min_segment_rounds=_int_setting(raw, "target_min_segment_rounds", defaults.target_min_segment_rounds),
         target_max_segment_rounds=_int_setting(raw, "target_max_segment_rounds", defaults.target_max_segment_rounds),
         ttl_min_seconds=_float_setting(raw, "ttl_min_seconds", defaults.ttl_min_seconds),
         ttl_max_seconds=_float_setting(raw, "ttl_max_seconds", defaults.ttl_max_seconds),
+        ttl_max_cache_miss_impact_ratio=_float_setting(
+            raw,
+            "ttl_max_cache_miss_impact_ratio",
+            defaults.ttl_max_cache_miss_impact_ratio,
+        ),
+        auto_enable_utility_seconds=_float_setting(
+            raw,
+            "auto_enable_utility_seconds",
+            defaults.auto_enable_utility_seconds,
+        ),
+        auto_disable_utility_seconds=_float_setting(
+            raw,
+            "auto_disable_utility_seconds",
+            defaults.auto_disable_utility_seconds,
+        ),
         ttl_prefill_seconds_per_1k_uncached_tokens=_float_setting(
             raw,
             "ttl_prefill_seconds_per_1k_uncached_tokens",
             defaults.ttl_prefill_seconds_per_1k_uncached_tokens,
         ),
-        ttl_impact_multiplier=_float_setting(
-            raw,
-            "ttl_impact_multiplier",
-            defaults.ttl_impact_multiplier,
-        ),
         ttl_decode_throughput_alpha=_float_setting(
             raw,
             "ttl_decode_throughput_alpha",
             defaults.ttl_decode_throughput_alpha,
+        ),
+        shared_prefix_freshness_warmup_seconds=_float_setting(
+            raw,
+            "shared_prefix_freshness_warmup_seconds",
+            defaults.shared_prefix_freshness_warmup_seconds,
+        ),
+        shared_prefix_freshness_kv_turnovers=_float_setting(
+            raw,
+            "shared_prefix_freshness_kv_turnovers",
+            defaults.shared_prefix_freshness_kv_turnovers,
         ),
         resume_capacity_ratio=_float_setting(
             raw,
@@ -165,7 +197,7 @@ def build_progress_ttl_controller(
     schedule_interval_seconds = _float_setting(
         settings,
         "schedule_interval_seconds",
-        5.0,
+        1.0,
         scope="agentcache",
     )
     return ProgramScheduler(
@@ -197,6 +229,17 @@ def _bool_setting(
     if not isinstance(value, bool):
         raise ValueError(f"{scope}.{name} must be a boolean")
     return value
+
+
+def _mode_setting(settings: JsonMapping, name: str, default: ProgressTTLMode) -> ProgressTTLMode:
+    """Read one explicit Progress-TTL control mode."""
+    value = settings.get(name, default.value)
+    if not isinstance(value, str):
+        raise ValueError(f"progress_ttl.{name} must be one of: on, off, auto")
+    try:
+        return ProgressTTLMode(value)
+    except ValueError as exc:
+        raise ValueError(f"progress_ttl.{name} must be one of: on, off, auto") from exc
 
 
 def _float_setting(

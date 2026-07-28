@@ -27,6 +27,8 @@ class SchedulingSnapshot:
         observed_at_monotonic_s: Monotonic timestamp used by waiting and decay formulas.
         backend_id: Stable identifier of the configured backend.
         total_kv_tokens: Current GPU KV token capacity reported by that backend.
+        native_used_kv_tokens: Optional vLLM block-pool use for native running reasoning requests observed by Adapter.
+        native_waiting_kv_tokens: Optional logical token estimate for native vLLM waiting requests.
         programs: Scheduler-visible facts for all live programs.
         waiting_programs: Ordered program references in the program-level waiting pool.
     """
@@ -36,6 +38,8 @@ class SchedulingSnapshot:
     total_kv_tokens: int | None
     programs: tuple[ProgramView, ...]
     waiting_programs: tuple[ProgramRef, ...]
+    native_used_kv_tokens: int | None = None
+    native_waiting_kv_tokens: int | None = None
     _programs_by_ref: Mapping[ProgramRef, ProgramView] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -48,6 +52,16 @@ class SchedulingSnapshot:
             raise ValueError("snapshot backend_id must not be empty")
         if self.total_kv_tokens is not None and self.total_kv_tokens < 0:
             raise ValueError("snapshot total_kv_tokens must be non-negative")
+        if self.native_used_kv_tokens is not None and self.native_used_kv_tokens < 0:
+            raise ValueError("snapshot native_used_kv_tokens must be non-negative")
+        if self.native_waiting_kv_tokens is not None and self.native_waiting_kv_tokens < 0:
+            raise ValueError("snapshot native_waiting_kv_tokens must be non-negative")
+        if (
+            self.total_kv_tokens is not None
+            and self.native_used_kv_tokens is not None
+            and self.native_used_kv_tokens > self.total_kv_tokens
+        ):
+            raise ValueError("snapshot native_used_kv_tokens must not exceed total_kv_tokens")
         programs_by_ref: dict[ProgramRef, ProgramView] = {}
         for program in self.programs:
             if program.ref in programs_by_ref:

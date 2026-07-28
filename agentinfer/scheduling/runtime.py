@@ -19,13 +19,20 @@ from typing import Generic
 
 from agentinfer.scheduling.admission_outcome import AdmissionDisposition
 from agentinfer.scheduling.backend import BackendInfo, BackendPoolInfo, DispatchTarget, DpRankInfo
-from agentinfer.scheduling.domain import ProgramRef, ProgramState, ProgramStatus
+from agentinfer.scheduling.domain import (
+    ProgramRef,
+    ProgramState,
+    ProgramStatus,
+    SharedPrefixAttribution,
+    TokenObservationSource,
+)
 from agentinfer.scheduling.events import SchedulingEvent, SchedulingEventKind, StrategyDiagnostic
 from agentinfer.scheduling.factors import StrategyFactors, StrategyGlobalFactorsT, StrategyProgramFactorsT
 from agentinfer.scheduling.identity import AgentIdentity
 from agentinfer.scheduling.lifecycle import ProgramLifecycle
 from agentinfer.scheduling.observability import SchedulerObservabilityConfig
 from agentinfer.scheduling.program_registry import ProgramRegistry
+from agentinfer.scheduling.program_runtime import RuntimeProgram
 from agentinfer.scheduling.request_pool import RequestPool, RequestPoolEntry, RequestPoolStatus, RetainedRequestT
 from agentinfer.scheduling.snapshot import SchedulingSnapshot
 from agentinfer.scheduling.strategy import SchedulingStrategy
@@ -49,6 +56,7 @@ class _RequestBinding:
     previous_context_tokens: int
     started_at_monotonic_s: float
     inter_request_gap_seconds: float
+    track_segment_share: bool
     output_tokens: int = 0
 
 
@@ -60,7 +68,7 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
         strategy: SchedulingStrategy[StrategyGlobalFactorsT, StrategyProgramFactorsT],
         strategy_factors: StrategyFactors[StrategyGlobalFactorsT, StrategyProgramFactorsT],
         backend_pool_info: BackendPoolInfo,
-        schedule_interval_seconds: float = 5.0,
+        schedule_interval_seconds: float = 1.0,
         observability: SchedulerObservabilityConfig | None = None,
     ) -> None:
         backend, dp_rank = self._embedded_backend_rank(backend_pool_info)
@@ -75,6 +83,7 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
         self._request_bindings: dict[str, _RequestBinding] = {}
         self._program_requests: dict[ProgramRef, set[str]] = {}
         self._last_request_finished_at: dict[ProgramRef, float] = {}
+        self._shared_prefix_freshness_anchor_at: dict[ProgramRef, float] = {}
         self._event_sequence = 0
         self._cycle_dirty = False
         self._schedule_interval_seconds = schedule_interval_seconds
@@ -93,6 +102,24 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
         """Return all retained attempts for host-wide cancellation."""
         return tuple(entry.request_id for entry in self.request_pool.entries)
 
+    def prefix_cache_candidates(self) -> tuple[tuple[str, RetainedRequestT], ...]:
+        """Return retained paused reasoning requests whose reusable prefix observation should be refreshed."""
+        candidates: list[tuple[str, RetainedRequestT]] = []
+        now = time.monotonic()
+        for entry in self.request_pool.entries:
+            binding = self._request_bindings.get(entry.request_id)
+            program = self.registry.get(binding.program) if binding is not None else None
+            if (
+                binding is not None
+                and binding.track_segment_share
+                and program is not None
+                and program.state is ProgramState.PAUSED
+                and program.status is ProgramStatus.REASONING
+                and self._shared_prefix_observation_due(program, now)
+            ):
+                candidates.append((entry.request_id, entry.retained_request))
+        return tuple(candidates)
+
     def needs_schedule_cycle(self, now_monotonic_s: float) -> bool:
         """Return whether a host poll must enter the strategy instead of staying on its hot path."""
         if not math.isfinite(now_monotonic_s) or now_monotonic_s < 0:
@@ -100,10 +127,11 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
         deadline_due = (
             self._next_check_at_monotonic_s is not None and self._next_check_at_monotonic_s <= now_monotonic_s
         )
-        periodic_due = (
-            self.retained_request_count > 0 or self._cycle_dirty or bool(self.registry)
-        ) and self._next_periodic_check_at_monotonic_s <= now_monotonic_s
-        return deadline_due or periodic_due
+        if deadline_due:
+            return True
+        if self._next_periodic_check_at_monotonic_s > now_monotonic_s:
+            return False
+        return self.retained_request_count > 0 or self._cycle_dirty or self.registry.has_programs
 
     def on_request_arrival(
         self,
@@ -120,12 +148,15 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
         self._replace_backend_info(backend_pool_info)
         program, created = self.registry.materialize(metadata)
         previous_context_tokens = program.tokens.estimated_context_tokens
+        track_segment_share = created or program.state is ProgramState.PAUSED
         program.tokens = replace(
             program.tokens,
             estimated_context_tokens=max(program.tokens.estimated_context_tokens, max(0, prompt_tokens)),
         )
         previous_status = self.registry.mark_request_started(program.ref)
         now = time.monotonic()
+        if created:
+            self._shared_prefix_freshness_anchor_at[program.ref] = now
         last_finished_at = self._last_request_finished_at.get(program.ref)
         self._request_bindings[request_id] = _RequestBinding(
             program.ref,
@@ -133,6 +164,7 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
             previous_context_tokens,
             now,
             max(0.0, now - last_finished_at) if last_finished_at is not None else 0.0,
+            track_segment_share,
         )
         self._program_requests.setdefault(program.ref, set()).add(request_id)
         self.request_pool.add(
@@ -217,6 +249,43 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
         if binding is not None:
             binding.output_tokens = max(binding.output_tokens, max(0, total_output_tokens))
 
+    def on_prefix_cache_observation(self, request_id: str, cached_prefix_tokens: int) -> None:
+        """Refresh one paused reasoning Program's reusable prefix hit for capacity and continuity estimates."""
+        binding = self._request_bindings.get(request_id)
+        if binding is None or not binding.track_segment_share:
+            return
+        program = self.registry.get(binding.program)
+        now = time.monotonic()
+        if program is None or not self._shared_prefix_observation_due(program, now):
+            return
+        observed = min(binding.prompt_tokens, max(0, cached_prefix_tokens))
+        snapshot = self._snapshot()
+        view = snapshot.program(binding.program)
+        freshness_seconds = (
+            self.strategy.shared_prefix_freshness_seconds(snapshot, self.strategy_factors, view)
+            if view is not None
+            else None
+        )
+        program.tokens = replace(
+            program.tokens,
+            shared_prefix_tokens=observed,
+            shared_prefix_fresh_until_monotonic_s=self._shared_prefix_fresh_until(binding.program, freshness_seconds),
+            shared_prefix_attribution=SharedPrefixAttribution.PARTIAL,
+            source=TokenObservationSource.MIXED,
+        )
+        if self._observability.enabled:
+            logger.info(
+                "AgentInfer shared-prefix observed request=%s program=%s generation=%d cached_prefix_tokens=%d "
+                "freshness_seconds=%s freshness_anchor=%s fresh_until=%s",
+                request_id,
+                binding.program.program_id,
+                binding.program.generation,
+                observed,
+                freshness_seconds,
+                self._shared_prefix_freshness_anchor_at.get(binding.program),
+                program.tokens.shared_prefix_fresh_until_monotonic_s,
+            )
+
     def on_request_completion(self, request_id: str, total_tokens: int) -> None:
         """Commit final token facts and transition to acting only after overlapping requests finish."""
         binding = self._pop_binding(request_id)
@@ -256,6 +325,7 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
                     ("active_programs", active_programs),
                     ("waiting_programs", waiting_programs),
                     ("inter_request_gap_seconds", binding.inter_request_gap_seconds),
+                    ("shared_prefix_tokens", program.tokens.shared_prefix_tokens),
                 ),
             )
         )
@@ -353,6 +423,7 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
             program.state = ProgramState.PAUSED
             program.backend_id = None
             program.marked_for_pause = False
+            self._shared_prefix_freshness_anchor_at[program.ref] = time.monotonic()
         elif request.kind is TransitionKind.MARK_FOR_PAUSE:
             if program.state is not ProgramState.ACTIVE or program.status is not ProgramStatus.REASONING:
                 return TransitionResult(request.kind, request.program, False, "mark_requires_active_reasoning")
@@ -364,6 +435,7 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
                 return TransitionResult(request.kind, request.program, False, "release_requires_idle")
             self.registry.release(program.ref)
             self._last_request_finished_at.pop(program.ref, None)
+            self._shared_prefix_freshness_anchor_at.pop(program.ref, None)
         else:
             return TransitionResult(request.kind, request.program, False, "unsupported_transition")
         current_state = ProgramState.TERMINATED if request.kind is TransitionKind.RELEASE else program.state
@@ -435,7 +507,22 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
             total_kv_tokens=dp_rank.total_hbm_kv_tokens,
             programs=programs,
             waiting_programs=waiting,
+            native_used_kv_tokens=dp_rank.used_hbm_kv_tokens,
+            native_waiting_kv_tokens=dp_rank.waiting_hbm_kv_tokens,
         )
+
+    def _shared_prefix_observation_due(self, program: RuntimeProgram, now_monotonic_s: float) -> bool:
+        """Return whether the current pause interval is old enough to refresh shared-prefix evidence."""
+        anchor = self._shared_prefix_freshness_anchor_at.get(program.ref)
+        fresh_until = program.tokens.shared_prefix_fresh_until_monotonic_s
+        return anchor is None or fresh_until is None or now_monotonic_s >= fresh_until
+
+    def _shared_prefix_fresh_until(self, program: ProgramRef, freshness_seconds: float | None) -> float | None:
+        """Derive a fixed freshness deadline from the latest pause, or initial Program entry."""
+        anchor = self._shared_prefix_freshness_anchor_at.get(program)
+        if anchor is None or freshness_seconds is None:
+            return None
+        return anchor + max(0.0, freshness_seconds)
 
     def _replace_backend_info(self, backend_pool_info: BackendPoolInfo) -> None:
         backend, dp_rank = self._embedded_backend_rank(backend_pool_info)

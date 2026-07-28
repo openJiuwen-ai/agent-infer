@@ -76,7 +76,7 @@ start_baseline() {
 
 start_candidate() {
   local additional_config
-  additional_config=$(printf '{"agentcache":{"backend_id":"%s","lifecycle_socket_path":"%s","controller_factory":"agentinfer.agentcache.core.factory.build_progress_ttl_controller","schedule_interval_seconds":%s,"progress_ttl":{"target_min_segment_rounds":9,"target_max_segment_rounds":14,"resume_capacity_ratio":0.9,"pause_capacity_ratio":0.95,"pause_capacity_lookahead_rounds":2,"privileged_lookahead_rounds":14,"privileged_max_context_tokens":262144,"ttl_impact_multiplier":2,"paused_program_ttl_seconds":1800}}}' "$BACKEND_ID" "$LIFECYCLE_SOCKET" "$SCHEDULE_INTERVAL_SECONDS")
+  additional_config=$(printf '{"agentcache":{"backend_id":"%s","lifecycle_socket_path":"%s","controller_factory":"agentinfer.agentcache.core.factory.build_progress_ttl_controller","schedule_interval_seconds":%s,"progress_ttl":{"target_min_segment_rounds":9,"target_max_segment_rounds":14,"resume_capacity_ratio":0.9,"pause_capacity_ratio":0.95,"pause_capacity_lookahead_rounds":2,"privileged_lookahead_rounds":14,"privileged_max_context_tokens":262144,"paused_program_ttl_seconds":1800}}}' "$BACKEND_ID" "$LIFECYCLE_SOCKET" "$SCHEDULE_INTERVAL_SECONDS")
   tmux new-session -d -s "$VLLM_TMUX" \
     "source '$VENV/bin/activate' && export AGENTCACHE_VLLM_LIFECYCLE_SOCKET='$LIFECYCLE_SOCKET' && vllm serve '$MODEL' --tensor-parallel-size '$TENSOR_PARALLEL_SIZE' --async-scheduling --scheduler-cls '$AGENTCACHE_SCHEDULER' --middleware '$AGENTCACHE_MIDDLEWARE' --additional-config '$additional_config' --enable-prefix-caching --enable-prompt-tokens-details --port '$VLLM_PORT' $VLLM_EXTRA_ARGS 2>&1 | tee '$CANDIDATE_LOG'"
   SESSION_STARTED=true

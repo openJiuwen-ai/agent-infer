@@ -21,7 +21,7 @@ from abc import ABC, abstractmethod
 from typing import ClassVar, Generic
 
 from agentinfer.scheduling.admission_outcome import AdmissionOutcome
-from agentinfer.scheduling.domain import ProgramRef
+from agentinfer.scheduling.domain import ProgramRef, ProgramView
 from agentinfer.scheduling.events import SchedulingEvent, SchedulingEventKind, StrategyDiagnostic
 from agentinfer.scheduling.factors import StrategyFactors, StrategyGlobalFactorsT, StrategyProgramFactorsT
 from agentinfer.scheduling.snapshot import SchedulingSnapshot
@@ -179,6 +179,20 @@ class SchedulingStrategy(Generic[StrategyGlobalFactorsT, StrategyProgramFactorsT
             strategy_factors: Current decision factors protected by the caller's scheduling lock.
             transitions: Lock-scoped capability for caller-owned core state changes.
         """
+
+    def shared_prefix_freshness_seconds(
+        self,
+        snapshot: SchedulingSnapshot,
+        strategy_factors: StrategyFactors[StrategyGlobalFactorsT, StrategyProgramFactorsT],
+        program: ProgramView,
+    ) -> float | None:
+        """Return the retention period for one observed shared-prefix boundary.
+
+        ``None`` preserves the generic runtime's historical behavior: every eligible request or periodic probe may
+        refresh its observation. A non-negative duration avoids repeated native prefix lookups and prevents residual
+        self KV from being mistaken for a newly shared Program prefix before the duration expires.
+        """
+        return None
 
     def handle_scheduling_event(
         self,

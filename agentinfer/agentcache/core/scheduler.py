@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import math
 import os
 import time
 from collections.abc import Callable, Iterable, Mapping
@@ -18,6 +19,7 @@ from typing import Protocol, cast
 
 from vllm.v1.core.sched.async_scheduler import AsyncScheduler
 from vllm.v1.core.sched.scheduler import Scheduler
+from vllm.v1.engine import EngineCoreEventType
 from vllm.v1.request import Request, RequestStatus
 
 from agentinfer.agentcache.core.api_adapter import LIFECYCLE_SOCKET_ENV, UnixLifecycleReceiver
@@ -51,6 +53,9 @@ class EmbeddedSchedulerController(Protocol[RetainedRequestT]):
     def retained_request_ids(self) -> tuple[str, ...]:
         """Return retained request attempts for host-wide abort."""
 
+    def prefix_cache_candidates(self) -> tuple[tuple[str, RetainedRequestT], ...]:
+        """Return retained paused reasoning requests needing a refreshed prefix-cache observation."""
+
     def on_request_arrival(
         self,
         request_id: str,
@@ -74,6 +79,9 @@ class EmbeddedSchedulerController(Protocol[RetainedRequestT]):
 
     def on_stream_output(self, request_id: str, total_output_tokens: int) -> None:
         """Observe one native output update."""
+
+    def on_prefix_cache_observation(self, request_id: str, cached_prefix_tokens: int) -> None:
+        """Observe the native prefix-cache hit boundary for one Program segment."""
 
     def on_request_completion(self, request_id: str, total_tokens: int) -> None:
         """Observe terminal request cleanup without success/failure semantics."""
@@ -116,6 +124,7 @@ class _VllmAdmissionHooks:
         # EngineCore passes resolve_kv_cache_block_sizes() as block_size, which already includes DCP and PCP.
         self.local_hbm_kv_tokens = int(kv_cache_config.num_blocks) * int(block_size)
         self.tracked_native: set[str] = set()
+        self._prefix_refresh_pending = False
         self.controller: EmbeddedSchedulerController[Request] | None = None
         self.lifecycle_receiver: UnixLifecycleReceiver | None = None
         factory_path = settings.get("controller_factory")
@@ -140,6 +149,7 @@ class _VllmAdmissionHooks:
         if metadata is None:
             native_add(request)
             return
+        retained_at_monotonic_s = time.monotonic()
         dispatch_now = self.controller.on_request_arrival(
             request.request_id,
             metadata,
@@ -149,19 +159,77 @@ class _VllmAdmissionHooks:
         )
         if dispatch_now:
             self.tracked_native.add(request.request_id)
-            native_add(request)
+            self._add_to_native_waiting(request, retained_at_monotonic_s, native_add)
 
     def before_schedule(self, owner: Scheduler, native_add: Callable[[Request], None]) -> None:
         """Run one AgentCache cycle and transfer admitted requests to native waiting."""
         self._drain_lifecycle_signals()
-        if self.controller is None or not self.controller.needs_schedule_cycle(time.monotonic()):
+        if self.controller is None:
+            return
+        needs_cycle = self.controller.needs_schedule_cycle(time.monotonic())
+        if not needs_cycle and not self._prefix_refresh_pending:
+            return
+        if self._prefix_refresh_pending:
+            self._observe_retained_prefix_cache(owner)
+            self._prefix_refresh_pending = False
+        if not needs_cycle:
             return
         self.controller.schedule_cycle(self.backend_pool_info(owner))
         for entry, target in self.controller.consume_admitted_requests():
             if target != DispatchTarget(self.backend_id, self.dp_rank):
                 raise RuntimeError("embedded vLLM bridge received a target for another backend or DP rank")
             self.tracked_native.add(entry.request_id)
-            native_add(entry.retained_request)
+            self._add_to_native_waiting(entry.retained_request, entry.arrived_at_monotonic_s, native_add)
+
+    @staticmethod
+    def _add_to_native_waiting(
+        request: Request,
+        queued_at_monotonic_s: float,
+        native_add: Callable[[Request], None],
+    ) -> None:
+        """Insert a request natively while preserving its original EngineCore queue start.
+
+        vLLM records ``QUEUED`` inside ``Scheduler.add_request``. Requests retained by AgentInfer reach that call
+        later, so the native queue metric would otherwise omit RequestPool residence. Retimestamping only the newly
+        emitted event keeps vLLM's scheduling state and ``SCHEDULED - QUEUED`` metric calculation unchanged.
+        """
+        existing_event_count = len(request.events)
+        native_add(request)
+        for event in request.events[existing_event_count:]:
+            if event.type == EngineCoreEventType.QUEUED:
+                event.timestamp = min(event.timestamp, queued_at_monotonic_s)
+                return
+
+    def _observe_retained_prefix_cache(self, owner: Scheduler) -> None:
+        """Refresh retained paused reasoning requests after a completion-triggered deferred observation.
+
+        The coordinator lookup is deliberately used instead of ``get_computed_blocks``: it does not allocate blocks,
+        record prefix-cache statistics, or emit KV-cache events for a synthetic Scheduler observation.
+        ``segment_share_tokens`` intentionally records all immediately reusable prefix tokens without attempting to
+        distinguish residual self KV from another Program's shared prefix.
+        """
+        if self.controller is None:
+            return
+        kv_cache_manager = getattr(owner, "kv_cache_manager", None)
+        prefix_lookup_enabled = getattr(kv_cache_manager, "prefix_cache_lookup_enabled", None)
+        coordinator = getattr(kv_cache_manager, "coordinator", None)
+        find_longest_cache_hit = getattr(coordinator, "find_longest_cache_hit", None)
+        if find_longest_cache_hit is None:
+            logger.warning("AgentInfer prefix-cache observation unavailable: vLLM coordinator lookup is missing")
+            return
+        for request_id, request in self.controller.prefix_cache_candidates():
+            if callable(prefix_lookup_enabled) and not prefix_lookup_enabled(request):
+                self.controller.on_prefix_cache_observation(request_id, 0)
+                continue
+            try:
+                _, cached_prefix_tokens = find_longest_cache_hit(
+                    request.block_hashes,
+                    max(0, int(request.num_tokens) - 1),
+                )
+            except (AttributeError, TypeError, ValueError):
+                logger.warning("AgentInfer prefix-cache observation failed request=%s", request_id, exc_info=True)
+                continue
+            self.controller.on_prefix_cache_observation(request_id, max(0, int(cached_prefix_tokens)))
 
     def after_output(
         self,
@@ -172,6 +240,7 @@ class _VllmAdmissionHooks:
         """Publish token deltas and terminal facts after native state is consistent."""
         if self.controller is None:
             return
+        completed_request = False
         for batch in outputs.values():
             for output in getattr(batch, "outputs", ()):
                 request_id = str(output.request_id)
@@ -192,6 +261,21 @@ class _VllmAdmissionHooks:
                     )
                     self.controller.on_request_completion(request_id, total_tokens)
                     self.tracked_native.discard(request_id)
+                    completed_request = True
+        if completed_request:
+            self._prefix_refresh_pending = True
+
+    def observe_prefix_cache(self, scheduler_output: object) -> None:
+        """Forward vLLM's post-prefix-lookup computed-token boundary without touching KV ownership."""
+        if self.controller is None:
+            return
+        for request in getattr(scheduler_output, "scheduled_new_reqs", ()):
+            request_id = str(getattr(request, "req_id", ""))
+            if request_id in self.tracked_native:
+                self.controller.on_prefix_cache_observation(
+                    request_id,
+                    max(0, int(getattr(request, "num_computed_tokens", 0))),
+                )
 
     def cancel_retained(self, request_ids: str | Iterable[str] | None) -> list[tuple[str, int]]:
         """Cancel attempts that have not entered native vLLM yet."""
@@ -243,6 +327,8 @@ class _VllmAdmissionHooks:
         """Build rank-local logical KV-token and request-load facts from native vLLM state."""
         now = time.monotonic()
         running, waiting = owner.get_request_counts()
+        native_used_kv_tokens = self._native_used_kv_tokens(owner)
+        native_waiting_kv_tokens = self._native_waiting_kv_tokens(owner)
         backend = BackendInfo(
             backend_id=self.backend_id,
             backend_url="embedded://vllm",
@@ -255,12 +341,43 @@ class _VllmAdmissionHooks:
                     running_requests=running,
                     waiting_requests=waiting,
                     total_hbm_kv_tokens=self.local_hbm_kv_tokens,
+                    used_hbm_kv_tokens=native_used_kv_tokens,
+                    waiting_hbm_kv_tokens=native_waiting_kv_tokens,
                     expected_reasoning_agent_nums=self.expected_agents,
                 ),
             ),
             observed_at_monotonic_s=now,
         )
         return BackendPoolInfo((backend,), observed_at_monotonic_s=now)
+
+    def _native_used_kv_tokens(self, owner: Scheduler) -> int | None:
+        """Return native running-request KV use as a conservative logical-token count, when available."""
+        kv_cache_manager = getattr(owner, "kv_cache_manager", None)
+        usage = getattr(kv_cache_manager, "usage", None)
+        if usage is None:
+            return None
+        try:
+            observed = float(usage() if callable(usage) else usage)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(observed) or not 0 <= observed <= 1:
+            return None
+        return min(self.local_hbm_kv_tokens, max(0, math.ceil(observed * self.local_hbm_kv_tokens)))
+
+    @staticmethod
+    def _native_waiting_kv_tokens(owner: Scheduler) -> int | None:
+        """Estimate native waiting demand from its queued request contexts without Program-level share attribution."""
+        waiting_queues = tuple(
+            queue
+            for queue in (getattr(owner, "waiting", None), getattr(owner, "skipped_waiting", None))
+            if queue is not None
+        )
+        if not waiting_queues:
+            return None
+        try:
+            return sum(max(0, int(request.num_tokens)) for queue in waiting_queues for request in queue)
+        except (AttributeError, TypeError, ValueError):
+            return None
 
     def _drain_lifecycle_signals(self) -> None:
         """Apply API-derived lifecycle facts before any new admission or periodic decision."""
@@ -294,7 +411,9 @@ class AgentCacheAsyncSchedulerBridge(AsyncScheduler):
     def schedule(self):
         if self._agentcache.controller is not None:
             self._agentcache.before_schedule(self, super().add_request)
-        return super().schedule()
+        output = super().schedule()
+        self._agentcache.observe_prefix_cache(output)
+        return output
 
     def update_from_output(self, scheduler_output, model_runner_output):
         if self._agentcache.controller is None:
@@ -337,7 +456,9 @@ class AgentCacheSyncSchedulerBridge(Scheduler):
     def schedule(self):
         if self._agentcache.controller is not None:
             self._agentcache.before_schedule(self, super().add_request)
-        return super().schedule()
+        output = super().schedule()
+        self._agentcache.observe_prefix_cache(output)
+        return output
 
     def update_from_output(self, scheduler_output, model_runner_output):
         if self._agentcache.controller is None:

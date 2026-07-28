@@ -6,6 +6,7 @@ import pytest
 
 from agentinfer.agentcache.core.factory import build_progress_ttl_controller
 from agentinfer.scheduling.backend import BackendInfo, BackendPoolInfo, DpRankInfo
+from agentinfer.scheduling.progress_ttl import ProgressTTLMode
 
 pytestmark = pytest.mark.cpu_test
 
@@ -32,7 +33,9 @@ def test_factory_applies_nested_progress_ttl_settings() -> None:
                 "target_min_segment_rounds": 9,
                 "target_max_segment_rounds": 14,
                 "ttl_min_seconds": 5,
-                "ttl_impact_multiplier": 2.5,
+                "ttl_max_cache_miss_impact_ratio": 0.75,
+                "auto_enable_utility_seconds": 30,
+                "auto_disable_utility_seconds": 8,
                 "resume_capacity_ratio": 0.9,
                 "resume_reclaim_acting_programs": False,
                 "pause_capacity_ratio": 0.95,
@@ -49,7 +52,9 @@ def test_factory_applies_nested_progress_ttl_settings() -> None:
     assert controller.strategy.config.target_min_segment_rounds == 9
     assert controller.strategy.config.target_max_segment_rounds == 14
     assert controller.strategy.config.ttl_min_seconds == 5
-    assert controller.strategy.config.ttl_impact_multiplier == 2.5
+    assert controller.strategy.config.ttl_max_cache_miss_impact_ratio == 0.75
+    assert controller.strategy.config.auto_enable_utility_seconds == 30
+    assert controller.strategy.config.auto_disable_utility_seconds == 8
     assert controller.strategy.config.resume_capacity_ratio == 0.9
     assert controller.strategy.config.resume_reclaim_acting_programs is False
     assert controller.strategy.config.pause_capacity_ratio == 0.95
@@ -66,12 +71,22 @@ def test_factory_uses_two_l20_reference_defaults_without_policy_overrides() -> N
 
     assert controller.strategy.config.target_min_segment_rounds == 9
     assert controller.strategy.config.target_max_segment_rounds == 14
-    assert controller.strategy.config.resume_capacity_ratio == 0.9
-    assert controller.strategy.config.pause_capacity_ratio == 0.95
+    assert controller.strategy.config.resume_capacity_ratio == 0.95
+    assert controller.strategy.config.pause_capacity_ratio == 1.0
     assert controller.strategy.config.pause_capacity_lookahead_rounds == 2
     assert controller.strategy.config.privileged_lookahead_rounds == 14
+    assert controller.strategy.config.mode is ProgressTTLMode.ON
+    assert controller.strategy.config.ttl_max_cache_miss_impact_ratio == 1.0
+    assert controller.strategy.config.auto_enable_utility_seconds == 20.0
+    assert controller.strategy.config.auto_disable_utility_seconds == 5.0
     assert controller._observability.enabled is False
     assert controller._observability.log_interval_seconds == 5
+
+
+def test_factory_accepts_explicit_progress_ttl_mode() -> None:
+    controller = build_progress_ttl_controller(backend(), {"progress_ttl": {"mode": "auto"}})
+
+    assert controller.strategy.config.mode is ProgressTTLMode.AUTO
 
 
 def test_factory_applies_observability_controls() -> None:
@@ -117,7 +132,6 @@ def test_factory_rejects_non_boolean_switches(setting: str) -> None:
 @pytest.mark.parametrize(
     "setting",
     (
-        "uncached_ratio_default",
         "resume_fairness_weight",
         "resume_resource_penalty_weight",
         "capacity_safety_margin_tokens",
@@ -126,6 +140,12 @@ def test_factory_rejects_non_boolean_switches(setting: str) -> None:
 )
 def test_factory_rejects_fixed_policy_settings(setting: str) -> None:
     with pytest.raises(ValueError, match="fixed implementation values"):
+        build_progress_ttl_controller(backend(), {"progress_ttl": {setting: 1}})
+
+
+@pytest.mark.parametrize("setting", ("ttl_impact_multiplier", "uncached_ratio_default"))
+def test_factory_rejects_removed_policy_settings(setting: str) -> None:
+    with pytest.raises(ValueError, match="were removed"):
         build_progress_ttl_controller(backend(), {"progress_ttl": {setting: 1}})
 
 

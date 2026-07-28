@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from agentinfer.scheduling.backend import BackendInfo, BackendPoolInfo, DpRankInfo
-from agentinfer.scheduling.domain import ProgramState, ProgramStatus
+from agentinfer.scheduling.domain import ProgramRef, ProgramState, ProgramStatus
 from agentinfer.scheduling.identity import AgentIdentity
 from agentinfer.scheduling.lifecycle import ProgramLifecycle
 from agentinfer.scheduling.progress_ttl import ProgressTTLConfig, build_progress_ttl_strategy
@@ -81,7 +81,7 @@ def test_scheduler_privilege_handoff_pauses_parent_and_immediately_releases_chil
     scheduler = ProgramScheduler[str, object, object](
         components.strategy,
         components.initial_factors,
-        backend(1000),
+        backend(20_000),
     )
     parent_metadata = AgentIdentity(
         "temp:session:lead",
@@ -214,13 +214,20 @@ def test_late_api_terminal_completion_does_not_interrupt_new_reasoning() -> None
 
 def test_scheduler_throttles_periodic_work_but_preserves_due_deadlines() -> None:
     components = build_progress_ttl_strategy(
-        ProgressTTLConfig(decode_buffer_tokens=0, ttl_min_seconds=1000, ttl_max_seconds=1000)
+        ProgressTTLConfig(
+            decode_buffer_tokens=0,
+            ttl_min_seconds=1000,
+            ttl_max_seconds=1000,
+            ttl_prefill_seconds_per_1k_uncached_tokens=10_000,
+            ttl_decode_throughput_alpha=1,
+        )
     )
     components.initial_factors.global_factors.avg_input_token_growth_per_round = 0
     scheduler = ProgramScheduler[str, object, object](
         components.strategy,
         components.initial_factors,
         backend(1000),
+        schedule_interval_seconds=5,
     )
 
     with patch("agentinfer.scheduling.runtime.time.monotonic") as monotonic:
@@ -270,6 +277,54 @@ def test_scheduler_supplies_latency_gap_and_previous_context_to_rolling_stats() 
     assert samples[1].input_token_growth == 50
 
 
+def test_scheduler_retains_first_native_prefix_hit_during_warmup_freshness() -> None:
+    components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0))
+    scheduler = ProgramScheduler[str, object, object](
+        components.strategy,
+        components.initial_factors,
+        backend(20_000),
+    )
+
+    with patch("agentinfer.scheduling.runtime.time.monotonic", return_value=10):
+        assert scheduler.on_request_arrival("r1", AgentIdentity("p1"), 300, backend(20_000), "native-r1") is True
+
+    with patch("agentinfer.scheduling.runtime.time.monotonic", return_value=10):
+        scheduler.on_prefix_cache_observation("r1", 250)
+        scheduler.on_prefix_cache_observation("r1", 280)
+    program = scheduler.registry.get(ProgramRef("p1", 0))
+
+    assert program is not None
+    assert program.tokens.shared_prefix_tokens == 250
+    assert program.tokens.shared_prefix_fresh_until_monotonic_s is not None
+
+
+def test_scheduler_refreshes_shared_prefix_only_after_its_freshness_deadline() -> None:
+    components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0))
+    scheduler = ProgramScheduler[str, object, object](
+        components.strategy,
+        components.initial_factors,
+        backend(20_000),
+    )
+
+    with patch("agentinfer.scheduling.runtime.time.monotonic") as monotonic:
+        monotonic.return_value = 10
+        assert scheduler.on_request_arrival("r1", AgentIdentity("p1"), 300, backend(20_000), "native-r1") is True
+        scheduler.on_prefix_cache_observation("r1", 250)
+        scheduler.on_request_completion("r1", 300)
+        program = scheduler.registry.require(ProgramRef("p1", 0))
+        program.state = ProgramState.PAUSED
+        program.status = ProgramStatus.REASONING
+
+        monotonic.return_value = 20
+        assert scheduler.on_request_arrival("r2", AgentIdentity("p1"), 320, backend(20_000), "native-r2") is False
+        scheduler.on_prefix_cache_observation("r2", 100)
+        assert program.tokens.shared_prefix_tokens == 250
+
+        monotonic.return_value = 111
+        scheduler.on_prefix_cache_observation("r2", 100)
+        assert program.tokens.shared_prefix_tokens == 100
+
+
 def test_rolling_request_latency_includes_request_pool_wait() -> None:
     components = build_progress_ttl_strategy(
         ProgressTTLConfig(
@@ -284,6 +339,7 @@ def test_rolling_request_latency_includes_request_pool_wait() -> None:
         components.strategy,
         components.initial_factors,
         backend(1000),
+        schedule_interval_seconds=5,
     )
 
     with patch("agentinfer.scheduling.runtime.time.monotonic") as monotonic:

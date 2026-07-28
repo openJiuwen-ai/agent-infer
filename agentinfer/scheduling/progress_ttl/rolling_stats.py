@@ -9,6 +9,7 @@ the original PT request-window sizing, cold-start threshold, gradual eviction, s
 from __future__ import annotations
 
 import math
+import statistics
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -18,6 +19,8 @@ class RequestStatSample:
     """Sanitized per-request observation used by windowed PT statistics."""
 
     prompt_tokens: int
+    cached_prefix_tokens: int
+    uncached_prompt_tokens: int
     completion_tokens: int | None
     total_tokens: int
     request_latency_seconds: float
@@ -25,6 +28,27 @@ class RequestStatSample:
     waiting_programs: int
     input_token_growth: int | None
     inter_request_gap_seconds: float
+    rounds_since_ttl_pause: int
+
+
+@dataclass(frozen=True)
+class ContinuitySample:
+    """One completed tool-call interval used to evaluate continuity protection."""
+
+    interval_seconds: float
+    cache_miss_impact_seconds: float
+    assigned_ttl_seconds: float
+    utility_seconds: float
+
+
+@dataclass(frozen=True)
+class TTLEstimate:
+    """One TTL decision and its fitted expected utility, when a complete interval window exists."""
+
+    ttl_seconds: float
+    candidate_ttl_seconds: float
+    candidate_utility_seconds: float | None
+    uses_fitted_distribution: bool
 
 
 @dataclass
@@ -32,13 +56,11 @@ class ProgressTTLGlobalFactors:
     """Policy-wide decision factors derived from bounded recent request and pause windows."""
 
     request_count: int = 0
-    request_window_size: int = 64
-    min_request_window_size: int = 64
-    max_request_window_size: int = 320
-    request_window_per_active_program: int = 10
-    max_evictions_per_update: int = 5
+    request_window_size: int = 100
     min_update_window_fraction: float = 0.5
     avg_prompt_tokens: float = 1024.0
+    avg_cached_prefix_tokens: float = 0.0
+    avg_uncached_prompt_tokens: float = 1024.0
     avg_completion_tokens: float = 256.0
     avg_total_tokens: float = 1280.0
     avg_router_queue_seconds: float = 0.0
@@ -47,36 +69,43 @@ class ProgressTTLGlobalFactors:
     avg_waiting_programs: float = 0.0
     avg_segment_served_rounds_on_pause: float = 1.0
     avg_input_token_growth_per_round: float = 1024.0
+    avg_rounds_since_ttl_pause: float = 0.0
     avg_inter_request_gap_seconds: float = 0.0
     avg_reasoning_seconds: float = 1.0
     avg_acting_seconds: float = 0.0
     cold_prefill_cost_seconds: float = 1.0
+    continuity_enabled: bool = False
+    continuity_log_mu: float | None = None
+    continuity_log_sigma: float | None = None
+    continuity_utility_seconds: float = 0.0
     _request_samples: deque[RequestStatSample] = field(default_factory=deque, init=False, repr=False)
     _prompt_token_sum: int = field(default=0, init=False, repr=False)
+    _cached_prefix_token_sum: int = field(default=0, init=False, repr=False)
+    _uncached_prompt_token_sum: int = field(default=0, init=False, repr=False)
     _completion_token_sum: int = field(default=0, init=False, repr=False)
     _completion_token_count: int = field(default=0, init=False, repr=False)
     _total_token_sum: int = field(default=0, init=False, repr=False)
     _request_latency_sum: float = field(default=0.0, init=False, repr=False)
     _active_program_sum: int = field(default=0, init=False, repr=False)
     _waiting_program_sum: int = field(default=0, init=False, repr=False)
-    _input_token_growth_sum: int = field(default=0, init=False, repr=False)
-    _input_token_growth_count: int = field(default=0, init=False, repr=False)
     _inter_request_gap_sum: float = field(default=0.0, init=False, repr=False)
+    _rounds_since_ttl_pause_sum: int = field(default=0, init=False, repr=False)
     _pause_served_rounds: deque[int] = field(default_factory=deque, init=False, repr=False)
     _pause_served_rounds_sum: int = field(default=0, init=False, repr=False)
+    _continuity_samples: deque[ContinuitySample] = field(default_factory=deque, init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Validate bounded-window controls and finite initial decision values."""
         if self.request_count < 0:
             raise ValueError("request_count must be non-negative")
-        if not 1 <= self.min_request_window_size <= self.request_window_size <= self.max_request_window_size:
-            raise ValueError("request window sizes must satisfy 1 <= min <= current <= max")
-        if self.request_window_per_active_program <= 0 or self.max_evictions_per_update <= 0:
-            raise ValueError("request window growth and eviction limits must be positive")
+        if self.request_window_size <= 0:
+            raise ValueError("request_window_size must be positive")
         if not math.isfinite(self.min_update_window_fraction) or not 0 < self.min_update_window_fraction <= 1:
             raise ValueError("min_update_window_fraction must be in (0, 1]")
         decision_values = (
             self.avg_prompt_tokens,
+            self.avg_cached_prefix_tokens,
+            self.avg_uncached_prompt_tokens,
             self.avg_completion_tokens,
             self.avg_total_tokens,
             self.avg_router_queue_seconds,
@@ -85,6 +114,7 @@ class ProgressTTLGlobalFactors:
             self.avg_waiting_programs,
             self.avg_segment_served_rounds_on_pause,
             self.avg_input_token_growth_per_round,
+            self.avg_rounds_since_ttl_pause,
             self.avg_inter_request_gap_seconds,
             self.avg_reasoning_seconds,
             self.avg_acting_seconds,
@@ -92,11 +122,14 @@ class ProgressTTLGlobalFactors:
         )
         if any(not math.isfinite(value) or value < 0 for value in decision_values):
             raise ValueError("initial Progress-TTL decision values must be finite and non-negative")
+        if not math.isfinite(self.continuity_utility_seconds):
+            raise ValueError("continuity utility must be finite")
 
     def update_request(
         self,
         *,
         prompt_tokens: int,
+        cached_prefix_tokens: int,
         completion_tokens: int,
         total_tokens: int,
         request_latency_seconds: float,
@@ -104,10 +137,12 @@ class ProgressTTLGlobalFactors:
         waiting_programs: int,
         input_token_growth: int,
         inter_request_gap_seconds: float,
+        rounds_since_ttl_pause: int = 0,
     ) -> None:
         """Update request-level rolling averages using one sanitized sample."""
         sample = self._sanitize_request_sample(
             prompt_tokens=prompt_tokens,
+            cached_prefix_tokens=cached_prefix_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
             request_latency_seconds=request_latency_seconds,
@@ -115,9 +150,9 @@ class ProgressTTLGlobalFactors:
             waiting_programs=waiting_programs,
             input_token_growth=input_token_growth,
             inter_request_gap_seconds=inter_request_gap_seconds,
+            rounds_since_ttl_pause=rounds_since_ttl_pause,
         )
         self.request_count += 1
-        self.request_window_size = self._target_request_window_size(active_programs)
         self._append_request_sample(sample)
         self._evict_request_samples_to_target()
         self._refresh_request_averages_if_ready()
@@ -127,20 +162,232 @@ class ProgressTTLGlobalFactors:
         sanitized_rounds = max(served_rounds, 0)
         self._pause_served_rounds.append(sanitized_rounds)
         self._pause_served_rounds_sum += sanitized_rounds
-        while len(self._pause_served_rounds) > self.max_request_window_size:
+        while len(self._pause_served_rounds) > self.request_window_size:
             self._pause_served_rounds_sum -= self._pause_served_rounds.popleft()
         if len(self._pause_served_rounds) >= self._min_samples_for_update(self.request_window_size):
             self.avg_segment_served_rounds_on_pause = self._pause_served_rounds_sum / len(self._pause_served_rounds)
 
-    def _target_request_window_size(self, active_programs: int) -> int:
-        active_count = max(1, active_programs)
-        target = active_count * max(1, self.request_window_per_active_program)
-        return min(self.max_request_window_size, max(self.min_request_window_size, target))
+    def protected_min_segment_rounds(self, configured_upper_bound: int) -> int:
+        """Return the bounded workload-derived minimum continuous-service target."""
+        if configured_upper_bound <= 0:
+            raise ValueError("configured_upper_bound must be positive")
+        if len(self._request_samples) < self.request_window_size:
+            return configured_upper_bound
+        return min(configured_upper_bound, self.estimated_continuity_rounds())
+
+    @property
+    def request_window_complete(self) -> bool:
+        """Return whether rolling request statistics are sufficient for capacity growth projection."""
+        return len(self._request_samples) >= self.request_window_size
+
+    @property
+    def request_sample_count(self) -> int:
+        """Return the bounded number of request samples retained for policy estimates."""
+        return len(self._request_samples)
+
+    def estimated_continuity_rounds(self) -> int:
+        """Return the unbounded workload estimate used before policy-specific lookahead caps."""
+        if not self.request_window_complete:
+            return 0
+        return max(1, math.ceil(2 * self.avg_rounds_since_ttl_pause))
+
+    def observe_continuity(
+        self,
+        *,
+        interval_seconds: float,
+        cache_miss_impact_seconds: float,
+        assigned_ttl_seconds: float,
+    ) -> ContinuitySample:
+        """Record one complete arrival interval and refresh fitted interval factors when possible."""
+        interval = max(0.0, interval_seconds)
+        impact = max(0.0, cache_miss_impact_seconds)
+        ttl = max(0.0, assigned_ttl_seconds)
+        # Retaining an acting Program until ``ttl`` preserves its KV only when
+        # the next request returns before that deadline. A hit avoids the
+        # estimated cold-prefill impact and pays only the actual idle interval;
+        # an expiry pays the full TTL reservation cost without a cache benefit.
+        utility = impact - interval if interval <= ttl else -ttl
+        self._continuity_samples.append(ContinuitySample(interval, impact, ttl, utility))
+        while len(self._continuity_samples) > self.request_window_size:
+            self._continuity_samples.popleft()
+        if self.continuity_window_complete:
+            self._refresh_continuity_fit()
+            self._refresh_continuity_utility()
+        return self._continuity_samples[-1]
+
+    def recalibrate_continuity_window(
+        self,
+        *,
+        minimum_seconds: float,
+        maximum_seconds: float,
+        impact_ratio: float,
+    ) -> ContinuitySample | None:
+        """Re-estimate every retained sample TTL after the first complete fitted interval window.
+
+        Warm-up samples were assigned before an interval distribution existed. Replacing only their accounting TTLs
+        prevents those provisional values from biasing the first posterior utility used by AUTO mode; it never mutates
+        a live Program deadline.
+        """
+        if not self.continuity_window_complete:
+            return None
+        if not 0 <= impact_ratio <= 1:
+            raise ValueError("impact_ratio must be in [0, 1]")
+        self._continuity_samples = deque(
+            self._reestimated_sample(
+                sample,
+                minimum_seconds=minimum_seconds,
+                maximum_seconds=maximum_seconds,
+                impact_ratio=impact_ratio,
+            )
+            for sample in self._continuity_samples
+        )
+        self._refresh_continuity_utility()
+        return self._continuity_samples[-1]
+
+    def update_continuity_mode(
+        self,
+        *,
+        enable_threshold_seconds: float,
+        disable_threshold_seconds: float,
+    ) -> bool:
+        """Apply AUTO hysteresis to posterior utility and return whether the enabled state changed."""
+        if not self.continuity_window_complete:
+            return False
+        if not 0 <= disable_threshold_seconds <= enable_threshold_seconds:
+            raise ValueError("AUTO disable threshold must be non-negative and no greater than the enable threshold")
+        previous = self.continuity_enabled
+        if self.continuity_enabled:
+            if self.continuity_utility_seconds < disable_threshold_seconds:
+                self.continuity_enabled = False
+        elif self.continuity_utility_seconds >= enable_threshold_seconds:
+            self.continuity_enabled = True
+        return previous != self.continuity_enabled
+
+    @property
+    def continuity_window_complete(self) -> bool:
+        """Return whether the interval window has reached its fixed sample target."""
+        return len(self._continuity_samples) >= self.request_window_size
+
+    @property
+    def continuity_sample_count(self) -> int:
+        """Return the number of complete inter-request intervals in the continuity window."""
+        return len(self._continuity_samples)
+
+    def recommended_ttl_seconds(
+        self, *, impact_seconds: float, minimum_seconds: float, maximum_seconds: float
+    ) -> float:
+        """Return the warm-up impact TTL or the complete-window lognormal expected-utility optimum."""
+        impact = max(0.0, impact_seconds)
+        if maximum_seconds < minimum_seconds:
+            raise ValueError("maximum_seconds must be >= minimum_seconds")
+        if not self.continuity_window_complete or self.continuity_log_mu is None or self.continuity_log_sigma is None:
+            return min(maximum_seconds, max(minimum_seconds, impact))
+        sigma = self.continuity_log_sigma
+        if sigma <= 1e-9:
+            return min(maximum_seconds, max(minimum_seconds, impact))
+        candidates = self._log_spaced_candidates(minimum_seconds, maximum_seconds, impact)
+        return max(candidates, key=lambda ttl: self._lognormal_utility(impact, ttl, self.continuity_log_mu, sigma))
+
+    def estimate_ttl(
+        self,
+        *,
+        impact_seconds: float,
+        minimum_seconds: float,
+        maximum_seconds: float,
+        impact_ratio: float,
+    ) -> TTLEstimate:
+        """Return an impact-capped fitted TTL, disabling TTL when its fitted expected utility is negative."""
+        if not 0 <= impact_ratio <= 1:
+            raise ValueError("impact_ratio must be in [0, 1]")
+        impact = max(0.0, impact_seconds)
+        candidate = min(
+            self.recommended_ttl_seconds(
+                impact_seconds=impact,
+                minimum_seconds=minimum_seconds,
+                maximum_seconds=maximum_seconds,
+            ),
+            impact * impact_ratio,
+        )
+        if not self._has_fitted_continuity_distribution():
+            return TTLEstimate(candidate, candidate, None, False)
+        utility = self._lognormal_utility(
+            impact,
+            candidate,
+            self.continuity_log_mu,
+            self.continuity_log_sigma,
+        )
+        return TTLEstimate(0.0 if utility < 0 else candidate, candidate, utility, True)
+
+    def _reestimated_sample(
+        self,
+        sample: ContinuitySample,
+        *,
+        minimum_seconds: float,
+        maximum_seconds: float,
+        impact_ratio: float,
+    ) -> ContinuitySample:
+        estimate = self.estimate_ttl(
+            impact_seconds=sample.cache_miss_impact_seconds,
+            minimum_seconds=minimum_seconds,
+            maximum_seconds=maximum_seconds,
+            impact_ratio=impact_ratio,
+        )
+        ttl = estimate.ttl_seconds
+        return ContinuitySample(
+            interval_seconds=sample.interval_seconds,
+            cache_miss_impact_seconds=sample.cache_miss_impact_seconds,
+            assigned_ttl_seconds=ttl,
+            utility_seconds=self._sample_utility(sample.interval_seconds, sample.cache_miss_impact_seconds, ttl),
+        )
+
+    def _refresh_continuity_fit(self) -> None:
+        logs = [math.log(sample.interval_seconds) for sample in self._continuity_samples if sample.interval_seconds > 0]
+        if len(logs) < 2:
+            self.continuity_log_mu = None
+            self.continuity_log_sigma = None
+            return
+        self.continuity_log_mu = statistics.fmean(logs)
+        self.continuity_log_sigma = math.sqrt(statistics.fmean((value - self.continuity_log_mu) ** 2 for value in logs))
+
+    def _refresh_continuity_utility(self) -> None:
+        self.continuity_utility_seconds = sum(sample.utility_seconds for sample in self._continuity_samples)
+
+    def _has_fitted_continuity_distribution(self) -> bool:
+        return (
+            self.continuity_window_complete
+            and self.continuity_log_mu is not None
+            and self.continuity_log_sigma is not None
+            and self.continuity_log_sigma > 1e-9
+        )
+
+    @staticmethod
+    def _sample_utility(interval_seconds: float, impact_seconds: float, ttl_seconds: float) -> float:
+        return impact_seconds - interval_seconds if interval_seconds <= ttl_seconds else -ttl_seconds
+
+    @staticmethod
+    def _log_spaced_candidates(minimum: float, maximum: float, impact: float) -> tuple[float, ...]:
+        if minimum == maximum:
+            return (minimum,)
+        log_min = math.log(max(minimum, 1e-6))
+        log_max = math.log(max(maximum, 1e-6))
+        grid = tuple(math.exp(log_min + (log_max - log_min) * index / 31) for index in range(32))
+        return tuple(sorted({minimum, maximum, min(maximum, max(minimum, impact)), *grid}))
+
+    @staticmethod
+    def _lognormal_utility(impact: float, ttl: float, mu: float, sigma: float) -> float:
+        z = (math.log(max(ttl, 1e-6)) - mu) / sigma
+        normal_cdf = 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+        shifted_cdf = 0.5 * (1.0 + math.erf((z - sigma) / math.sqrt(2.0)))
+        truncated_interval = math.exp(mu + sigma * sigma / 2.0) * shifted_cdf
+        # U(T) = E[(C - interval) * 1(interval <= T)] - T * P(interval > T)
+        #      = C * F(T) - E[interval * 1(interval <= T)] - T * (1 - F(T)).
+        return impact * normal_cdf - truncated_interval - ttl * (1.0 - normal_cdf)
 
     def _sanitize_request_sample(
         self,
         *,
         prompt_tokens: int,
+        cached_prefix_tokens: int,
         completion_tokens: int,
         total_tokens: int,
         request_latency_seconds: float,
@@ -148,28 +395,34 @@ class ProgressTTLGlobalFactors:
         waiting_programs: int,
         input_token_growth: int,
         inter_request_gap_seconds: float,
+        rounds_since_ttl_pause: int,
     ) -> RequestStatSample:
         if not math.isfinite(request_latency_seconds) or not math.isfinite(inter_request_gap_seconds):
             raise ValueError("request latency and inter-request gap must be finite")
         prompt_value = max(prompt_tokens, 0)
+        cached_value = min(prompt_value, max(cached_prefix_tokens, 0))
         total_value = max(total_tokens, 0)
         completion_value = self._sanitize_completion_tokens(
             completion_tokens=completion_tokens,
             prompt_tokens=prompt_value,
             total_tokens=total_value,
         )
+        input_growth = self._sanitize_input_token_growth(
+            input_token_growth=input_token_growth,
+            previous_total_tokens=max(0, total_value - max(input_token_growth, 0)),
+        )
         return RequestStatSample(
             prompt_tokens=prompt_value,
+            cached_prefix_tokens=cached_value,
+            uncached_prompt_tokens=prompt_value - cached_value,
             completion_tokens=completion_value,
             total_tokens=total_value,
             request_latency_seconds=max(request_latency_seconds, 0.0),
             active_programs=max(active_programs, 0),
             waiting_programs=max(waiting_programs, 0),
-            input_token_growth=self._sanitize_input_token_growth(
-                input_token_growth=input_token_growth,
-                previous_total_tokens=max(0, total_value - max(input_token_growth, 0)),
-            ),
+            input_token_growth=input_growth,
             inter_request_gap_seconds=max(inter_request_gap_seconds, 0.0),
+            rounds_since_ttl_pause=max(rounds_since_ttl_pause, 0),
         )
 
     @staticmethod
@@ -185,15 +438,23 @@ class ProgressTTLGlobalFactors:
 
     @staticmethod
     def _sanitize_input_token_growth(*, input_token_growth: int, previous_total_tokens: int) -> int | None:
+        """Return a credible per-round context increase, excluding reset-like outliers.
+
+        A normal agent round appends less context than it already carries. A growth at least as large as the whole
+        prior context indicates a context replacement, a new prompt lineage, or an inconsistent token report; it is
+        not representative of the continuous-growth capacity reserve and is excluded rather than clipped.
+        """
         if previous_total_tokens <= 0 or input_token_growth <= 0:
             return None
         if input_token_growth < previous_total_tokens:
             return input_token_growth
-        return previous_total_tokens
+        return None
 
     def _append_request_sample(self, sample: RequestStatSample) -> None:
         self._request_samples.append(sample)
         self._prompt_token_sum += sample.prompt_tokens
+        self._cached_prefix_token_sum += sample.cached_prefix_tokens
+        self._uncached_prompt_token_sum += sample.uncached_prompt_tokens
         if sample.completion_tokens is not None:
             self._completion_token_sum += sample.completion_tokens
             self._completion_token_count += 1
@@ -201,14 +462,14 @@ class ProgressTTLGlobalFactors:
         self._request_latency_sum += sample.request_latency_seconds
         self._active_program_sum += sample.active_programs
         self._waiting_program_sum += sample.waiting_programs
-        if sample.input_token_growth is not None:
-            self._input_token_growth_sum += sample.input_token_growth
-            self._input_token_growth_count += 1
         self._inter_request_gap_sum += sample.inter_request_gap_seconds
+        self._rounds_since_ttl_pause_sum += sample.rounds_since_ttl_pause
 
     def _remove_request_sample(self) -> None:
         sample = self._request_samples.popleft()
         self._prompt_token_sum -= sample.prompt_tokens
+        self._cached_prefix_token_sum -= sample.cached_prefix_tokens
+        self._uncached_prompt_token_sum -= sample.uncached_prompt_tokens
         if sample.completion_tokens is not None:
             self._completion_token_sum -= sample.completion_tokens
             self._completion_token_count -= 1
@@ -216,14 +477,11 @@ class ProgressTTLGlobalFactors:
         self._request_latency_sum -= sample.request_latency_seconds
         self._active_program_sum -= sample.active_programs
         self._waiting_program_sum -= sample.waiting_programs
-        if sample.input_token_growth is not None:
-            self._input_token_growth_sum -= sample.input_token_growth
-            self._input_token_growth_count -= 1
         self._inter_request_gap_sum -= sample.inter_request_gap_seconds
+        self._rounds_since_ttl_pause_sum -= sample.rounds_since_ttl_pause
 
     def _evict_request_samples_to_target(self) -> None:
-        excess = max(0, len(self._request_samples) - self.request_window_size)
-        for _ in range(min(self.max_evictions_per_update, excess)):
+        while len(self._request_samples) > self.request_window_size:
             self._remove_request_sample()
 
     def _refresh_request_averages_if_ready(self) -> None:
@@ -231,15 +489,21 @@ class ProgressTTLGlobalFactors:
         if sample_count < self._min_samples_for_update(self.request_window_size):
             return
         self.avg_prompt_tokens = self._prompt_token_sum / sample_count
+        self.avg_cached_prefix_tokens = self._cached_prefix_token_sum / sample_count
+        self.avg_uncached_prompt_tokens = self._uncached_prompt_token_sum / sample_count
         if self._completion_token_count > 0:
             self.avg_completion_tokens = self._completion_token_sum / self._completion_token_count
         self.avg_total_tokens = self._total_token_sum / sample_count
         self.avg_request_latency_seconds = self._request_latency_sum / sample_count
         self.avg_active_programs = self._active_program_sum / sample_count
         self.avg_waiting_programs = self._waiting_program_sum / sample_count
-        if self._input_token_growth_count > 0:
-            self.avg_input_token_growth_per_round = self._input_token_growth_sum / self._input_token_growth_count
+        growth_samples = [
+            sample.input_token_growth for sample in self._request_samples if sample.input_token_growth is not None
+        ]
+        if growth_samples:
+            self.avg_input_token_growth_per_round = sum(growth_samples) / len(growth_samples)
         self.avg_inter_request_gap_seconds = self._inter_request_gap_sum / sample_count
+        self.avg_rounds_since_ttl_pause = self._rounds_since_ttl_pause_sum / sample_count
 
     def _min_samples_for_update(self, window_size: int) -> int:
         return max(1, int(window_size * self.min_update_window_fraction))

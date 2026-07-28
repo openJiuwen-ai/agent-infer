@@ -10,6 +10,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from enum import Enum
+
+
+class ProgressTTLMode(str, Enum):
+    """Operator-selected control mode for Progress-TTL state transitions."""
+
+    ON = "on"
+    OFF = "off"
+    AUTO = "auto"
 
 
 @dataclass(frozen=True)
@@ -18,18 +27,22 @@ class ProgressTTLConfig:
 
     target_min_segment_rounds: int = 9
     target_max_segment_rounds: int = 14
+    mode: ProgressTTLMode = ProgressTTLMode.ON
     ttl_min_seconds: float = 10.0
     ttl_max_seconds: float = 120.0
+    ttl_max_cache_miss_impact_ratio: float = 1.0
+    auto_enable_utility_seconds: float = 20.0
+    auto_disable_utility_seconds: float = 5.0
     ttl_prefill_seconds_per_1k_uncached_tokens: float = 0.29
-    ttl_impact_multiplier: float = 2.0
     ttl_decode_throughput_alpha: float = 0.15
-    uncached_ratio_default: float = 0.8
+    shared_prefix_freshness_warmup_seconds: float = 100.0
+    shared_prefix_freshness_kv_turnovers: float = 2.0
     resume_fairness_weight: float = 1.0
     resume_resource_penalty_weight: float = 1.0
     capacity_safety_margin_tokens: int = 0
-    resume_capacity_ratio: float = 0.9
+    resume_capacity_ratio: float = 0.95
     resume_reclaim_acting_programs: bool = True
-    pause_capacity_ratio: float = 0.95
+    pause_capacity_ratio: float = 1.0
     pause_capacity_lookahead_rounds: float = 2.0
     privileged_lookahead_rounds: float = 14.0
     privileged_max_context_tokens: int = 262_144
@@ -41,6 +54,8 @@ class ProgressTTLConfig:
 
     def __post_init__(self) -> None:
         """Reject values that make deadlines or capacity projections invalid."""
+        if not isinstance(self.mode, ProgressTTLMode):
+            raise ValueError("mode must be a ProgressTTLMode")
         if self.target_min_segment_rounds <= 0:
             raise ValueError("target_min_segment_rounds must be positive")
         if self.target_max_segment_rounds < self.target_min_segment_rounds:
@@ -48,11 +63,14 @@ class ProgressTTLConfig:
         finite_non_negative = (
             self.ttl_min_seconds,
             self.ttl_max_seconds,
+            self.ttl_max_cache_miss_impact_ratio,
+            self.auto_enable_utility_seconds,
+            self.auto_disable_utility_seconds,
             self.ttl_prefill_seconds_per_1k_uncached_tokens,
-            self.ttl_impact_multiplier,
+            self.shared_prefix_freshness_warmup_seconds,
+            self.shared_prefix_freshness_kv_turnovers,
             self.resume_fairness_weight,
             self.resume_resource_penalty_weight,
-            self.uncached_ratio_default,
             self.force_resume_timeout_seconds,
             self.paused_program_ttl_seconds,
             self.pause_capacity_lookahead_rounds,
@@ -62,6 +80,12 @@ class ProgressTTLConfig:
             raise ValueError("Progress-TTL time, cost, and weight values must be finite and non-negative")
         if self.ttl_max_seconds < self.ttl_min_seconds:
             raise ValueError("ttl_max_seconds must be >= ttl_min_seconds")
+        if self.shared_prefix_freshness_kv_turnovers <= 0:
+            raise ValueError("shared_prefix_freshness_kv_turnovers must be positive")
+        if self.ttl_max_cache_miss_impact_ratio > 1:
+            raise ValueError("ttl_max_cache_miss_impact_ratio must be in [0, 1]")
+        if self.auto_disable_utility_seconds > self.auto_enable_utility_seconds:
+            raise ValueError("auto_disable_utility_seconds must be <= auto_enable_utility_seconds")
         if not math.isfinite(self.ttl_decode_throughput_alpha) or not 0 <= self.ttl_decode_throughput_alpha <= 1:
             raise ValueError("ttl_decode_throughput_alpha must be between 0 and 1")
         if not math.isfinite(self.resume_capacity_ratio) or not 0 < self.resume_capacity_ratio <= 1:
@@ -70,8 +94,6 @@ class ProgressTTLConfig:
             raise ValueError("resume_reclaim_acting_programs must be a boolean")
         if not math.isfinite(self.pause_capacity_ratio) or not 0 < self.pause_capacity_ratio <= 1:
             raise ValueError("pause_capacity_ratio must be in (0, 1]")
-        if not 0 <= self.uncached_ratio_default <= 1:
-            raise ValueError("uncached_ratio_default must be between 0 and 1")
         if self.capacity_safety_margin_tokens < 0 or self.decode_buffer_tokens < 0:
             raise ValueError("Progress-TTL token margins must be non-negative")
         if self.privileged_max_context_tokens <= 0:

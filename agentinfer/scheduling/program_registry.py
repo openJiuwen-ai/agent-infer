@@ -46,6 +46,11 @@ class ProgramRegistry:
         """Return whether the registry owns any live Program generation."""
         return bool(self._programs)
 
+    @property
+    def has_programs(self) -> bool:
+        """Return in O(1) whether any live Program generation is registered."""
+        return bool(self._programs)
+
     def materialize(
         self,
         metadata: AgentIdentity,
