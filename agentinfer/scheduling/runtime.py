@@ -250,7 +250,7 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
             binding.output_tokens = max(binding.output_tokens, max(0, total_output_tokens))
 
     def on_prefix_cache_observation(self, request_id: str, cached_prefix_tokens: int) -> None:
-        """Refresh one paused reasoning Program's reusable prefix hit for capacity and continuity estimates."""
+        """Refresh one paused reasoning Program's reusable prefix hit after its pause-based freshness expires."""
         binding = self._request_bindings.get(request_id)
         if binding is None or not binding.track_segment_share:
             return
@@ -423,7 +423,7 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
             program.state = ProgramState.PAUSED
             program.backend_id = None
             program.marked_for_pause = False
-            self._shared_prefix_freshness_anchor_at[program.ref] = time.monotonic()
+            self._restart_shared_prefix_freshness(program, time.monotonic())
         elif request.kind is TransitionKind.MARK_FOR_PAUSE:
             if program.state is not ProgramState.ACTIVE or program.status is not ProgramStatus.REASONING:
                 return TransitionResult(request.kind, request.program, False, "mark_requires_active_reasoning")
@@ -516,6 +516,23 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
         anchor = self._shared_prefix_freshness_anchor_at.get(program.ref)
         fresh_until = program.tokens.shared_prefix_fresh_until_monotonic_s
         return anchor is None or fresh_until is None or now_monotonic_s >= fresh_until
+
+    def _restart_shared_prefix_freshness(self, program: RuntimeProgram, pause_at_monotonic_s: float) -> None:
+        """Restart the existing freshness duration from a newly accepted pause.
+
+        The stored deadline belongs to the previous pause anchor. Moving only the anchor would make that stale
+        absolute deadline immediately due after a later pause, so preserve its duration while rebasing both values.
+        """
+        previous_anchor = self._shared_prefix_freshness_anchor_at.get(program.ref)
+        previous_deadline = program.tokens.shared_prefix_fresh_until_monotonic_s
+        self._shared_prefix_freshness_anchor_at[program.ref] = pause_at_monotonic_s
+        if previous_anchor is None or previous_deadline is None:
+            return
+        freshness_seconds = max(0.0, previous_deadline - previous_anchor)
+        program.tokens = replace(
+            program.tokens,
+            shared_prefix_fresh_until_monotonic_s=pause_at_monotonic_s + freshness_seconds,
+        )
 
     def _shared_prefix_fresh_until(self, program: ProgramRef, freshness_seconds: float | None) -> float | None:
         """Derive a fixed freshness deadline from the latest pause, or initial Program entry."""

@@ -12,6 +12,7 @@ from agentinfer.scheduling.identity import AgentIdentity
 from agentinfer.scheduling.lifecycle import ProgramLifecycle
 from agentinfer.scheduling.progress_ttl import ProgressTTLConfig, build_progress_ttl_strategy
 from agentinfer.scheduling.runtime import ProgramScheduler
+from agentinfer.scheduling.transitions import TransitionKind, TransitionRequest
 
 pytestmark = pytest.mark.cpu_test
 
@@ -312,15 +313,20 @@ def test_scheduler_refreshes_shared_prefix_only_after_its_freshness_deadline() -
         scheduler.on_prefix_cache_observation("r1", 250)
         scheduler.on_request_completion("r1", 300)
         program = scheduler.registry.require(ProgramRef("p1", 0))
-        program.state = ProgramState.PAUSED
-        program.status = ProgramStatus.REASONING
-
         monotonic.return_value = 20
+        result = scheduler._apply_transition(TransitionRequest(TransitionKind.PAUSE, program.ref, "test_pause"))
+        assert result.applied is True
+
+        monotonic.return_value = 30
         assert scheduler.on_request_arrival("r2", AgentIdentity("p1"), 320, backend(20_000), "native-r2") is False
         scheduler.on_prefix_cache_observation("r2", 100)
         assert program.tokens.shared_prefix_tokens == 250
 
         monotonic.return_value = 111
+        scheduler.on_prefix_cache_observation("r2", 100)
+        assert program.tokens.shared_prefix_tokens == 250
+
+        monotonic.return_value = 121
         scheduler.on_prefix_cache_observation("r2", 100)
         assert program.tokens.shared_prefix_tokens == 100
 
