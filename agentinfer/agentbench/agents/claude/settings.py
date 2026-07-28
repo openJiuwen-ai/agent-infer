@@ -1,8 +1,11 @@
 """Prepare Claude Code state and launch environment."""
 
 import json
+import logging
 import os
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def bootstrap_claude_state(config_dir: Path) -> None:
@@ -52,7 +55,8 @@ def build_claude_env(
 
     token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
     if token is None:
-        raise RuntimeError("ANTHROPIC_AUTH_TOKEN must be set for Claude benchmark runs")
+        token = "smoke"
+        logger.warning("ANTHROPIC_AUTH_TOKEN is not set; using the local benchmark placeholder")
     return {
         "ANTHROPIC_BASE_URL": api_base_url,
         "ANTHROPIC_AUTH_TOKEN": token,

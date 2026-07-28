@@ -53,8 +53,12 @@ def test_launch_environment_contains_task_local_state_and_token(
     assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "glm-5"
 
 
-def test_launch_environment_requires_auth_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_launch_environment_defaults_auth_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
 
-    with pytest.raises(RuntimeError, match="ANTHROPIC_AUTH_TOKEN"):
-        build_claude_env(tmp_path, "http://proxy", "glm-5")
+    env = build_claude_env(tmp_path, "http://proxy", "glm-5")
+
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "smoke"
+    assert "using the local benchmark placeholder" in caplog.text

@@ -1,6 +1,8 @@
 """Functional orchestration for benchmark runs and task lifecycles."""
 
 import asyncio
+import shutil
+import subprocess
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -60,14 +62,16 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
     run_exception: BaseException | None = None
     finalization_errors: list[str] = []
     lifecycle = None
+    preflight_succeeded = False
     setup_owner = WorkspaceProcessOwner(
         time.monotonic() + config.experiment.run_timeout_seconds if config.experiment.run_timeout_seconds else None
     )
     context = RunContext(config, output_dir, output_dir / "requests.jsonl", ())
 
     async def execute() -> None:
-        nonlocal context, lifecycle, router_start, vllm_start
+        nonlocal context, lifecycle, preflight_succeeded, router_start, vllm_start
         await check_preflight(config)
+        preflight_succeeded = True
         tasks = tuple(load_tasks(config.dataset.index_path, config.dataset.selection_path, config.experiment.task_num))
         context = RunContext(config, output_dir, output_dir / "requests.jsonl", tasks)
         start_capture = await capture_vllm_metrics(config.backend.base_url)
@@ -135,31 +139,34 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
                     RuntimeError(error),
                 )
 
-        end_capture = await finalize_async("vllm_end", lambda: capture_vllm_metrics(config.backend.base_url))
-        if end_capture is not None:
-            end_capture = _capture_with_path(
-                _named_capture(end_capture, "vllm_end"),
-                output_dir / "evidence" / "vllm_metrics_end.prom",
-            )
-            captures.append(end_capture)
-            vllm_end = _capture_text(end_capture)
-            if vllm_end is not None:
-                finalize_sync("vllm_end_write", lambda: write_text(end_capture.path, vllm_end))
-
-        if config.router.enabled and config.router.base_url:
-            router_capture = await finalize_async("router_end", lambda: capture_router_snapshot(config.router.base_url))
-            if router_capture is not None:
-                router_capture = _capture_with_path(
-                    _named_capture(router_capture, "router_end"),
-                    output_dir / "evidence" / "router_end.json",
+        if preflight_succeeded:
+            end_capture = await finalize_async("vllm_end", lambda: capture_vllm_metrics(config.backend.base_url))
+            if end_capture is not None:
+                end_capture = _capture_with_path(
+                    _named_capture(end_capture, "vllm_end"),
+                    output_dir / "evidence" / "vllm_metrics_end.prom",
                 )
-                captures.append(router_capture)
-                router_end = _router_events(router_capture) if router_capture.available else None
-                if router_capture.available:
-                    finalize_sync(
-                        "router_end_write",
-                        lambda: atomic_write_json(router_capture.path, router_capture.metadata["raw"]),
+                captures.append(end_capture)
+                vllm_end = _capture_text(end_capture)
+                if vllm_end is not None:
+                    finalize_sync("vllm_end_write", lambda: write_text(end_capture.path, vllm_end))
+
+            if config.router.enabled and config.router.base_url:
+                router_capture = await finalize_async(
+                    "router_end", lambda: capture_router_snapshot(config.router.base_url)
+                )
+                if router_capture is not None:
+                    router_capture = _capture_with_path(
+                        _named_capture(router_capture, "router_end"),
+                        output_dir / "evidence" / "router_end.json",
                     )
+                    captures.append(router_capture)
+                    router_end = _router_events(router_capture) if router_capture.available else None
+                    if router_capture.available:
+                        finalize_sync(
+                            "router_end_write",
+                            lambda: atomic_write_json(router_capture.path, router_capture.metadata["raw"]),
+                        )
 
         environment_capture = finalize_sync("environment", collect_environment)
         if environment_capture is not None:
@@ -468,7 +475,29 @@ def _capture_dict(capture: EvidenceCapture) -> dict:
     }
 
 
+async def _check_executable_version(executable: str, version_flag: str, *, label: str) -> None:
+    resolved = shutil.which(executable)
+    if resolved is None:
+        raise RuntimeError(f"{label} executable is not available: {executable}")
+    try:
+        version = await asyncio.to_thread(
+            subprocess.run,
+            [resolved, version_flag],
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"{label} executable version check failed: {executable}") from exc
+    if version.returncode != 0:
+        detail = version.stderr.decode(errors="replace").strip() or version.stdout.decode(errors="replace").strip()
+        message = f"{label} executable version check failed: {executable}"
+        raise RuntimeError(f"{message}\n{detail}" if detail else message)
+
+
 async def check_preflight(config: AgentBenchConfig) -> None:
+    await _check_executable_version("tmux", "-V", label="tmux")
+    await _check_executable_version(str(config.agent.executable), "--version", label="Agent")
     async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
         response = await client.get(f"{config.backend.base_url.rstrip('/')}/v1/models")
         if response.status_code != 200:

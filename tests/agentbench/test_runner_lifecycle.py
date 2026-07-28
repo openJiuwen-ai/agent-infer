@@ -9,7 +9,7 @@ from agentinfer.agentbench.agents.contracts import AgentRunResult
 from agentinfer.agentbench.agents.outcomes import AgentRunOutcome
 from agentinfer.agentbench.benchkit.config import AgentBenchConfig
 from agentinfer.agentbench.benchkit.dataset import Task
-from agentinfer.agentbench.benchkit.runner import RunContext, _run_single_task
+from agentinfer.agentbench.benchkit.runner import RunContext, _run_single_task, check_preflight
 from agentinfer.agentbench.benchkit.session_registration import SessionRegistrationResult
 from agentinfer.agentbench.request_proxy import RequestProxyCloseResult
 
@@ -260,6 +260,67 @@ def test_registration_failure_does_not_cleanup(tmp_path: Path, monkeypatch: pyte
 
     payload = json.loads((tmp_path / "tasks" / "instance" / "result.json").read_text(encoding="utf-8"))
     assert payload["error"]["message"].endswith("conflict")
+
+
+def test_preflight_requires_tmux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("agentinfer.agentbench.benchkit.runner.shutil.which", lambda _name: None)
+
+    with pytest.raises(RuntimeError, match="tmux executable is not available: tmux"):
+        asyncio.run(check_preflight(_run_config(tmp_path)))
+
+
+def test_preflight_requires_agent_executable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "agentinfer.agentbench.benchkit.runner.shutil.which",
+        lambda name: "/usr/bin/tmux" if name == "tmux" else None,
+    )
+    monkeypatch.setattr(
+        "agentinfer.agentbench.benchkit.runner.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0),
+    )
+
+    with pytest.raises(RuntimeError, match="Agent executable is not available: claude"):
+        asyncio.run(check_preflight(_run_config(tmp_path)))
+
+
+def test_preflight_rejects_broken_agent_executable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "agentinfer.agentbench.benchkit.runner.shutil.which",
+        lambda name: f"/usr/bin/{name}",
+    )
+    results = iter(
+        (
+            SimpleNamespace(returncode=0),
+            SimpleNamespace(returncode=1, stderr=b"unknown option --version", stdout=b""),
+        )
+    )
+    monkeypatch.setattr(
+        "agentinfer.agentbench.benchkit.runner.subprocess.run",
+        lambda *_args, **_kwargs: next(results),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Agent executable version check failed: claude\nunknown option --version",
+    ):
+        asyncio.run(check_preflight(_run_config(tmp_path)))
+
+
+def test_preflight_failure_skips_remote_finalizers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from agentinfer.agentbench.benchkit import runner
+
+    async def fail(_config):
+        raise RuntimeError("preflight failed")
+
+    async def forbidden(_url):
+        raise AssertionError("remote finalizer must not run")
+
+    monkeypatch.setattr(runner, "check_preflight", fail)
+    monkeypatch.setattr(runner, "capture_vllm_metrics", forbidden)
+    monkeypatch.setattr(runner, "capture_router_snapshot", forbidden)
+
+    with pytest.raises(RuntimeError, match="preflight failed"):
+        asyncio.run(runner.run_benchmark(_run_config(tmp_path)))
 
 
 def test_run_timeout_covers_setup_and_still_finalizes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
