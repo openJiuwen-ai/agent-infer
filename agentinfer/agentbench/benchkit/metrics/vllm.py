@@ -30,6 +30,8 @@ class VllmMetrics:
     latency_breakdown_seconds: Mapping[str, Mapping[str, LatencyValue]]
     counters: Mapping[str, float]
     request_finished_by_reason: Mapping[str, int]
+    prefix_cache_hit_rate: float | None
+    prompt_token_hit_rate: float | None
 
 
 _METRIC_COMPONENTS: dict[str, str] = {
@@ -143,6 +145,10 @@ def aggregate_vllm_metrics(start_text: str | None, end_text: str | None) -> Vllm
         or any(counters.values())
         or any(request_finished_by_reason.values())
     )
+    prefix_hits = counters.get("vllm:prefix_cache_hits_total")
+    prefix_queries = counters.get("vllm:prefix_cache_queries_total")
+    cached_tokens = counters.get("vllm:prompt_tokens_cached_total")
+    prompt_tokens = counters.get("vllm:prompt_tokens_total")
     return VllmMetrics(
         available,
         None if available else "no_run_window_samples",
@@ -151,6 +157,8 @@ def aggregate_vllm_metrics(start_text: str | None, end_text: str | None) -> Vllm
         breakdown,
         counters,
         request_finished_by_reason,
+        prefix_hits / prefix_queries if prefix_hits is not None and prefix_queries else None,
+        cached_tokens / prompt_tokens if cached_tokens is not None and prompt_tokens else None,
     )
 
 
@@ -174,4 +182,4 @@ def _unavailable(
     reset: bool = False,
     lifecycle_verified: bool = False,
 ) -> VllmMetrics:
-    return VllmMetrics(False, reason, reset, lifecycle_verified, {}, {}, {})
+    return VllmMetrics(False, reason, reset, lifecycle_verified, {}, {}, {}, None, None)

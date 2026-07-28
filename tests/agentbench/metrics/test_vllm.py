@@ -43,6 +43,18 @@ def test_aggregate_vllm_metrics_retains_all_target_metrics() -> None:
         "vllm:prompt_tokens_cached_total": 6.0,
     }
     assert metrics.request_finished_by_reason == {"stop": 6}
+    assert metrics.prefix_cache_hit_rate == 1.0
+    assert metrics.prompt_token_hit_rate == 1.0
+
+
+def test_aggregate_vllm_metrics_omits_rates_without_denominators() -> None:
+    metrics = aggregate_vllm_metrics(
+        "vllm:prefix_cache_hits_total 1\nvllm:prompt_tokens_cached_total 2",
+        "vllm:prefix_cache_hits_total 3\nvllm:prompt_tokens_cached_total 5",
+    )
+
+    assert metrics.prefix_cache_hit_rate is None
+    assert metrics.prompt_token_hit_rate is None
 
 
 def test_aggregate_vllm_metrics_aggregates_after_series_delta() -> None:

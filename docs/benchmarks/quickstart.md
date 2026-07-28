@@ -149,12 +149,23 @@ vllm bench serve --agentinfer compare \
 
 Add `--json` for machine-readable output.
 
+## Combine run summaries
+
+Export one or more completed runs as a CSV for side-by-side comparison:
+
+```bash
+vllm bench serve --agentinfer summarize \
+  results/agentinfer/run1 results/agentinfer/run2 results/agentinfer/run3
+```
+
+The command writes `combined-summary.csv` by default. Use `--output <csv>` to choose another path.
+
 ## CLI reference
 
 ```text
 vllm bench serve --agentinfer prepare swebench --output-dir <data-dir>
 vllm bench serve --agentinfer run --config <yaml> [overrides]
-vllm bench serve --agentinfer summarize --config <yaml> --run-dir <run-dir>
+vllm bench serve --agentinfer summarize <run-dir...> [--output <csv>]
 vllm bench serve --agentinfer compare --baseline <run-dir...> --candidate <run-dir...>
 ```
 

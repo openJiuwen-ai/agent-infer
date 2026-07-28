@@ -5,10 +5,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-def utc_now() -> str:
-    """Return the current UTC timestamp in ISO-8601 form for artifacts."""
+def utc_now() -> datetime:
+    """Return the current UTC timestamp."""
 
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(timezone.utc)
 
 
 def write_json(path: Path, data: object) -> None:

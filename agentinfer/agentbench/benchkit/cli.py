@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import UnionType
 
-from .common import atomic_write_json
 from .config import AgentBenchConfig, load_config
 
 logger = logging.getLogger(__name__)
@@ -159,9 +158,9 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--config", type=Path, required=True)
     _register_run_args(run)
 
-    summarize = commands.add_parser("summarize", help="Regenerate one run summary")
-    summarize.add_argument("--config", type=Path, required=True)
-    summarize.add_argument("--run-dir", type=Path, required=True)
+    summarize = commands.add_parser("summarize", help="Combine existing run summaries")
+    summarize.add_argument("run_dirs", type=Path, nargs="+")
+    summarize.add_argument("--output", type=Path, default=Path("combined-summary.csv"))
 
     compare = commands.add_parser("compare", help="Compare finalized benchmark runs")
     compare.add_argument("--baseline", type=Path, nargs="+", required=True)
@@ -201,14 +200,13 @@ async def _run(args: argparse.Namespace, cli_metadata: dict[str, object]) -> Non
 
 
 def _summarize(args: argparse.Namespace) -> None:
-    """Regenerate and persist a finalized run summary."""
+    """Combine existing run summaries into one CSV export."""
 
-    from .runner import summarize_run
+    from .summarize import combine_summaries
 
-    run_dir = args.run_dir.resolve()
-    summary = summarize_run(run_dir, load_config(args.config))
-    atomic_write_json(run_dir / "summary.json", summary.to_dict())
-    logger.info("Summary written to %s", run_dir / "summary.json")
+    output = args.output.resolve()
+    combine_summaries([run_dir.resolve() for run_dir in args.run_dirs], output=output)
+    logger.info("Combined summaries written to %s", output)
 
 
 def _compare(args: argparse.Namespace) -> None:

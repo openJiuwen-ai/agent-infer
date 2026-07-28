@@ -78,22 +78,39 @@ def test_run_delegates_to_runner_with_metadata(tmp_path: Path, monkeypatch: pyte
     assert call.kwargs["cli_metadata"]["overrides"] == {"task_num": 2, "enabled": False}
 
 
-def test_summarize_and_compare_delegate_to_owned_apis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
-    config_path = tmp_path / "config.yaml"
-    _config(config_path)
+def test_compare_delegates_to_owned_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     run_dir = tmp_path / "run"
-    runner = types.ModuleType("agentinfer.agentbench.benchkit.runner")
-    summary = types.SimpleNamespace(to_dict=lambda: {"status": "completed"})
-    runner.summarize_run = lambda actual, _config: summary if actual == run_dir else pytest.fail("wrong run")
     compare_module = types.ModuleType("agentinfer.agentbench.benchkit.compare")
     compare_module.compare = lambda *_args, **_kwargs: "comparison"
-    monkeypatch.setitem(sys.modules, runner.__name__, runner)
     monkeypatch.setitem(sys.modules, compare_module.__name__, compare_module)
 
-    assert main(["summarize", "--config", str(config_path), "--run-dir", str(run_dir)]) == 0
-    assert (run_dir / "summary.json").read_text(encoding="utf-8").strip().startswith("{")
     assert main(["compare", "--baseline", str(run_dir), "--candidate", str(run_dir), "--json"]) == 0
     assert capsys.readouterr().out == "comparison\n"
+
+
+def test_summarize_combines_positional_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run1 = tmp_path / "run1"
+    run2 = tmp_path / "run2"
+    output = tmp_path / "combined.csv"
+    summarize_module = types.ModuleType("agentinfer.agentbench.benchkit.summarize")
+    calls = []
+    summarize_module.combine_summaries = lambda runs, **outputs: calls.append((runs, outputs))
+    monkeypatch.setitem(sys.modules, summarize_module.__name__, summarize_module)
+
+    assert main(["summarize", str(run1), str(run2), "--output", str(output)]) == 0
+    assert calls == [([run1.resolve(), run2.resolve()], {"output": output.resolve()})]
+
+
+def test_summarize_accepts_one_run_and_uses_default_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_dir = tmp_path / "run"
+    summarize_module = types.ModuleType("agentinfer.agentbench.benchkit.summarize")
+    calls = []
+    summarize_module.combine_summaries = lambda runs, **outputs: calls.append((runs, outputs))
+    monkeypatch.setitem(sys.modules, summarize_module.__name__, summarize_module)
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["summarize", str(run_dir)]) == 0
+    assert calls == [([run_dir.resolve()], {"output": tmp_path / "combined-summary.csv"})]
 
 
 def test_prepare_delegates_to_dataset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

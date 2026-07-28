@@ -35,6 +35,7 @@ def finalize_run_manifest(
     manifest: RunManifest,
     evidence: tuple[dict[str, object], ...],
     *,
+    finished_at: datetime,
     status: Literal["completed", "failed"] = "completed",
 ) -> RunManifest:
-    return replace(manifest, status=status, finished_at=utc_now(), evidence=evidence)
+    return replace(manifest, status=status, finished_at=finished_at, evidence=evidence)

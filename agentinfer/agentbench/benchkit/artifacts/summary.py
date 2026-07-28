@@ -45,6 +45,10 @@ class RunSummary:
     correctness: CorrectnessSummary
     source_health: SourceHealth
     lifecycle: LifecycleSummary
+    run_wall_time_seconds: float
+    request_throughput_per_second: float
+    input_token_throughput_per_second: float
+    output_token_throughput_per_second: float
     cli: dict[str, object] | None = None
 
     def to_dict(self) -> dict[str, object]:
@@ -60,6 +64,7 @@ def build_run_summary(
     correctness: CorrectnessSummary | dict[str, object],
     health: SourceHealth,
     lifecycle: LifecycleSummary | dict[str, object],
+    run_wall_time_seconds: float,
 ) -> RunSummary:
     return RunSummary(
         "1",
@@ -71,4 +76,8 @@ def build_run_summary(
         correctness if isinstance(correctness, CorrectnessSummary) else CorrectnessSummary(**correctness),
         health,
         lifecycle if isinstance(lifecycle, LifecycleSummary) else LifecycleSummary(**lifecycle),
+        run_wall_time_seconds,
+        requests.requests / run_wall_time_seconds,
+        requests.input_tokens / run_wall_time_seconds,
+        requests.output_tokens / run_wall_time_seconds,
     )

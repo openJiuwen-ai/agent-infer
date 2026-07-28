@@ -2,6 +2,7 @@
 
 import json
 import math
+import warnings
 from dataclasses import asdict
 from pathlib import Path
 from statistics import fmean, stdev
@@ -33,6 +34,8 @@ _METRIC_SPECS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("cache_creation_input_tokens", ("requests", "cache_creation_input_tokens")),
     ("cached_input_tokens", ("requests", "cached_input_tokens")),
     ("prefix_cache_hit_rate", ("requests", "prefix_cache_hit_rate")),
+    ("vllm_prefix_cache_hit_rate", ("vllm", "prefix_cache_hit_rate")),
+    ("vllm_prompt_token_hit_rate", ("vllm", "prompt_token_hit_rate")),
     ("latency_mean_seconds", ("requests", "latency_seconds", "mean")),
     ("latency_p50_seconds", ("requests", "latency_seconds", "p50")),
     ("latency_p95_seconds", ("requests", "latency_seconds", "p95")),
@@ -55,25 +58,47 @@ def load_summary(run_dir: Path) -> dict[str, Any]:
     if not manifest_path.exists():
         raise FileNotFoundError(f"manifest.json not found in {run_dir}")
     try:
-        summary = _SUMMARY_ADAPTER.validate_json(path.read_bytes())
         manifest = _MANIFEST_ADAPTER.validate_json(manifest_path.read_bytes())
+        summary_data = json.loads(path.read_bytes())
+    except (ValidationError, json.JSONDecodeError) as exc:
+        raise ValueError(f"run artifacts in {run_dir} do not match the finalized schemas") from exc
+    if not isinstance(summary_data, dict):
+        raise ValueError(f"run artifacts in {run_dir} do not match the finalized schemas")
+    if manifest.status != "completed":
+        raise ValueError(f"run in {run_dir} did not complete successfully")
+    if manifest.finished_at is None:
+        raise ValueError(f"completed run in {run_dir} has no finish timestamp")
+    if "run_wall_time_seconds" not in summary_data:
+        warnings.warn(
+            "comparing legacy summary without run-level throughput metrics; manifest fallback is deprecated",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        wall_time = (manifest.finished_at - manifest.created_at).total_seconds()
+        if wall_time <= 0:
+            raise ValueError(f"completed run in {run_dir} has non-positive wall time")
+        requests = summary_data.get("requests")
+        if not isinstance(requests, dict):
+            raise ValueError(f"run artifacts in {run_dir} do not match the finalized schemas")
+        summary_data.update(
+            run_wall_time_seconds=wall_time,
+            request_throughput_per_second=requests.get("requests", 0) / wall_time,
+            input_token_throughput_per_second=requests.get("input_tokens", 0) / wall_time,
+            output_token_throughput_per_second=requests.get("output_tokens", 0) / wall_time,
+        )
+    vllm = summary_data.get("vllm")
+    if isinstance(vllm, dict):
+        vllm.setdefault("prefix_cache_hit_rate", None)
+        vllm.setdefault("prompt_token_hit_rate", None)
+    try:
+        summary = _SUMMARY_ADAPTER.validate_python(summary_data)
     except ValidationError as exc:
         raise ValueError(f"run artifacts in {run_dir} do not match the finalized schemas") from exc
     if summary.run_id != manifest.run_id or summary.run_id != run_dir.name:
         raise ValueError(f"run artifacts in {run_dir} identify different runs")
-    if manifest.status != "completed" or summary.lifecycle.status != "completed":
+    if summary.lifecycle.status != "completed":
         raise ValueError(f"run in {run_dir} did not complete successfully")
-    if manifest.finished_at is None:
-        raise ValueError(f"completed run in {run_dir} has no finish timestamp")
-    result = asdict(summary)
-    wall_time = (manifest.finished_at - manifest.created_at).total_seconds()
-    if wall_time <= 0:
-        raise ValueError(f"completed run in {run_dir} has non-positive wall time")
-    result["run_wall_time_seconds"] = wall_time
-    result["request_throughput_per_second"] = summary.requests.requests / wall_time
-    result["input_token_throughput_per_second"] = summary.requests.input_tokens / wall_time
-    result["output_token_throughput_per_second"] = summary.requests.output_tokens / wall_time
-    return result
+    return asdict(summary)
 
 
 def _as_dirs(runs: Path | str | list[Path] | list[str]) -> list[Path]:

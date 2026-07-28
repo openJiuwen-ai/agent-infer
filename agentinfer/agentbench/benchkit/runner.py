@@ -16,17 +16,17 @@ from tqdm import tqdm
 from ..agents import AgentRunRequest, AgentRunResult, run_agent
 from ..agents.outcomes import AgentRunOutcome, TerminationReason
 from ..request_proxy import create_request_proxy_lifecycle, load_request_facts
-from .artifacts import RunSummary, build_run_manifest, build_run_summary, build_task_result, finalize_run_manifest
+from .artifacts import build_run_manifest, build_run_summary, build_task_result, finalize_run_manifest
 from .collectors.correctness import load_correctness_artifact
 from .collectors.environment import collect_environment
 from .collectors.router import capture_router_snapshot
 from .collectors.source_control import collect_source_control
 from .collectors.vllm import capture_vllm_metrics
-from .common import atomic_write_json, write_text
+from .common import atomic_write_json, utc_now, write_text
 from .config import AgentBenchConfig
 from .dataset import Task, load_tasks
 from .metrics.request import aggregate_request_metrics, derive_session_topology
-from .metrics.router import aggregate_router_events, aggregate_router_window
+from .metrics.router import aggregate_router_window
 from .metrics.schema import EvidenceCapture
 from .metrics.source_health import evaluate_captures
 from .metrics.task import aggregate_task_results
@@ -195,6 +195,8 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
         if correctness_capture is not None:
             captures.append(correctness_capture)
 
+        finished_at = utc_now()
+        run_wall_time_seconds = (finished_at - manifest.created_at).total_seconds()
         facts = finalize_sync("request_facts", lambda: load_request_facts(context.trace_path))
         vllm_metrics = finalize_sync("vllm_aggregation", lambda: aggregate_vllm_metrics(vllm_start, vllm_end))
         summary = None
@@ -224,6 +226,7 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
                     },
                     evaluate_captures(captures),
                     lifecycle_payload,
+                    run_wall_time_seconds,
                 ).to_dict(),
             )
         if summary is not None:
@@ -235,7 +238,7 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
         for attempt in range(2):
             try:
                 evidence = tuple(_capture_dict(capture) for capture in captures)
-                finalized_manifest = finalize_run_manifest(manifest, evidence, status=status)
+                finalized_manifest = finalize_run_manifest(manifest, evidence, status=status, finished_at=finished_at)
                 atomic_write_json(output_dir / "manifest.json", finalized_manifest.to_dict())
             except BaseException as exc:
                 _record_finalization_error(finalization_errors, captures, "manifest_finalize", exc)
@@ -507,17 +510,3 @@ async def check_preflight(config: AgentBenchConfig) -> None:
             response = await client.get(f"{config.router.base_url.rstrip('/')}/health")
             if response.status_code != 200:
                 raise RuntimeError(f"Router {config.router.base_url} is not healthy")
-
-
-def summarize_run(run_dir: Path, config: AgentBenchConfig) -> RunSummary:
-    facts = load_request_facts(run_dir / "requests.jsonl")
-    return build_run_summary(
-        run_dir.name,
-        aggregate_task_results([]),
-        aggregate_request_metrics(facts),
-        aggregate_router_events([]) if config.router.enabled else None,
-        aggregate_vllm_metrics(None, None),
-        {"available": False, "reason": "artifact missing", "metadata": {}},
-        evaluate_captures([]),
-        {"status": "summarized", "error": None, "proxy_close": None},
-    )

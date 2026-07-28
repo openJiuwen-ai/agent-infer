@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 
@@ -54,6 +53,8 @@ def write_run(
         {"queue_time": {"mean": 0.4, "count": 2, "sum": 0.8}} if vllm_available else {},
         {},
         {},
+        None,
+        None,
     )
     router = RouterMetrics(router_events) if router_events is not None else None
     health = SourceHealth(1, 0, 1 if router is None else 0, (), {})
@@ -66,10 +67,15 @@ def write_run(
         {"available": False, "reason": "artifact missing", "metadata": {}},
         health,
         {"status": "completed", "error": None, "proxy_close": None},
+        duration,
     )
     (run_dir / "summary.json").write_text(json.dumps(summary.to_dict()), encoding="utf-8")
-    manifest = finalize_run_manifest(build_run_manifest(run_dir.name, {}), ())
-    manifest = replace(manifest, finished_at=manifest.created_at + timedelta(seconds=duration))
+    manifest = build_run_manifest(run_dir.name, {})
+    manifest = finalize_run_manifest(
+        manifest,
+        (),
+        finished_at=manifest.created_at + timedelta(seconds=duration),
+    )
     (run_dir / "manifest.json").write_text(json.dumps(manifest.to_dict()), encoding="utf-8")
 
 
@@ -106,6 +112,27 @@ def test_compare_accepts_cli_metadata_in_finalized_summary(tmp_path: Path) -> No
     loaded = load_summary(run_dir)
 
     assert loaded["cli"] == summary["cli"]
+
+
+def test_compare_falls_back_for_legacy_summary_metrics(tmp_path: Path) -> None:
+    run_dir = tmp_path / "legacy"
+    write_run(run_dir, duration=8, requests=2)
+    summary_path = run_dir / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    for field in (
+        "run_wall_time_seconds",
+        "request_throughput_per_second",
+        "input_token_throughput_per_second",
+        "output_token_throughput_per_second",
+    ):
+        summary.pop(field)
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    with pytest.warns(DeprecationWarning, match="manifest fallback is deprecated"):
+        loaded = load_summary(run_dir)
+
+    assert loaded["run_wall_time_seconds"] == 8
+    assert loaded["request_throughput_per_second"] == pytest.approx(2 / 8)
 
 
 def test_compare_excludes_null_cache_creation_samples(tmp_path: Path) -> None:
