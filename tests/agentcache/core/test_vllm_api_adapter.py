@@ -450,3 +450,17 @@ def test_lifecycle_channel_isolated_by_dp_rank(tmp_path) -> None:
     assert receiver_one.receive() == (signal,)
     receiver_zero.close()
     receiver_one.close()
+
+
+def test_lifecycle_channel_broadcasts_to_internal_dp_ranks_without_explicit_rank(tmp_path) -> None:
+    socket_path = str(tmp_path / "lifecycle.sock")
+    receiver_zero = UnixLifecycleReceiver(socket_path, 0)
+    receiver_one = UnixLifecycleReceiver(socket_path, 1)
+    sender = UnixLifecycleSender(socket_path)
+    signal = LifecycleSignal("program-1", ProgramLifecycle.TERMINAL)
+
+    assert sender.send(signal, None) is True
+    assert receiver_zero.receive() == (signal,)
+    assert receiver_one.receive() == (signal,)
+    receiver_zero.close()
+    receiver_one.close()

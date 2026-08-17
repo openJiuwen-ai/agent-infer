@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from agentinfer.scheduling.backend import BackendInfo, BackendPoolInfo, DpRankInfo
-from agentinfer.scheduling.domain import ProgramRef, ProgramState, ProgramStatus
+from agentinfer.scheduling.domain import ProgramRef, ProgramState, ProgramStatus, SharedPrefixAttribution
 from agentinfer.scheduling.identity import AgentIdentity
 from agentinfer.scheduling.lifecycle import ProgramLifecycle
 from agentinfer.scheduling.progress_ttl import ProgressTTLConfig, build_progress_ttl_strategy
@@ -34,7 +34,6 @@ def backend(capacity: int) -> BackendPoolInfo:
 def test_scheduler_retains_queued_request_and_releases_it_after_capacity_handoff() -> None:
     components = build_progress_ttl_strategy(
         ProgressTTLConfig(
-            target_min_segment_rounds=1,
             target_max_segment_rounds=2,
             decode_buffer_tokens=0,
             ttl_min_seconds=1000,
@@ -73,7 +72,6 @@ def test_scheduler_privilege_handoff_pauses_parent_and_immediately_releases_chil
     components = build_progress_ttl_strategy(
         ProgressTTLConfig(
             decode_buffer_tokens=0,
-            privileged_lookahead_rounds=14,
             ttl_min_seconds=1000,
             ttl_max_seconds=1000,
         )
@@ -219,7 +217,9 @@ def test_scheduler_throttles_periodic_work_but_preserves_due_deadlines() -> None
             decode_buffer_tokens=0,
             ttl_min_seconds=1000,
             ttl_max_seconds=1000,
-            ttl_prefill_seconds_per_1k_uncached_tokens=10_000,
+            ttl_prefill_model_intercept_seconds=0,
+            ttl_prefill_model_linear_seconds_per_1k_tokens=10_000,
+            ttl_prefill_model_quadratic_seconds_per_1k_tokens_squared=0,
             ttl_decode_throughput_alpha=1,
         )
     )
@@ -242,9 +242,11 @@ def test_scheduler_throttles_periodic_work_but_preserves_due_deadlines() -> None
 
         monotonic.return_value = 11
         scheduler.on_request_completion("r1", 120)
+        assert scheduler.needs_schedule_cycle(11) is True
+        scheduler.schedule_cycle(backend(1000))
         assert scheduler.needs_schedule_cycle(11) is False
         assert scheduler.needs_schedule_cycle(14.9) is False
-        assert scheduler.needs_schedule_cycle(15) is True
+        assert scheduler.needs_schedule_cycle(16) is True
         with pytest.raises(ValueError, match="finite and non-negative"):
             scheduler.needs_schedule_cycle(float("inf"))
 
@@ -299,6 +301,30 @@ def test_scheduler_retains_first_native_prefix_hit_during_warmup_freshness() -> 
     assert program.tokens.shared_prefix_fresh_until_monotonic_s is not None
 
 
+def test_scheduler_records_exact_ref_count_share_separately_from_total_cache_hit() -> None:
+    components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0))
+    components.initial_factors.global_factors.request_window_size = 1
+    scheduler = ProgramScheduler[str, object, object](
+        components.strategy,
+        components.initial_factors,
+        backend(20_000),
+    )
+
+    with patch("agentinfer.scheduling.runtime.time.monotonic", return_value=10):
+        assert scheduler.on_request_arrival("r1", AgentIdentity("p1"), 1000, backend(20_000), "native-r1") is True
+        scheduler.on_prefix_cache_observation("r1", 800, 200)
+        scheduler.on_stream_output("r1", 100)
+        scheduler.on_request_completion("r1", 1100)
+
+    program = scheduler.registry.require(ProgramRef("p1", 0))
+    sample = components.initial_factors.global_factors._request_samples[0]
+    assert program.tokens.shared_prefix_tokens == 200
+    assert program.tokens.shared_prefix_attribution is SharedPrefixAttribution.EXACT
+    assert sample.cached_prefix_tokens == 800
+    assert sample.uncached_prompt_tokens == 200
+    assert sample.cache_churn_tokens == 300
+
+
 def test_scheduler_refreshes_shared_prefix_only_after_its_freshness_deadline() -> None:
     components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0))
     scheduler = ProgramScheduler[str, object, object](
@@ -318,7 +344,7 @@ def test_scheduler_refreshes_shared_prefix_only_after_its_freshness_deadline() -
         assert result.applied is True
 
         monotonic.return_value = 30
-        assert scheduler.on_request_arrival("r2", AgentIdentity("p1"), 320, backend(20_000), "native-r2") is False
+        assert scheduler.on_request_arrival("r2", AgentIdentity("p1"), 320, backend(20_000), "native-r2") is True
         scheduler.on_prefix_cache_observation("r2", 100)
         assert program.tokens.shared_prefix_tokens == 250
 
@@ -334,7 +360,6 @@ def test_scheduler_refreshes_shared_prefix_only_after_its_freshness_deadline() -
 def test_rolling_request_latency_includes_request_pool_wait() -> None:
     components = build_progress_ttl_strategy(
         ProgressTTLConfig(
-            target_min_segment_rounds=1,
             decode_buffer_tokens=0,
             ttl_min_seconds=1000,
             ttl_max_seconds=1000,
@@ -363,3 +388,29 @@ def test_rolling_request_latency_includes_request_pool_wait() -> None:
 
     samples = tuple(components.initial_factors.global_factors._request_samples)
     assert samples[-1].request_latency_seconds == 94
+
+
+def test_request_arrival_immediately_resumes_a_ttl_paused_program() -> None:
+    components = build_progress_ttl_strategy(
+        ProgressTTLConfig(decode_buffer_tokens=0, ttl_min_seconds=0, ttl_max_seconds=0)
+    )
+    components.initial_factors.global_factors.avg_input_token_growth_per_round = 0
+    scheduler = ProgramScheduler[str, object, object](
+        components.strategy,
+        components.initial_factors,
+        backend(1000),
+        schedule_interval_seconds=1,
+    )
+    metadata = AgentIdentity("p1")
+
+    assert scheduler.on_request_arrival("r1", metadata, 100, backend(1000), "native-r1") is True
+    scheduler.on_request_completion("r1", 120)
+    scheduler.schedule_cycle(backend(1000))
+    ref = scheduler.registry.current_ref("p1")
+
+    assert ref is not None
+    assert scheduler.registry.require(ref).state is ProgramState.PAUSED
+    assert scheduler.retained_request_count == 0
+    assert scheduler.on_request_arrival("r2", metadata, 120, backend(1000), "native-r2") is True
+    assert scheduler.registry.require(ref).state is ProgramState.ACTIVE
+    assert scheduler.retained_request_count == 0

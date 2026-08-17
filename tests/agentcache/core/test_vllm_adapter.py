@@ -10,7 +10,12 @@ from vllm.v1.core.sched.async_scheduler import AsyncScheduler
 from vllm.v1.core.sched.scheduler import Scheduler
 from vllm.v1.engine import EngineCoreEvent, EngineCoreEventType
 
-from agentinfer.agentcache.core.scheduler import AgentCacheAsyncSchedulerBridge, _metadata_from_request, _resolve_object
+from agentinfer.agentcache.core.scheduler import (
+    AgentCacheAsyncSchedulerBridge,
+    _metadata_from_request,
+    _resolve_object,
+    _VllmAdmissionHooks,
+)
 from agentinfer.scheduling.backend import DispatchTarget
 from agentinfer.scheduling.request_pool import RequestPool, RequestPoolEntry
 
@@ -24,7 +29,8 @@ class _Controller:
         self.pool: RequestPool[object] = RequestPool()
         self.schedule_calls = 0
         self.completed: list[tuple[str, int]] = []
-        self.prefix_observations: list[tuple[str, int]] = []
+        self.prefix_observations: list[tuple[str, int, int | None]] = []
+        self.recovery_observations: list[tuple[int, float]] = []
         self.prefix_candidates: list[tuple[str, object]] = []
 
     @property
@@ -58,8 +64,11 @@ class _Controller:
     def on_stream_output(self, request_id, total_output_tokens) -> None:
         return None
 
-    def on_prefix_cache_observation(self, request_id, cached_prefix_tokens) -> None:
-        self.prefix_observations.append((request_id, cached_prefix_tokens))
+    def on_prefix_cache_observation(self, request_id, cached_prefix_tokens, shared_prefix_tokens=None) -> None:
+        self.prefix_observations.append((request_id, cached_prefix_tokens, shared_prefix_tokens))
+
+    def on_cache_recovery_observation(self, recovered_tokens, elapsed_seconds) -> None:
+        self.recovery_observations.append((recovered_tokens, elapsed_seconds))
 
     def on_request_completion(self, request_id, total_tokens) -> None:
         self.completed.append((request_id, total_tokens))
@@ -180,9 +189,38 @@ def test_async_bridge_retains_then_releases_to_native_waiting() -> None:
     assert bridge.waiting is native_waiting
     assert controller.retained_request_count == 0
     assert controller.schedule_calls == 1
-    assert controller.prefix_observations == [("request-1", 64)]
+    assert controller.prefix_observations == [("request-1", 64, None)]
     assert rank.dp_rank == 3
     assert rank.total_hbm_kv_tokens == 160
+
+
+def test_ref_count_shared_tokens_uses_conservative_common_prefix_across_groups() -> None:
+    computed = SimpleNamespace(
+        blocks=(
+            [SimpleNamespace(ref_cnt=1), SimpleNamespace(ref_cnt=1), SimpleNamespace(ref_cnt=0)],
+            [SimpleNamespace(ref_cnt=2), SimpleNamespace(ref_cnt=0), SimpleNamespace(ref_cnt=0)],
+        )
+    )
+
+    assert _VllmAdmissionHooks._ref_count_shared_tokens(computed, 96) == 32
+
+
+def test_prefix_lookup_observer_captures_ref_counts_before_native_allocation() -> None:
+    computed = SimpleNamespace(
+        blocks=([SimpleNamespace(ref_cnt=1), SimpleNamespace(ref_cnt=0)],),
+    )
+    owner = SimpleNamespace(
+        kv_cache_manager=SimpleNamespace(get_computed_blocks=lambda request: (computed, 64)),
+    )
+    hooks = object.__new__(_VllmAdmissionHooks)
+    hooks.tracked_native = {"request-1"}
+    hooks._local_prefix_observations = {}
+    hooks._install_prefix_lookup_observer(owner)
+
+    returned = owner.kv_cache_manager.get_computed_blocks(SimpleNamespace(request_id="request-1"))
+
+    assert returned == (computed, 64)
+    assert hooks._local_prefix_observations == {"request-1": (64, 32)}
 
 
 def test_async_bridge_rejects_obsolete_configured_rank_count() -> None:

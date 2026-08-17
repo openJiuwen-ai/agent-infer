@@ -24,10 +24,13 @@ class RequestStatSample:
     completion_tokens: int | None
     total_tokens: int
     request_latency_seconds: float
+    decode_seconds: float | None
     active_programs: int
     waiting_programs: int
     input_token_growth: int | None
+    cache_churn_tokens: int
     inter_request_gap_seconds: float
+    scheduler_queue_seconds: float
     rounds_since_ttl_pause: int
 
 
@@ -63,12 +66,14 @@ class ProgressTTLGlobalFactors:
     avg_uncached_prompt_tokens: float = 1024.0
     avg_completion_tokens: float = 256.0
     avg_total_tokens: float = 1280.0
-    avg_router_queue_seconds: float = 0.0
+    avg_scheduler_queue_seconds: float = 0.0
     avg_request_latency_seconds: float = 1.0
+    avg_decode_seconds: float = 1.0
     avg_active_programs: float = 1.0
     avg_waiting_programs: float = 0.0
-    avg_segment_served_rounds_on_pause: float = 1.0
+    avg_ttl_pause_segment_rounds: float = 1.0
     avg_input_token_growth_per_round: float = 1024.0
+    avg_cache_churn_tokens_per_round: float = 1280.0
     avg_rounds_since_ttl_pause: float = 0.0
     avg_inter_request_gap_seconds: float = 0.0
     avg_reasoning_seconds: float = 1.0
@@ -86,12 +91,16 @@ class ProgressTTLGlobalFactors:
     _completion_token_count: int = field(default=0, init=False, repr=False)
     _total_token_sum: int = field(default=0, init=False, repr=False)
     _request_latency_sum: float = field(default=0.0, init=False, repr=False)
+    _decode_seconds_sum: float = field(default=0.0, init=False, repr=False)
+    _decode_seconds_count: int = field(default=0, init=False, repr=False)
     _active_program_sum: int = field(default=0, init=False, repr=False)
     _waiting_program_sum: int = field(default=0, init=False, repr=False)
     _inter_request_gap_sum: float = field(default=0.0, init=False, repr=False)
+    _scheduler_queue_seconds_sum: float = field(default=0.0, init=False, repr=False)
     _rounds_since_ttl_pause_sum: int = field(default=0, init=False, repr=False)
-    _pause_served_rounds: deque[int] = field(default_factory=deque, init=False, repr=False)
-    _pause_served_rounds_sum: int = field(default=0, init=False, repr=False)
+    _cache_churn_token_sum: int = field(default=0, init=False, repr=False)
+    _ttl_pause_segment_rounds: deque[int] = field(default_factory=deque, init=False, repr=False)
+    _ttl_pause_segment_rounds_sum: int = field(default=0, init=False, repr=False)
     _continuity_samples: deque[ContinuitySample] = field(default_factory=deque, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -108,12 +117,14 @@ class ProgressTTLGlobalFactors:
             self.avg_uncached_prompt_tokens,
             self.avg_completion_tokens,
             self.avg_total_tokens,
-            self.avg_router_queue_seconds,
+            self.avg_scheduler_queue_seconds,
             self.avg_request_latency_seconds,
+            self.avg_decode_seconds,
             self.avg_active_programs,
             self.avg_waiting_programs,
-            self.avg_segment_served_rounds_on_pause,
+            self.avg_ttl_pause_segment_rounds,
             self.avg_input_token_growth_per_round,
+            self.avg_cache_churn_tokens_per_round,
             self.avg_rounds_since_ttl_pause,
             self.avg_inter_request_gap_seconds,
             self.avg_reasoning_seconds,
@@ -137,7 +148,10 @@ class ProgressTTLGlobalFactors:
         waiting_programs: int,
         input_token_growth: int,
         inter_request_gap_seconds: float,
+        cache_churn_tokens: int | None = None,
         rounds_since_ttl_pause: int = 0,
+        decode_seconds: float | None = None,
+        scheduler_queue_seconds: float = 0.0,
     ) -> None:
         """Update request-level rolling averages using one sanitized sample."""
         sample = self._sanitize_request_sample(
@@ -149,31 +163,40 @@ class ProgressTTLGlobalFactors:
             active_programs=active_programs,
             waiting_programs=waiting_programs,
             input_token_growth=input_token_growth,
+            cache_churn_tokens=(
+                max(0, prompt_tokens - cached_prefix_tokens) + max(0, completion_tokens)
+                if cache_churn_tokens is None
+                else cache_churn_tokens
+            ),
             inter_request_gap_seconds=inter_request_gap_seconds,
+            scheduler_queue_seconds=scheduler_queue_seconds,
             rounds_since_ttl_pause=rounds_since_ttl_pause,
+            decode_seconds=decode_seconds,
         )
         self.request_count += 1
         self._append_request_sample(sample)
         self._evict_request_samples_to_target()
         self._refresh_request_averages_if_ready()
 
-    def update_pause(self, *, served_rounds: int) -> None:
-        """Update bounded segment statistics when a Program is paused."""
+    def update_ttl_pause(self, *, served_rounds: int) -> None:
+        """Update the bounded workload-continuity window at an actual TTL pause."""
         sanitized_rounds = max(served_rounds, 0)
-        self._pause_served_rounds.append(sanitized_rounds)
-        self._pause_served_rounds_sum += sanitized_rounds
-        while len(self._pause_served_rounds) > self.request_window_size:
-            self._pause_served_rounds_sum -= self._pause_served_rounds.popleft()
-        if len(self._pause_served_rounds) >= self._min_samples_for_update(self.request_window_size):
-            self.avg_segment_served_rounds_on_pause = self._pause_served_rounds_sum / len(self._pause_served_rounds)
+        self._ttl_pause_segment_rounds.append(sanitized_rounds)
+        self._ttl_pause_segment_rounds_sum += sanitized_rounds
+        while len(self._ttl_pause_segment_rounds) > self.request_window_size:
+            self._ttl_pause_segment_rounds_sum -= self._ttl_pause_segment_rounds.popleft()
+        if self.ttl_pause_window_ready:
+            self.avg_ttl_pause_segment_rounds = self._ttl_pause_segment_rounds_sum / len(self._ttl_pause_segment_rounds)
 
-    def protected_min_segment_rounds(self, configured_upper_bound: int) -> int:
-        """Return the bounded workload-derived minimum continuous-service target."""
-        if configured_upper_bound <= 0:
-            raise ValueError("configured_upper_bound must be positive")
-        if len(self._request_samples) < self.request_window_size:
-            return configured_upper_bound
-        return min(configured_upper_bound, self.estimated_continuity_rounds())
+    @property
+    def ttl_pause_sample_count(self) -> int:
+        """Return actual TTL pauses retained for workload-continuity estimation."""
+        return len(self._ttl_pause_segment_rounds)
+
+    @property
+    def ttl_pause_window_ready(self) -> bool:
+        """Return whether TTL-pause rounds are mature enough for a dynamic force deadline."""
+        return len(self._ttl_pause_segment_rounds) >= self._min_samples_for_update(self.request_window_size)
 
     @property
     def request_window_complete(self) -> bool:
@@ -186,7 +209,7 @@ class ProgressTTLGlobalFactors:
         return len(self._request_samples)
 
     def estimated_continuity_rounds(self) -> int:
-        """Return the unbounded workload estimate used before policy-specific lookahead caps."""
+        """Return the unbounded workload estimate used before policy-specific segment caps."""
         if not self.request_window_complete:
             return 0
         return max(1, math.ceil(2 * self.avg_rounds_since_ttl_pause))
@@ -276,11 +299,13 @@ class ProgressTTLGlobalFactors:
     def recommended_ttl_seconds(
         self, *, impact_seconds: float, minimum_seconds: float, maximum_seconds: float
     ) -> float:
-        """Return the warm-up impact TTL or the complete-window lognormal expected-utility optimum."""
+        """Return zero during warm-up or the complete-window lognormal expected-utility optimum."""
         impact = max(0.0, impact_seconds)
         if maximum_seconds < minimum_seconds:
             raise ValueError("maximum_seconds must be >= minimum_seconds")
-        if not self.continuity_window_complete or self.continuity_log_mu is None or self.continuity_log_sigma is None:
+        if not self.continuity_window_complete:
+            return 0.0
+        if self.continuity_log_mu is None or self.continuity_log_sigma is None:
             return min(maximum_seconds, max(minimum_seconds, impact))
         sigma = self.continuity_log_sigma
         if sigma <= 1e-9:
@@ -394,11 +419,20 @@ class ProgressTTLGlobalFactors:
         active_programs: int,
         waiting_programs: int,
         input_token_growth: int,
+        cache_churn_tokens: int,
         inter_request_gap_seconds: float,
+        scheduler_queue_seconds: float,
         rounds_since_ttl_pause: int,
+        decode_seconds: float | None,
     ) -> RequestStatSample:
-        if not math.isfinite(request_latency_seconds) or not math.isfinite(inter_request_gap_seconds):
-            raise ValueError("request latency and inter-request gap must be finite")
+        if (
+            not math.isfinite(request_latency_seconds)
+            or not math.isfinite(inter_request_gap_seconds)
+            or not math.isfinite(scheduler_queue_seconds)
+        ):
+            raise ValueError("request latency, inter-request gap, and scheduler queue duration must be finite")
+        if decode_seconds is not None and (not math.isfinite(decode_seconds) or decode_seconds < 0):
+            raise ValueError("decode duration must be finite and non-negative")
         prompt_value = max(prompt_tokens, 0)
         cached_value = min(prompt_value, max(cached_prefix_tokens, 0))
         total_value = max(total_tokens, 0)
@@ -418,10 +452,13 @@ class ProgressTTLGlobalFactors:
             completion_tokens=completion_value,
             total_tokens=total_value,
             request_latency_seconds=max(request_latency_seconds, 0.0),
+            decode_seconds=decode_seconds,
             active_programs=max(active_programs, 0),
             waiting_programs=max(waiting_programs, 0),
             input_token_growth=input_growth,
+            cache_churn_tokens=max(0, cache_churn_tokens),
             inter_request_gap_seconds=max(inter_request_gap_seconds, 0.0),
+            scheduler_queue_seconds=max(scheduler_queue_seconds, 0.0),
             rounds_since_ttl_pause=max(rounds_since_ttl_pause, 0),
         )
 
@@ -460,10 +497,15 @@ class ProgressTTLGlobalFactors:
             self._completion_token_count += 1
         self._total_token_sum += sample.total_tokens
         self._request_latency_sum += sample.request_latency_seconds
+        if sample.decode_seconds is not None:
+            self._decode_seconds_sum += sample.decode_seconds
+            self._decode_seconds_count += 1
         self._active_program_sum += sample.active_programs
         self._waiting_program_sum += sample.waiting_programs
         self._inter_request_gap_sum += sample.inter_request_gap_seconds
+        self._scheduler_queue_seconds_sum += sample.scheduler_queue_seconds
         self._rounds_since_ttl_pause_sum += sample.rounds_since_ttl_pause
+        self._cache_churn_token_sum += sample.cache_churn_tokens
 
     def _remove_request_sample(self) -> None:
         sample = self._request_samples.popleft()
@@ -475,10 +517,15 @@ class ProgressTTLGlobalFactors:
             self._completion_token_count -= 1
         self._total_token_sum -= sample.total_tokens
         self._request_latency_sum -= sample.request_latency_seconds
+        if sample.decode_seconds is not None:
+            self._decode_seconds_sum -= sample.decode_seconds
+            self._decode_seconds_count -= 1
         self._active_program_sum -= sample.active_programs
         self._waiting_program_sum -= sample.waiting_programs
         self._inter_request_gap_sum -= sample.inter_request_gap_seconds
+        self._scheduler_queue_seconds_sum -= sample.scheduler_queue_seconds
         self._rounds_since_ttl_pause_sum -= sample.rounds_since_ttl_pause
+        self._cache_churn_token_sum -= sample.cache_churn_tokens
 
     def _evict_request_samples_to_target(self) -> None:
         while len(self._request_samples) > self.request_window_size:
@@ -495,6 +542,8 @@ class ProgressTTLGlobalFactors:
             self.avg_completion_tokens = self._completion_token_sum / self._completion_token_count
         self.avg_total_tokens = self._total_token_sum / sample_count
         self.avg_request_latency_seconds = self._request_latency_sum / sample_count
+        if self._decode_seconds_count > 0:
+            self.avg_decode_seconds = self._decode_seconds_sum / self._decode_seconds_count
         self.avg_active_programs = self._active_program_sum / sample_count
         self.avg_waiting_programs = self._waiting_program_sum / sample_count
         growth_samples = [
@@ -502,7 +551,9 @@ class ProgressTTLGlobalFactors:
         ]
         if growth_samples:
             self.avg_input_token_growth_per_round = sum(growth_samples) / len(growth_samples)
+        self.avg_cache_churn_tokens_per_round = self._cache_churn_token_sum / sample_count
         self.avg_inter_request_gap_seconds = self._inter_request_gap_sum / sample_count
+        self.avg_scheduler_queue_seconds = self._scheduler_queue_seconds_sum / sample_count
         self.avg_rounds_since_ttl_pause = self._rounds_since_ttl_pause_sum / sample_count
 
     def _min_samples_for_update(self, window_size: int) -> int:
