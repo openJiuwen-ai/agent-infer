@@ -11,9 +11,6 @@ related_code_paths:
   - tests/agentbench/request_proxy/**
 depends_on:
   - index.md
-decision_refs:
-  - https://github.com/JiusiServe/AgentInfer/issues/8
-  - https://github.com/JiusiServe/AgentInfer/issues/27
 validation_paths:
   - tests/agentbench/request_proxy/**
   - tests/agentbench/test_headers.py

@@ -10,9 +10,6 @@ related_code_paths:
   - tests/agentbench/agents/**
 depends_on:
   - index.md
-decision_refs:
-  - https://github.com/JiusiServe/AgentInfer/issues/8
-  - https://github.com/JiusiServe/AgentInfer/issues/27
 validation_paths:
   - tests/agentbench/agents/**
 upstream_refs:
