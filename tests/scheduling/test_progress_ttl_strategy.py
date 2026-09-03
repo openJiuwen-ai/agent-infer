@@ -662,6 +662,9 @@ def test_privileged_relationship_handoff_transfers_one_task_slot() -> None:
 
     assert parent_outcome.disposition is AdmissionDisposition.ADMITTED
     assert components.initial_factors.for_program(parent_waiting.ref).is_privileged is True
+    assert components.initial_factors.for_program(parent_waiting.ref).privilege_deadline_monotonic_s == pytest.approx(
+        100.0 + components.strategy.config.privileged_ttl_seconds
+    )
 
     parent_active = replace(
         parent_waiting, state=ProgramState.ACTIVE, status=ProgramStatus.ACTING, backend_id="backend"

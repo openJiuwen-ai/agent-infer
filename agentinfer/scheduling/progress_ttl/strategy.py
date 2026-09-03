@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 import math
-import time
 from dataclasses import replace
 
 from agentinfer.scheduling.admission_outcome import AdmissionDisposition, AdmissionOutcome
@@ -263,7 +262,13 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
                 )
                 self._require_applied(result)
                 if candidate_privileged:
-                    self._set_privileged(strategy_factors, view.ref, True, reason="batch_gain_admission_promote")
+                    self._set_privileged(
+                        strategy_factors,
+                        view.ref,
+                        True,
+                        reason="batch_gain_admission_promote",
+                        now_monotonic_s=snapshot.observed_at_monotonic_s,
+                    )
                 return AdmissionOutcome(
                     AdmissionDisposition.ADMITTED,
                     "batch_gain_over_recovery_cost",
@@ -282,7 +287,13 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
         result = transitions.admit(candidate, reason="direct_capacity", backend_id=snapshot.backend_id)
         self._require_applied(result)
         if candidate_privileged:
-            self._set_privileged(strategy_factors, view.ref, True, reason="direct_admission_promote")
+            self._set_privileged(
+                strategy_factors,
+                view.ref,
+                True,
+                reason="direct_admission_promote",
+                now_monotonic_s=snapshot.observed_at_monotonic_s,
+            )
         return AdmissionOutcome(
             AdmissionDisposition.ADMITTED,
             "direct_capacity",
@@ -637,7 +648,13 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
                             backend_id=snapshot.backend_id,
                         )
                     )
-                self._set_privileged(strategy_factors, target.ref, True, reason="ttl_handoff")
+                self._set_privileged(
+                    strategy_factors,
+                    target.ref,
+                    True,
+                    reason="ttl_handoff",
+                    now_monotonic_s=snapshot.observed_at_monotonic_s,
+                )
                 protected_targets.add(target.ref)
         for program in snapshot.programs:
             sidecar = self._program_factors(strategy_factors, program.ref)
@@ -1014,11 +1031,21 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
             return False
         return len(privileged) < self._privileged_program_limit(snapshot)
 
-    def _set_privileged(self, state: ProgressTTLFactors, ref: ProgramRef, enabled: bool, *, reason: str) -> None:
-        """Update one policy-owned privilege bit and emit a stable experiment diagnostic."""
+    def _set_privileged(
+        self,
+        state: ProgressTTLFactors,
+        ref: ProgramRef,
+        enabled: bool,
+        *,
+        reason: str,
+        now_monotonic_s: float | None = None,
+    ) -> None:
+        """Update one privilege bit using the caller's deterministic decision clock."""
         current = self._program_factors(state, ref)
         if current.is_privileged is enabled and current.privilege_reason == reason:
             return
+        if enabled and now_monotonic_s is None:
+            raise ValueError("now_monotonic_s is required when enabling privilege")
         state.set_program_factors(
             ref,
             replace(
@@ -1026,7 +1053,9 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
                 is_privileged=enabled,
                 privilege_reason=reason,
                 privilege_deadline_monotonic_s=(
-                    time.monotonic() + self.config.privileged_ttl_seconds if enabled else None
+                    now_monotonic_s + self.config.privileged_ttl_seconds
+                    if now_monotonic_s is not None and enabled
+                    else None
                 ),
                 privilege_ttl_expired=False if enabled else current.privilege_ttl_expired,
             ),
@@ -1065,7 +1094,13 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
                     program.ref.generation,
                 ),
             )
-            self._set_privileged(state, selected.ref, True, reason="scheduled_progress_promote")
+            self._set_privileged(
+                state,
+                selected.ref,
+                True,
+                reason="scheduled_progress_promote",
+                now_monotonic_s=snapshot.observed_at_monotonic_s,
+            )
 
     def _privileged_relationship_source(
         self,
@@ -1134,7 +1169,13 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
                 backend_id=snapshot.backend_id,
             )
         self._require_applied(target_result)
-        self._set_privileged(state, candidate.ref, True, reason="relationship_handoff_target")
+        self._set_privileged(
+            state,
+            candidate.ref,
+            True,
+            reason="relationship_handoff_target",
+            now_monotonic_s=snapshot.observed_at_monotonic_s,
+        )
         active_after_handoff = tuple(
             program for program in self._active_programs(snapshot) if program.ref not in {source.ref, candidate.ref}
         )
