@@ -1,5 +1,5 @@
 """Expose AgentInfer components and optional vLLM runtime integration."""
-
+__version__ = "0.1.0"
 AGENT_AWARE_SCHEDULER = "agentinfer.agentcache.core.scheduler.AgentAwareScheduler"
 
 try:
