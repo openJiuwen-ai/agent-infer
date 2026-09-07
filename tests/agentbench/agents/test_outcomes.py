@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 """Verify external string values used by runtime artifacts."""
 
 from agentinfer.agentbench.agents import AgentRunOutcome, TerminationReason

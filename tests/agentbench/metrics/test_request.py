@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 from dataclasses import replace
 
 from agentinfer.agentbench.benchkit.metrics.request import (

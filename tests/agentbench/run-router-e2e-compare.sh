@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 # Cold baseline -> cold candidate -> compare. Services use explicit tmux sessions.
 set -euo pipefail
 

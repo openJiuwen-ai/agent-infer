@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentCache project
+
 """Delegate explicit AgentInfer benchmark invocations to BenchKit."""
 
 import sys

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 from agentinfer.agentbench.benchkit.metrics.router import aggregate_router_events, aggregate_router_window
 
 

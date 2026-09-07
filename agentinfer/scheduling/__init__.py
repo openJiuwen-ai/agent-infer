@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 """Host-neutral scheduling contracts shared by AgentCache and AgentRouter."""
 
 from agentinfer.scheduling.admission_outcome import AdmissionDisposition, AdmissionOutcome

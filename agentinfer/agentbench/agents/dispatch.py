@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 """Dispatch benchmark tasks to concrete agent runtimes."""
 
 from .claude.runner import run_claude

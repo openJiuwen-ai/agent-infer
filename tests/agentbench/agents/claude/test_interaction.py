@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 """Phase 1 boundary tests for interaction handlers and controller."""
 
 from __future__ import annotations

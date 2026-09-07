@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 """Expose Claude profile policy used by the Claude runtime.
 
 Transcript processing remains available from its owning module; process,

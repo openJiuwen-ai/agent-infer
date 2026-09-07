@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 """Normalize Claude Code transcripts and classify terminal task states.
 
 ``TranscriptLoader`` and ``TranscriptNormalizer`` form the JSONL boundary;
