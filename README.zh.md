@@ -1,7 +1,6 @@
 # AgentInfer
 
-AgentInfer 为智能体工作流提供高效的缓存管理和请求调度能力，既可集成到 vLLM 等 LLM 推理引擎中，也可作为
-推理引擎前置的请求路由器运行。
+AgentInfer 为智能体工作流提供缓存管理和请求调度能力，可集成到 vLLM 等 LLM 推理引擎中或作为前置请求路由器运行。
 
 [English](README.md)
 

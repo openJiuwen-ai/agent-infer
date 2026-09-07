@@ -1,7 +1,6 @@
 # AgentInfer
 
-AgentInfer provides efficient cache management and request scheduling for agent workflows. It integrates with LLM
-serving engines such as vLLM or operates as a request router in front of them.
+AgentInfer manages caches and schedules agent workflow requests in or in front of LLM serving engines such as vLLM.
 
 [中文](README.zh.md)
 

@@ -21,3 +21,7 @@ status and `last_reviewed` metadata to decide whether they apply to current impl
 
 The current usage entry point remains the repository-root [`skills/`](../../../skills/README.md). Designs explain
 historical decisions and do not replace instructions in each current `SKILL.md`.
+
+## Maintenance Records
+
+- [CI and unit-test fixes](../../../design/ci-ut-fixes.md)

@@ -22,8 +22,8 @@ use Linux or WSL 2 and install the supported vLLM 0.23.0 release in the same env
 ## Change Requirements
 
 - Keep each change focused, and add or update tests for behavioral changes.
-- User-visible changes must update the authoritative `docs/zh/` content and the corresponding `docs/en/` content in
- the same pull request.
+- Changes under `agentinfer/` must update the authoritative `docs/zh/` content and the corresponding `docs/en/`
+ content in the same pull request.
 - Place each new document in exactly one category: Tutorial, How-to, Reference, or Explanation. Only Tutorial
  filenames use numeric prefixes.
 - Use short, descriptive kebab-case English filenames, and cover only one topic per document.

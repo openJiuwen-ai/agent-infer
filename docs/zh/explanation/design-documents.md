@@ -21,3 +21,7 @@
 
 Skills 的当前使用入口仍位于仓根目录的 [`skills/`](../../../skills/README.md)。设计稿解释历史决策，不替代
 各 `SKILL.md` 中的现行指令。
+
+## 维护记录
+
+- [CI 与单元测试修复记录](../../../design/ci-ut-fixes.md)
