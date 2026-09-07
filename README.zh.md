@@ -75,4 +75,6 @@ AgentBench；其他命令在未显式设置 `--scheduler-cls` 时使用 AgentInf
 
 本项目基于 [Apache License 2.0](LICENSE) 开源。
 
+本产品仅作为流程编排工具，不包含 AI 模型能力；用户在连接 AI 模型用于特定业务场景时，需自行承担欧盟 AI 法案等相关合规义务。
+
 [release-wheel]: https://gitcode.com/openJiuwen/agent-infer/releases/download/0.1.0/agentinfer-0.1.0-py3-none-any.whl
