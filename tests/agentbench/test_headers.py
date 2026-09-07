@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 from agentinfer.scheduling.headers import (
     CLAUDE_AGENT_HEADER,
     CLAUDE_SESSION_HEADER,

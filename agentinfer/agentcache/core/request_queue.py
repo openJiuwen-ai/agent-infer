@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentCache project
+
 from vllm.v1.core.sched.request_queue import FCFSRequestQueue, RequestQueue
 
 

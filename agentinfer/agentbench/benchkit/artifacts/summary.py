@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 """Build finalized run summary artifacts from normalized metrics."""
 
 from dataclasses import asdict

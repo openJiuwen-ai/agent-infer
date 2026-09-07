@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 from agentinfer.agentbench.agents import AgentRunOutcome, AgentRunResult, TerminationReason
 from agentinfer.agentbench.benchkit.metrics.task import aggregate_task_results
 

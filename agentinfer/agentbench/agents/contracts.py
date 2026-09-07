@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 """Define shared requests and results exchanged with agent runtimes.
 
 The runner and runtime boundary starts with ``AgentRunRequest`` and returns

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 """Progress-TTL configuration, decision factors, and scheduling policy."""
 
 from agentinfer.scheduling.progress_ttl.builder import ProgressTTLComponents, build_progress_ttl_strategy

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 """Shared Claude request header parsing and Router forwarding policy."""
 
 from collections.abc import Mapping

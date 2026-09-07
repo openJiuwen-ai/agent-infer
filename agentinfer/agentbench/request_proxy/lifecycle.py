@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 """Request Proxy startup, readiness, bounded shutdown, and evidence recovery."""
 
 import asyncio

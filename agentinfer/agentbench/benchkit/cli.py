@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 """Command-line interface for preparing, running, summarizing, and comparing benchmarks."""
 
 import argparse

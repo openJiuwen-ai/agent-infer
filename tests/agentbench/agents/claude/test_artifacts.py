@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 """Verify Claude runtime artifacts do not persist authentication secrets."""
 
 import asyncio

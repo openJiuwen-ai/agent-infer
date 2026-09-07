@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 # Cold upstream async scheduler -> cold AgentInfer scheduler bridge -> compare.
 set -euo pipefail
 

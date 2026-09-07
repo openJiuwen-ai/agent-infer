@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 """Expose shared contracts for benchmark agent runtimes.
 
 Provider dispatch and execution remain in their runtime packages; callers use

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 """Load and prepare benchmark dataset metadata.
 
 Normal benchmark runs read local SWE-bench-style JSONL and task-list files.

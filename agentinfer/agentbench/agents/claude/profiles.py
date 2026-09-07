@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 """Map configured Claude profile names to prompts and execution policy.
 
 ``get_profile`` is the runtime entry point. This module owns Claude-specific

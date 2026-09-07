@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 """Expose AgentInfer components and optional vLLM runtime integration."""
 
 AGENT_AWARE_SCHEDULER = "agentinfer.agentcache.core.scheduler.AgentAwareScheduler"

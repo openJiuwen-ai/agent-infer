@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 """Prepare benchmark task repositories and workspaces.
 
 Tasks share a repo cache fetched from GitHub, then each task workspace is
