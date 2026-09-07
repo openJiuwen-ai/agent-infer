@@ -13,10 +13,7 @@ related_code_paths:
   - agentinfer/agentbench/request_proxy/request_trace.py
 depends_on:
   - index.md
-  - benchkit_orchestration.md
-decision_refs:
-  - https://github.com/JiusiServe/AgentInfer/issues/8
-  - https://github.com/JiusiServe/AgentInfer/issues/27
+  - benchkit-orchestration.md
 validation_paths:
   - tests/agentbench/collectors/**
   - tests/agentbench/metrics/**

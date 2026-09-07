@@ -1,0 +1,99 @@
+# Run a Benchmark
+
+This guide compares a cold upstream vLLM async scheduler with the AgentInfer Progress-TTL scheduler bridge using the
+same Claude Code workload. BenchKit records both arms through the same Request Proxy to avoid observation-path bias.
+
+## Prepare the Environment
+
+The workflow requires:
+
+- Linux, Python 3.10 or later, and vLLM 0.23.0.
+- CUDA GPUs capable of running the target model; the script defaults to two tensor-parallel workers.
+- Claude Code, tmux, and Git, with Claude Code authentication completed.
+- A model that supports Anthropic `POST /v1/messages`.
+
+Create an environment and install AgentInfer from the repository root:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install "vllm==0.23.0"
+python -m pip install -e .
+```
+
+## Prepare SWE-bench Data
+
+```bash
+vllm bench serve --agentinfer prepare swebench \
+  --output-dir agentinfer/agentbench/data/swebench
+```
+
+The command creates `instances.jsonl`, `task-lists/default.txt`, and `manifest.json`.
+
+## Run One Cold Comparison
+
+The repository script starts the baseline, runs the workload, stops the service completely, starts the candidate,
+and prints the comparison report:
+
+```bash
+REPO=$PWD \
+VENV=$PWD/.venv \
+MODEL=Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8 \
+TASK_NUM=1 \
+CONCURRENCY=1 \
+bash tests/agentbench/run-scheduler-e2e-compare.sh
+```
+
+Set `TENSOR_PARALLEL_SIZE=1` when the model fits on one GPU. Set `VLLM_EXTRA_ARGS` to append deployment-specific vLLM
+arguments.
+
+The script performs this sequence:
+
+1. Starts the baseline with `vllm.v1.core.sched.async_scheduler.AsyncScheduler` and `--async-scheduling`.
+2. Runs BenchKit with requests sent directly to the baseline vLLM server.
+3. Stops the baseline process to clear process-local metrics and Prefix Cache state.
+4. Starts the candidate with `AgentCacheAsyncSchedulerBridge`, the Progress-TTL controller, and lifecycle middleware.
+5. Runs the same tasks, model, concurrency, and configuration, then compares the two finalized result directories.
+
+If the model or virtual environment is elsewhere, set `MODEL` and `VENV` to absolute paths. The script rejects an
+existing tmux session or lifecycle socket so an earlier run cannot contaminate the experiment.
+
+## Scale Up the Experiment
+
+After the one-task smoke run succeeds, increase task count and concurrency:
+
+```bash
+REPO=$PWD \
+VENV=$PWD/.venv \
+MODEL=Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8 \
+TASK_NUM=64 \
+CONCURRENCY=32 \
+bash tests/agentbench/run-scheduler-e2e-compare.sh
+```
+
+Use repeated cold runs for release decisions. Give every run a new result directory and keep the commit, task set and
+order, model, agent profile, timeouts, tensor parallelism, vLLM arguments, and hardware identical.
+
+## Compare Again or Summarize
+
+Compare one or more finalized runs:
+
+```bash
+vllm bench serve --agentinfer compare \
+  --baseline results/vllm/run1 results/vllm/run2 \
+  --candidate results/agentinfer/run1 results/agentinfer/run2
+```
+
+Export run summaries to CSV:
+
+```bash
+vllm bench serve --agentinfer summarize \
+  results/agentinfer/run1 results/agentinfer/run2 \
+  --output combined-summary.csv
+```
+
+See [Benchmark CLI](../reference/benchmark-cli.md) for command options,
+[Benchmark configuration](../reference/benchmark-config.md) for YAML fields, and
+[Run artifacts](../reference/run-artifacts.md) for output files. `completed` means that the agent process completed,
+not that its patch is correct; read [Benchmark methodology](../explanation/benchmark-methodology.md) before making a
+release claim.

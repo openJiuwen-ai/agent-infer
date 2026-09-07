@@ -11,12 +11,9 @@ related_code_paths:
   - agentinfer/agentcache/entrypoints/bench.py
 depends_on:
   - index.md
-  - agent_runtime_adapters.md
-  - request_proxy_and_hints.md
-  - artifacts_and_evaluation.md
-decision_refs:
-  - https://github.com/JiusiServe/AgentInfer/issues/8
-  - https://github.com/JiusiServe/AgentInfer/issues/27
+  - agent-runtime-adapters.md
+  - request-proxy-and-hints.md
+  - artifacts-and-evaluation.md
 validation_paths:
   - tests/agentbench/test_config.py
   - tests/agentbench/test_dataset.py
