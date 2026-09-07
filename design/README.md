@@ -16,5 +16,9 @@ user documentation lives under [`docs/`](../docs/README.md).
 - [Skills design](superpowers/specs/agentcache-skills-design.md)
 - [Skills implementation plan](superpowers/plans/agentcache-skills-implementation.md)
 
+## Maintenance Records
+
+- [CI and unit-test fixes](ci-ut-fixes.md)
+
 Documents with draft status describe contributor contracts under review. Check their `last_reviewed`, code paths, and
 validation paths before treating them as current implementation requirements.

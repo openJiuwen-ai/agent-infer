@@ -19,16 +19,16 @@
 
 ## 变更一：安装本项目改用 venv 自带的 pip，不再用 uv
 
-### 现象
+### 现象：uv 无法解析 wheel 元数据
 
 `uv pip install` 报错：
 
-```
+```text
 Failed to parse metadata from built wheel
 Metadata field Name not found
 ```
 
-### 排查结论
+### 排查结论：uv 解析本地 wheel 时出错
 
 - 本地用 `pip`（Windows / Linux 都验过）构建本项目，wheel 的 METADATA 里 **`Name`** **字段是完好的**；
 
@@ -36,7 +36,7 @@ Metadata field Name not found
 
 - `uv` 创建的虚拟环境**默认不带 pip**，所以第一步需要先用 `uv` 把 pip 注入进去。
 
-### 变更
+### 变更：改用 venv 自带的 pip
 
 把“装本项目”这一句从：
 
@@ -57,15 +57,15 @@ uv pip install --python "$PYBIN" pip
 
 ## 变更二：pip 安装时显式带上华为云源 `-i "$PY"`
 
-### 现象
+### 现象：pip 找不到 uvicorn
 
 上一步改用 pip 后，出现新报错：
 
-```
+```text
 ERROR: No matching distribution found for uvicorn
 ```
 
-### 排查结论
+### 排查结论：pip 未使用 uv 的镜像配置
 
 - 脚本给 **uv** 设了华为云源（`export UV_DEFAULT_INDEX=$PY`）；
 
@@ -73,7 +73,7 @@ ERROR: No matching distribution found for uvicorn
 
 - 之前 uv 能装上 `uvicorn==0.52.4`，正是因为用的是华为云源。
 
-### 变更
+### 变更：显式配置 pip 镜像
 
 给 pip 显式加 `-i "$PY"`，让 pip 和 uv 用同一个华为云源：
 
@@ -85,17 +85,17 @@ ERROR: No matching distribution found for uvicorn
 
 ## 变更三：pytest 排除 vLLM 集成测试目录 `tests/agentcache/core`
 
-### 现象
+### 现象：pytest 收集阶段缺少模块
 
 安装打通后，pytest 在“收集（collection）”阶段报 8 个错误，例如：
 
-```
+```text
 ModuleNotFoundError: No module named 'vllm'
 ModuleNotFoundError: No module named 'openai'
 ImportError: cannot import name 'LLM' from 'agentinfer'
 ```
 
-### 排查结论
+### 排查结论：CPU CI 不应收集 vLLM 集成测试
 
 - 依赖列表（`pyproject.toml` 的 `[project].dependencies`）里**故意没有放** **`vllm`、`openai`**：
   `vllm` 是重度依赖（需要 GPU/CUDA），`agentinfer/__init__.py` 对 vllm 做了“可选的、try/except 优雅降级”处理；
@@ -106,7 +106,7 @@ ImportError: cannot import name 'LLM' from 'agentinfer'
 - 这些测试本质是 **vLLM 集成测试**，而当前 CI 节点是 **CPU-only（无 GPU）**，既装不上也没法跑 vllm，
   所以它们在 CI 上**本就不该被收集**。这正好和脚本里已有的 `--ignore=tests/e2e`、`-m "not gpu_test ..."` 是同一个设计意图。
 
-### 变更
+### 变更：排除 vLLM 集成测试目录
 
 在 pytest 命令上对 `tests/agentcache/core` 加一行 `--ignore`：
 
@@ -125,22 +125,22 @@ ImportError: cannot import name 'LLM' from 'agentinfer'
 
 ## 变更四：重命名重复的 `tests/scheduling/test_contracts.py`
 
-### 现象
+### 现象：pytest 测试模块重名
 
 收集时报错：
 
-```
+```text
 import file mismatch: imported module 'test_contracts' has this __file__ attribute:
   .../tests/agentbench/agents/test_contracts.py
 which is not the same as the test file we want to collect:
   .../tests/scheduling/test_contracts.py
 ```
 
-### 排查结论
+### 排查结论：测试文件名发生冲突
 
 仓库里有两个同名测试文件 `test_contracts.py`，pytest 默认按“不带路径的模块名”去重，导致模块名冲突、收集报错。
 
-### 变更
+### 变更：重命名重复测试文件
 
 用 `git mv` 把 `tests/scheduling/test_contracts.py` 改名为 `test_scheduling_contracts.py`（保留历史），消除同名冲突。
 
@@ -165,4 +165,3 @@ which is not the same as the test file we want to collect:
   且并不能让那批 vLLM 集成测试带动；所以本次只做“在 CI 上不收集它”，不动核心逻辑。
 
 - **`setup.py`**：保留未动（同样与本次问题无关）。
-
