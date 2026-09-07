@@ -11,9 +11,6 @@ related_code_paths:
   - agentinfer/agentcache/entrypoints/**
 depends_on:
   - ../entrypoints.md
-decision_refs:
-  - https://github.com/JiusiServe/AgentInfer/issues/8
-  - https://github.com/JiusiServe/AgentInfer/issues/27
 validation_paths:
   - tests/agentbench/**
 upstream_refs:
@@ -33,10 +30,10 @@ evidence. External SWE-bench evaluation owns correctness.
 
 | Document | Primary owner |
 | --- | --- |
-| [BenchKit orchestration](benchkit_orchestration.md) | Configuration, datasets, workspaces, run lifecycle, CLI, and Router control orchestration |
-| [Agent runtime adapters](agent_runtime_adapters.md) | Shared execution contracts and Claude Code runtime |
-| [Request proxy and hints](request_proxy_and_hints.md) | Transparent request forwarding and immutable request facts |
-| [Artifacts and evaluation](artifacts_and_evaluation.md) | Evidence normalization, artifact schemas, comparison, and correctness handoff |
+| [BenchKit orchestration](benchkit-orchestration.md) | Configuration, datasets, workspaces, run lifecycle, CLI, and Router control orchestration |
+| [Agent runtime adapters](agent-runtime-adapters.md) | Shared execution contracts and Claude Code runtime |
+| [Request proxy and hints](request-proxy-and-hints.md) | Transparent request forwarding and immutable request facts |
+| [Artifacts and evaluation](artifacts-and-evaluation.md) | Evidence normalization, artifact schemas, comparison, and correctness handoff |
 
 ```text
 BenchKit -> agent runtime -> Request Proxy -> vLLM             (baseline)

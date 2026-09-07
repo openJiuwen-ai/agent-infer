@@ -1,0 +1,20 @@
+# Internal Design Documents
+
+This directory contains development designs, implementation plans, and module invariants for contributors. Stable
+user documentation lives under [`docs/`](../docs/README.md).
+
+## Benchmark Subsystem
+
+- [Subsystem overview](module/benchmarking/index.md)
+- [BenchKit orchestration](module/benchmarking/benchkit-orchestration.md)
+- [Agent runtime adapters](module/benchmarking/agent-runtime-adapters.md)
+- [Request proxy and hints](module/benchmarking/request-proxy-and-hints.md)
+- [Artifacts and evaluation](module/benchmarking/artifacts-and-evaluation.md)
+
+## AgentCache Skills
+
+- [Skills design](superpowers/specs/agentcache-skills-design.md)
+- [Skills implementation plan](superpowers/plans/agentcache-skills-implementation.md)
+
+Documents with draft status describe contributor contracts under review. Check their `last_reviewed`, code paths, and
+validation paths before treating them as current implementation requirements.

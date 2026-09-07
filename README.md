@@ -1,116 +1,79 @@
 # AgentInfer
 
-Efficient cache management for agent workflows, designed to plug into
-LLM serving engines such as vLLM.
+AgentInfer provides efficient cache management and request scheduling for agent workflows. It integrates with LLM
+serving engines such as vLLM or operates as a request router in front of them.
+
+[中文](README.zh.md)
+
+## Core Features
+
+- Provides async and sync scheduler bridges for explicit AgentInfer integration with vLLM.
+- Transports agent identity and lifecycle observations through dedicated API middleware.
+- Retains, pauses, and resumes agent programs with the embedded Progress-TTL controller.
+- Supports deployment as an in-engine scheduler or as a request router in front of serving engines.
+- Includes AgentBench for running and comparing reproducible agent workloads against vLLM deployments.
+
+## Related Documentation
+
+[Documentation](docs/README.md) · [Quick start](docs/en/tutorial/01-quick-start.md) ·
+[vLLM integration](docs/en/how-to/integrate-vllm.md) · [Benchmark guide](docs/en/how-to/run-benchmark.md) ·
+[Changelog](CHANGELOG.md)
+
+## Requirements
+
+- Operating system: Linux, or Windows with WSL 2.
+- Python: 3.10 or later, matching `requires-python` in `pyproject.toml`.
+- Inference runtime: vLLM 0.23.0.
+- Hardware: a CUDA GPU supported by vLLM and large enough for the selected model.
+
+Install AgentInfer in the same Python environment as vLLM.
 
 ## Installation
 
-AgentInfer requires Python 3.10 or later and vLLM 0.23.0.
+### Install from source
 
-Clone the repository and install in development mode:
-
-```bash
-git clone https://github.com/JiusiServe/AgentInfer.git
-cd AgentInfer
-pip install -e .
-```
-
-### Build a wheel
-
-Install the build tools and build the wheel from the repository root:
+For development, activate the target vLLM environment and install AgentInfer in editable mode:
 
 ```bash
-python -m pip install --upgrade build setuptools wheel
-python -m build --wheel
+git clone https://github.com/openjiuwen-ai/agent-infer.git
+cd agent-infer
+python -m pip install -e .
 ```
 
-The wheel is written to `dist/`; its version comes from `project.version` in `pyproject.toml`.
+### Install a release package
 
-Once installed, the `vllm` CLI delegates standard commands to upstream vLLM while loading AgentCache:
+Download the [AgentInfer 0.1.0 wheel][release-wheel], then install it in the target vLLM environment:
 
 ```bash
-vllm serve meta-llama/Llama-3.1-8B-Instruct
+python -m pip install agentinfer-0.1.0-py3-none-any.whl
 ```
 
-When `import agentinfer` is executed, vLLM `EngineArgs` are automatically
-patched to use the `AgentAwareScheduler` by default, so any code or script
-that imports `agentinfer` before instantiating a vLLM engine gets the
-agent-aware scheduling behaviour without additional configuration.
+## Quick Start
 
-## Custom Scheduler and Request Queue
+Choose a local Unix socket for API lifecycle signals, then start vLLM with the AgentInfer async scheduler bridge,
+identity and lifecycle middleware, and embedded Progress-TTL controller:
 
-### Architecture
+```bash
+export AGENTCACHE_VLLM_LIFECYCLE_SOCKET=/tmp/agentinfer-vllm-lifecycle.sock
 
-AgentCache layers on top of vLLM's scheduler and request-queue primitives:
-
-| Component            | Purpose                                          |
-|----------------------|--------------------------------------------------|
-| `AgentAwareQueue`    | Extends `RequestQueue` — FCFS by default         |
-| `AgentAwareScheduler`| Extends vLLM `Scheduler`, uses `AgentAwareQueue` |
-| `agentinfer.LLM`     | Thin wrapper around `vllm.LLM`                   |
-
-`AgentAwareQueue` currently delegates every operation to a standard
-`FCFSRequestQueue`.  The identical FCFS behaviour exists so that subclasses
-can override methods (e.g. `pop_request`, `add_request`) to implement
-agent-aware scheduling policies later without touching the scheduler
-itself.
-
-### Using the Wrapper
-
-The simplest way to opt in is to use `agentinfer.LLM` instead of
-`vllm.LLM`:
-
-```python
-import agentinfer
-
-llm = agentinfer.LLM(model="meta-llama/Llama-3.1-8B-Instruct")
+vllm serve meta-llama/Llama-3.1-8B-Instruct \
+ --async-scheduling \
+ --scheduler-cls agentinfer.agentcache.core.scheduler.AgentCacheAsyncSchedulerBridge \
+ --middleware agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware \
+ --middleware agentinfer.agentcache.core.api_adapter.AgentCacheLifecycleMiddleware \
+ --additional-config \
+ '{"agentcache":{"controller_factory":"agentinfer.agentcache.core.factory.build_progress_ttl_controller"}}'
 ```
 
-Because `import agentinfer` patches `EngineArgs`, instantiating
-`agentinfer.LLM` (or `vllm.LLM` after the import) automatically selects
-`AgentAwareScheduler`, which creates an `AgentAwareQueue` as its waiting
-queue.
+The equivalent repository example is available at [`examples/serve-progress-ttl.sh`](examples/serve-progress-ttl.sh).
 
-### Customising the Request Queue
+The installed `vllm` command delegates ordinary commands to upstream vLLM. Explicit
+`vllm bench serve --agentinfer` commands enter AgentBench; other commands use AgentInfer's default scheduler unless
+`--scheduler-cls` is set explicitly. See the
+[vLLM Quickstart](https://docs.vllm.ai/en/latest/getting_started/quickstart/) for standard serving options.
 
-Subclass `AgentAwareQueue` and override the methods you need:
+## License
 
-```python
-from agentinfer.agentcache.core.request_queue import AgentAwareQueue
+This project is licensed under the [Apache License 2.0](LICENSE).
 
-class PriorityAgentQueue(AgentAwareQueue):
-    def pop_request(self):
-        # Insert your agent-priority logic here
-        return self._q.pop_request()
-```
-
-### Customising the Scheduler
-
-Subclass `AgentAwareScheduler` to wire in a custom queue:
-
-```python
-from agentinfer.agentcache.core.scheduler import AgentAwareScheduler
-
-class PriorityScheduler(AgentAwareScheduler):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.waiting = PriorityAgentQueue()  # your custom queue
-```
-
-Then pass it to vLLM's `EngineArgs`:
-
-```python
-from vllm.engine.arg_utils import EngineArgs
-
-args = EngineArgs(model="meta-llama/Llama-3.1-8B-Instruct",
-                  scheduler_cls="mymodule.PriorityScheduler")
-llm = agentinfer.LLM(engine_args=args)
-```
-
-### Extension Points Summary
-
-| Extension           | How                                              |
-|---------------------|--------------------------------------------------|
-| Custom queue policy | Subclass `AgentAwareQueue`                       |
-| Custom scheduler    | Subclass `AgentAwareScheduler`                   |
-| Opt out of patching | Set `scheduler_cls` on `EngineArgs` explicitly   |
+[release-wheel]: https://github.com/openjiuwen-ai/agent-infer/releases/download/0.1.0/agentinfer-0.1.0-py3-none-any.whl

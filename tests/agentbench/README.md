@@ -10,4 +10,4 @@ requires an AgentInfer runtime build that provides `AgentCacheAsyncSchedulerBrid
 
 Before a manual run, record the branch/commit, host, virtualenv, ports, configs, dataset, artifact directories,
 explicit tmux names, commands, stop conditions, tested agent profiles and concurrency shapes, and all omissions.
-See the [Quickstart](../../docs/benchmarks/quickstart.md).
+See [Run a benchmark](../../docs/en/how-to/run-benchmark.md).
