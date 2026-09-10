@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from agentinfer.scheduling.admission_outcome import AdmissionDisposition, AdmissionOutcome
 from agentinfer.scheduling.domain import ProgramRef, ProgramState, ProgramStatus, ProgramView
@@ -26,6 +26,16 @@ from agentinfer.scheduling.transitions import TransitionController, TransitionRe
 
 ProgressTTLFactors = StrategyFactors[ProgressTTLGlobalFactors, ProgressTTLProgramFactors]
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _ForceResumeTimeoutEstimate:
+    """Frozen work-ahead estimate used to arm one force-resume deadline."""
+
+    timeout_seconds: float
+    active_remaining_rounds: float
+    pool_remaining_rounds: float
+    request_throughput_per_second: float
 
 
 class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressTTLProgramFactors]):
@@ -95,6 +105,7 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
                     ("rolling_cached_prefix_tokens", global_factors.avg_cached_prefix_tokens),
                     ("rolling_uncached_prompt_tokens", global_factors.avg_uncached_prompt_tokens),
                     ("rolling_completion_tokens", global_factors.avg_completion_tokens),
+                    ("rolling_request_throughput_per_second", global_factors.request_throughput_per_second),
                     ("mode", self.config.mode.value),
                     ("transitions_enabled", self._transitions_enabled(strategy_factors)),
                     ("request_window_samples", global_factors.request_sample_count),
@@ -114,10 +125,31 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
         event: SchedulingEvent,
         strategy_factors: ProgressTTLFactors,
     ) -> tuple[StrategyDiagnostic, ...]:
-        """Describe a newly armed acting TTL after request accounting is committed."""
-        if event.program is None or event.kind is not SchedulingEventKind.REQUEST_FINISHED:
+        """Describe a frozen force-resume deadline or newly armed acting TTL after its committed event."""
+        if event.program is None:
             return ()
         sidecar = self._program_factors(strategy_factors, event.program)
+        if event.kind is SchedulingEventKind.REQUEST_PENDING:
+            return (
+                StrategyDiagnostic(
+                    "progress_ttl_force_resume_armed",
+                    event.reason,
+                    (
+                        ("program", event.program.program_id),
+                        ("generation", event.program.generation),
+                        ("timeout_seconds", sidecar.force_resume_timeout_seconds),
+                        ("deadline", sidecar.force_resume_deadline_monotonic_s),
+                        ("active_remaining_rounds", sidecar.force_resume_active_remaining_rounds),
+                        ("pool_remaining_rounds", sidecar.force_resume_pool_remaining_rounds),
+                        (
+                            "request_throughput_per_second",
+                            sidecar.force_resume_request_throughput_per_second,
+                        ),
+                    ),
+                ),
+            )
+        if event.kind is not SchedulingEventKind.REQUEST_FINISHED:
+            return ()
         if (
             event.current_status is not ProgramStatus.ACTING
             or sidecar.acting_since_monotonic_s is None
@@ -241,12 +273,36 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
                         reserve_tokens=reserve,
                         transitioned_programs=(candidate,),
                     )
-            return self._queue(transitions, candidate, "already_waiting", required, reserve)
+            return self._queue(
+                snapshot,
+                strategy_factors,
+                transitions,
+                candidate,
+                "already_waiting",
+                required,
+                reserve,
+            )
         if snapshot.waiting_programs:
-            return self._queue(transitions, candidate, "waiting_queue_precedence", required, reserve)
+            return self._queue(
+                snapshot,
+                strategy_factors,
+                transitions,
+                candidate,
+                "waiting_queue_precedence",
+                required,
+                reserve,
+            )
         remaining = self._remaining_tokens(snapshot, self.config.resume_capacity_ratio)
         if remaining is None:
-            return self._queue(transitions, candidate, "capacity_unknown", required, reserve)
+            return self._queue(
+                snapshot,
+                strategy_factors,
+                transitions,
+                candidate,
+                "capacity_unknown",
+                required,
+                reserve,
+            )
         required_with_reserve = required + reserve
         if remaining < required_with_reserve:
             if remaining >= required and self._batch_gain_covers_recovery(
@@ -277,6 +333,8 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
                     transitioned_programs=(candidate,),
                 )
             return self._queue(
+                snapshot,
+                strategy_factors,
                 transitions,
                 candidate,
                 "insufficient_capacity",
@@ -676,7 +734,7 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
         deadline = current.force_resume_deadline_monotonic_s
         if request_wait_started is None:
             request_wait_started = event.occurred_at_monotonic_s
-            timeout_seconds = self._dynamic_force_resume_timeout(strategy_factors)
+            timeout_seconds = self.config.force_resume_timeout_max_seconds
             deadline = request_wait_started + timeout_seconds
         strategy_factors.set_program_factors(
             event.program,
@@ -751,12 +809,17 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
         rounds_since_ttl_pause = current.rounds_since_ttl_pause + int(continuous_round_completed)
         global_factors = strategy_factors.global_factors
         inter_request_gap_seconds = self._event_float(event.field("inter_request_gap_seconds"))
+        request_latency_seconds = self._event_float(event.field("request_latency_seconds"))
+        global_factors.observe_request_interval(
+            started_at_monotonic_s=max(0.0, event.occurred_at_monotonic_s - request_latency_seconds),
+            finished_at_monotonic_s=event.occurred_at_monotonic_s,
+        )
         global_factors.update_request(
             prompt_tokens=prompt_tokens,
             cached_prefix_tokens=cached_prefix_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
-            request_latency_seconds=self._event_float(event.field("request_latency_seconds")),
+            request_latency_seconds=request_latency_seconds,
             decode_seconds=self._event_optional_float(event.field("decode_seconds")),
             active_programs=self._event_int(event.field("active_programs")),
             waiting_programs=self._event_int(event.field("waiting_programs")),
@@ -843,6 +906,9 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
                 request_wait_started_at_monotonic_s=None,
                 force_resume_timeout_seconds=None,
                 force_resume_deadline_monotonic_s=None,
+                force_resume_active_remaining_rounds=0.0,
+                force_resume_pool_remaining_rounds=0.0,
+                force_resume_request_throughput_per_second=0.0,
                 acting_since_monotonic_s=None,
                 ttl_deadline_monotonic_s=None,
                 ttl_expiry_observed=False,
@@ -891,6 +957,11 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
                 is_evictable_after_min_rounds=False,
                 wait_started_at_monotonic_s=None,
                 request_wait_started_at_monotonic_s=None,
+                force_resume_timeout_seconds=None,
+                force_resume_deadline_monotonic_s=None,
+                force_resume_active_remaining_rounds=0.0,
+                force_resume_pool_remaining_rounds=0.0,
+                force_resume_request_throughput_per_second=0.0,
                 acting_since_monotonic_s=None,
                 ttl_deadline_monotonic_s=None,
                 release_deadline_monotonic_s=None,
@@ -933,21 +1004,56 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
         deadline = self._program_factors(state, program.ref).force_resume_deadline_monotonic_s
         return program.status is ProgramStatus.REASONING and deadline is not None and now >= deadline
 
-    def _dynamic_force_resume_timeout(self, state: ProgressTTLFactors) -> float:
-        """Combine observed queue load and TTL-segment continuity into a bounded wait deadline."""
+    def _dynamic_force_resume_timeout(
+        self,
+        snapshot: SchedulingSnapshot,
+        state: ProgressTTLFactors,
+        candidate: ProgramView,
+    ) -> _ForceResumeTimeoutEstimate:
+        """Convert work ahead at queue entry into one bounded, immutable force-resume timeout."""
         stats = state.global_factors
-        if not stats.request_window_complete or not stats.ttl_pause_window_ready:
-            return self.config.force_resume_timeout_max_seconds
-        continuity_factor = min(
-            float(self.config.target_max_segment_rounds),
-            max(1.0, stats.avg_ttl_pause_segment_rounds),
+        request_throughput = stats.request_throughput_per_second
+        if not stats.request_window_complete or request_throughput <= 0:
+            return _ForceResumeTimeoutEstimate(
+                timeout_seconds=self.config.force_resume_timeout_max_seconds,
+                active_remaining_rounds=0.0,
+                pool_remaining_rounds=0.0,
+                request_throughput_per_second=request_throughput,
+            )
+        target_rounds = self._target_growth_rounds(state)
+        active_remaining_rounds = sum(
+            max(
+                1.0 if program.status is ProgramStatus.REASONING else 0.0,
+                target_rounds - float(self._effective_segment_rounds(state, program.ref)),
+            )
+            for program in self._active_programs(snapshot)
+        )
+        candidate_key = self._resume_key(candidate, state, snapshot.observed_at_monotonic_s)
+        pool_remaining_rounds = sum(
+            max(
+                1.0,
+                target_rounds - float(self._effective_segment_rounds(state, program.ref)),
+            )
+            for ref in snapshot.waiting_programs
+            if (program := snapshot.program(ref)) is not None
+            and program.state is ProgramState.PAUSED
+            and program.status is ProgramStatus.REASONING
+            and self._resume_key(program, state, snapshot.observed_at_monotonic_s) < candidate_key
         )
         raw_timeout = (
-            self.config.force_resume_timeout_scale * max(0.0, stats.avg_scheduler_queue_seconds) * continuity_factor
+            self.config.force_resume_timeout_scale
+            * (active_remaining_rounds + pool_remaining_rounds)
+            / request_throughput
         )
-        return min(
+        timeout = min(
             self.config.force_resume_timeout_max_seconds,
             max(self.config.force_resume_timeout_min_seconds, raw_timeout),
+        )
+        return _ForceResumeTimeoutEstimate(
+            timeout_seconds=timeout,
+            active_remaining_rounds=active_remaining_rounds,
+            pool_remaining_rounds=pool_remaining_rounds,
+            request_throughput_per_second=request_throughput,
         )
 
     def _active_programs(self, snapshot: SchedulingSnapshot) -> list[ProgramView]:
@@ -1664,8 +1770,10 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
         )
         return False
 
-    @staticmethod
     def _queue(
+        self,
+        snapshot: SchedulingSnapshot,
+        strategy_factors: ProgressTTLFactors,
         transitions: TransitionController,
         candidate: ProgramRef,
         reason: str,
@@ -1673,8 +1781,39 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
         reserve_tokens: int = 0,
         deficit_tokens: int = 0,
     ) -> AdmissionOutcome:
+        current = self._program_factors(strategy_factors, candidate)
+        previous = current
+        if current.request_wait_started_at_monotonic_s is None:
+            candidate_view = snapshot.program(candidate)
+            if candidate_view is None:
+                raise ValueError("queued candidate is absent from the scheduling snapshot")
+            estimate = self._dynamic_force_resume_timeout(
+                snapshot,
+                strategy_factors,
+                candidate_view,
+            )
+            wait_started = snapshot.observed_at_monotonic_s
+            strategy_factors.set_program_factors(
+                candidate,
+                replace(
+                    current,
+                    wait_started_at_monotonic_s=(
+                        current.wait_started_at_monotonic_s
+                        if current.wait_started_at_monotonic_s is not None
+                        else wait_started
+                    ),
+                    request_wait_started_at_monotonic_s=wait_started,
+                    force_resume_timeout_seconds=estimate.timeout_seconds,
+                    force_resume_deadline_monotonic_s=wait_started + estimate.timeout_seconds,
+                    force_resume_active_remaining_rounds=estimate.active_remaining_rounds,
+                    force_resume_pool_remaining_rounds=estimate.pool_remaining_rounds,
+                    force_resume_request_throughput_per_second=estimate.request_throughput_per_second,
+                ),
+            )
         result = transitions.queue(candidate, reason=reason)
-        ProgressTTLStrategy._require_applied(result)
+        if not result.applied:
+            strategy_factors.set_program_factors(candidate, previous)
+        self._require_applied(result)
         return AdmissionOutcome(
             AdmissionDisposition.QUEUED,
             reason,

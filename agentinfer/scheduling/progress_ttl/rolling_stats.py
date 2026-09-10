@@ -54,6 +54,14 @@ class TTLEstimate:
     uses_fitted_distribution: bool
 
 
+@dataclass(frozen=True)
+class RequestIntervalSample:
+    """One completed request interval retained for busy-time throughput estimation."""
+
+    started_at_monotonic_s: float
+    finished_at_monotonic_s: float
+
+
 @dataclass
 class ProgressTTLGlobalFactors:
     """Policy-wide decision factors derived from bounded recent request and pause windows."""
@@ -102,6 +110,7 @@ class ProgressTTLGlobalFactors:
     _ttl_pause_segment_rounds: deque[int] = field(default_factory=deque, init=False, repr=False)
     _ttl_pause_segment_rounds_sum: int = field(default=0, init=False, repr=False)
     _continuity_samples: deque[ContinuitySample] = field(default_factory=deque, init=False, repr=False)
+    _request_intervals: deque[RequestIntervalSample] = field(default_factory=deque, init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Validate bounded-window controls and finite initial decision values."""
@@ -188,6 +197,58 @@ class ProgressTTLGlobalFactors:
         if self.ttl_pause_window_ready:
             self.avg_ttl_pause_segment_rounds = self._ttl_pause_segment_rounds_sum / len(self._ttl_pause_segment_rounds)
 
+    def observe_request_interval(
+        self,
+        *,
+        started_at_monotonic_s: float,
+        finished_at_monotonic_s: float,
+    ) -> None:
+        """Record one completed request interval for aggregate throughput estimation.
+
+        Args:
+            started_at_monotonic_s: Monotonic time at which the request entered scheduling.
+            finished_at_monotonic_s: Monotonic time at which the inference request completed.
+        """
+        if (
+            not math.isfinite(started_at_monotonic_s)
+            or started_at_monotonic_s < 0
+            or not math.isfinite(finished_at_monotonic_s)
+            or finished_at_monotonic_s < started_at_monotonic_s
+        ):
+            raise ValueError("request interval must be finite, non-negative, and ordered")
+        self._request_intervals.append(
+            RequestIntervalSample(
+                started_at_monotonic_s=started_at_monotonic_s,
+                finished_at_monotonic_s=finished_at_monotonic_s,
+            )
+        )
+        while len(self._request_intervals) > self.request_window_size:
+            self._request_intervals.popleft()
+
+    @property
+    def request_throughput_per_second(self) -> float:
+        """Return completions per second after excluding uncovered idle gaps."""
+        if not self._request_intervals:
+            return 0.0
+        covered_seconds = 0.0
+        intervals = sorted(
+            self._request_intervals,
+            key=lambda sample: (sample.started_at_monotonic_s, sample.finished_at_monotonic_s),
+        )
+        covered_start = intervals[0].started_at_monotonic_s
+        covered_end = intervals[0].finished_at_monotonic_s
+        for sample in intervals[1:]:
+            if sample.started_at_monotonic_s > covered_end:
+                covered_seconds += covered_end - covered_start
+                covered_start = sample.started_at_monotonic_s
+                covered_end = sample.finished_at_monotonic_s
+            else:
+                covered_end = max(covered_end, sample.finished_at_monotonic_s)
+        covered_seconds += covered_end - covered_start
+        if covered_seconds <= 0:
+            return 0.0
+        return len(intervals) / covered_seconds
+
     @property
     def ttl_pause_sample_count(self) -> int:
         """Return actual TTL pauses retained for workload-continuity estimation."""
@@ -195,7 +256,7 @@ class ProgressTTLGlobalFactors:
 
     @property
     def ttl_pause_window_ready(self) -> bool:
-        """Return whether TTL-pause rounds are mature enough for a dynamic force deadline."""
+        """Return whether TTL-pause rounds are mature enough to refresh their workload average."""
         return len(self._ttl_pause_segment_rounds) >= self._min_samples_for_update(self.request_window_size)
 
     @property

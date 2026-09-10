@@ -40,6 +40,9 @@ class ProgressTTLProgramFactors:
     request_wait_started_at_monotonic_s: float | None = None
     force_resume_timeout_seconds: float | None = None
     force_resume_deadline_monotonic_s: float | None = None
+    force_resume_active_remaining_rounds: float = 0.0
+    force_resume_pool_remaining_rounds: float = 0.0
+    force_resume_request_throughput_per_second: float = 0.0
     last_request_finished_at_monotonic_s: float | None = None
     acting_since_monotonic_s: float | None = None
     ttl_deadline_monotonic_s: float | None = None
@@ -91,6 +94,13 @@ class ProgressTTLProgramFactors:
             not math.isfinite(self.force_resume_timeout_seconds) or self.force_resume_timeout_seconds < 0
         ):
             raise ValueError("force_resume_timeout_seconds must be finite and non-negative when provided")
+        force_resume_values = (
+            self.force_resume_active_remaining_rounds,
+            self.force_resume_pool_remaining_rounds,
+            self.force_resume_request_throughput_per_second,
+        )
+        if any(not math.isfinite(value) or value < 0 for value in force_resume_values):
+            raise ValueError("force-resume workload estimates must be finite and non-negative")
         boolean_factors = (
             self.segment_first_request_pending,
             self.ttl_expiry_observed,

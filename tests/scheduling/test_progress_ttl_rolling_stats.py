@@ -26,6 +26,7 @@ def test_config_defaults_match_the_two_l20_reference_policy() -> None:
     assert config.privileged_ttl_seconds == 5
     assert config.use_fixed_input_token_growth is False
     assert config.fixed_input_token_growth_per_round == 1024
+    assert config.force_resume_timeout_max_seconds == 300
 
 
 @pytest.mark.parametrize(
@@ -77,6 +78,62 @@ def update(
 
 def test_global_factors_is_policy_owned_without_a_router_compatibility_base() -> None:
     assert ProgressTTLGlobalFactors.__bases__ == (object,)
+
+
+def test_request_throughput_uses_bounded_request_intervals() -> None:
+    stats = ProgressTTLGlobalFactors(request_window_size=3)
+
+    stats.observe_request_interval(started_at_monotonic_s=8, finished_at_monotonic_s=10)
+    stats.observe_request_interval(started_at_monotonic_s=10, finished_at_monotonic_s=12)
+    stats.observe_request_interval(started_at_monotonic_s=12, finished_at_monotonic_s=14)
+    assert stats.request_throughput_per_second == pytest.approx(0.5)
+
+    stats.observe_request_interval(started_at_monotonic_s=18, finished_at_monotonic_s=20)
+    assert stats.request_throughput_per_second == pytest.approx(0.5)
+
+
+def test_request_throughput_accepts_out_of_order_completions() -> None:
+    stats = ProgressTTLGlobalFactors(request_window_size=3)
+
+    stats.observe_request_interval(started_at_monotonic_s=8, finished_at_monotonic_s=12)
+    stats.observe_request_interval(started_at_monotonic_s=6, finished_at_monotonic_s=10)
+
+    assert stats.request_throughput_per_second == pytest.approx(2 / 6)
+
+
+def test_request_throughput_counts_overlapping_time_once() -> None:
+    stats = ProgressTTLGlobalFactors(request_window_size=3)
+
+    stats.observe_request_interval(started_at_monotonic_s=8, finished_at_monotonic_s=12)
+    stats.observe_request_interval(started_at_monotonic_s=10, finished_at_monotonic_s=14)
+    stats.observe_request_interval(started_at_monotonic_s=11, finished_at_monotonic_s=16)
+
+    assert stats.request_throughput_per_second == pytest.approx(3 / 8)
+
+
+def test_request_throughput_excludes_uncovered_idle_gaps() -> None:
+    stats = ProgressTTLGlobalFactors(request_window_size=4)
+
+    stats.observe_request_interval(started_at_monotonic_s=0, finished_at_monotonic_s=2)
+    stats.observe_request_interval(started_at_monotonic_s=1, finished_at_monotonic_s=3)
+    stats.observe_request_interval(started_at_monotonic_s=100, finished_at_monotonic_s=102)
+    stats.observe_request_interval(started_at_monotonic_s=101, finished_at_monotonic_s=103)
+
+    assert stats.request_throughput_per_second == pytest.approx(4 / 6)
+
+
+@pytest.mark.parametrize(
+    ("started_at", "finished_at"),
+    [(-1, 1), (2, 1), (float("nan"), 1), (0, float("inf"))],
+)
+def test_request_throughput_rejects_invalid_intervals(started_at: float, finished_at: float) -> None:
+    stats = ProgressTTLGlobalFactors()
+
+    with pytest.raises(ValueError, match="request interval"):
+        stats.observe_request_interval(
+            started_at_monotonic_s=started_at,
+            finished_at_monotonic_s=finished_at,
+        )
 
 
 def test_global_factors_reject_invalid_window_and_initial_numeric_values() -> None:

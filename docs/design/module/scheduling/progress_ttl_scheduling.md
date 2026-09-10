@@ -232,23 +232,38 @@ capacity projection; request arrival does not run this reclaim path.
 The dynamic force timeout is frozen when a request starts waiting:
 
 ```text
-continuity_factor = min(target_max_segment_rounds,
-                        max(1, avg_ttl_pause_segment_rounds))
+target_rounds = min(target_max_segment_rounds,
+                    estimated_continuity_rounds)
+
+active_remaining_rounds = sum(
+    max(1 if Program is REASONING else 0,
+        target_rounds - Program effective segment rounds)
+    for each ACTIVE Program)
+
+pool_remaining_rounds = sum(
+    max(1, target_rounds - Program effective segment rounds)
+    for each PAUSED + REASONING Program ordered before the candidate)
 
 raw_timeout = force_resume_timeout_scale
-              * avg_scheduler_queue_seconds
-              * continuity_factor
+              * (active_remaining_rounds + pool_remaining_rounds)
+              / request_throughput_per_second
 
 force_timeout = clamp(raw_timeout,
                       force_resume_timeout_min_seconds,
                       force_resume_timeout_max_seconds)
 ```
 
-Here the growth target uses `avg_rounds_since_ttl_pause`, sampled on request completion. The separate
-`avg_ttl_pause_segment_rounds` is sampled only when a TTL pause is committed and is used by the force-resume formula
-below.
+The work-ahead numerator estimates how many inference requests must finish before the candidate receives its ordinary
+turn. Active reasoning Programs retain at least their in-flight round; existing paused reasoning Programs contribute
+only when the configured resume order places them before the candidate. The denominator is aggregate completed-request
+throughput over the bounded request window. It divides the number of completed requests by the union length of their
+request start-to-finish intervals, counting overlapping intervals once and excluding time not covered by any request.
+RequestPool waiting remains part of each interval. This avoids both request-free idle gaps and a request-level average
+queue duration that can be diluted by many immediately admitted requests.
 
-Before request and TTL-pause windows are ready, the maximum timeout is used.
+Before the request window is complete, or when measured request throughput is zero, the maximum timeout is used. The
+timeout, work-ahead components, and throughput are stored once at initial queue entry and are not recomputed while the
+same request remains pending.
 
 ## Batch-gain admission
 
@@ -437,7 +452,7 @@ All settings are under `additional_config.agentcache.progress_ttl`. Full default
 | `ttl_min_seconds`, `ttl_max_seconds` | Bound the fitted TTL candidate interval. The defaults are `0.05` and `32`. |
 | Quadratic prefill coefficients | Convert private uncached tokens to deployment-specific cold-prefill seconds; measure offline across the supported context range. |
 | `ttl_decode_throughput_alpha` | Fraction of normal decode throughput retained during mixed prefill; use `1` for fully separated execution. |
-| `target_max_segment_rounds` | Caps growth-reserve protection, ends overlong continuous segments under queue pressure, and bounds dynamic force scaling. |
+| `target_max_segment_rounds` | Caps growth-reserve protection, ends overlong continuous segments under queue pressure, and bounds the remaining-work estimate used by force resume. |
 | `privileged_max_context_tokens` | Converts rank-local capacity to a bounded privilege-slot count. |
 | `resume_order` | Selects MRU locality or FCFS ordinary resume order; force and privilege tiers remain above it. |
 

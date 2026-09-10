@@ -334,8 +334,8 @@ See [Core tuning parameters](progress_ttl_scheduling.md#core-tuning-parameters) 
 | `decode_step_fixed_seconds` | calibrated constant | Fixed time in one modeled decode step, independent of batch size and context length. |
 | `decode_step_seconds_per_request` | calibrated constant | Additional decode-step time per concurrently running request; its reciprocal bounds the model's asymptotic throughput. |
 | `decode_step_seconds_per_context_token` | calibrated constant | Additional decode-step time per logical context token across the running batch. |
-| `force_resume_timeout_scale` | `3.0` | Scales queue time by observed TTL-pause continuity when freezing a force deadline. |
-| `force_resume_timeout_min_seconds` / `force_resume_timeout_max_seconds` | `30` / `300` | Bounds the adaptive force-resume timeout. |
+| `force_resume_timeout_scale` | `3.0` | Scales estimated work ahead divided by recent request throughput when freezing a force deadline. |
+| `force_resume_timeout_min_seconds` / `force_resume_timeout_max_seconds` | `30` / `300` | Bounds the adaptive force-resume timeout; an incomplete throughput window uses the maximum. |
 | `paused_program_ttl_seconds` | `1800` | Releases a stale paused Program after this duration. |
 
 `decode_buffer_tokens` is fixed at 100 by the vLLM factory and is not an operator setting. Unknown fields, removed
