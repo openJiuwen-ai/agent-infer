@@ -89,7 +89,7 @@ Export run summaries to CSV:
 ```bash
 vllm bench serve --agentinfer summarize \
   results/agentinfer/run1 results/agentinfer/run2 \
-  --output combined-summary.csv
+  --output-csv combined-summary.csv
 ```
 
 See [Benchmark CLI](../reference/benchmark-cli.md) for command options,
@@ -97,3 +97,24 @@ See [Benchmark CLI](../reference/benchmark-cli.md) for command options,
 [Run artifacts](../reference/run-artifacts.md) for output files. `completed` means that the agent process completed,
 not that its patch is correct; read [Benchmark methodology](../explanation/benchmark-methodology.md) before making a
 release claim.
+
+## Select an agent and transparent Router
+
+The default example is `agentinfer/agentbench/configs/swebench_vllm.yaml`. Claude Code supports `single` and
+`plan-subagent` and requires the Claude CLI and tmux. JiuwenSwarm supports `code.normal` and requires its CLI; DSH
+supports `single` and `plan-subagent` and requires the DeepSeek Harness CLI. Change the runtime, profile,
+executable, and endpoint together:
+
+```bash
+vllm bench serve --agentinfer run \
+  --config agentinfer/agentbench/configs/swebench_vllm.yaml \
+  --agent-type jiuwenswarm --agent-profile code.normal \
+  --agent-executable jiuwenswarm --endpoint /v1/chat/completions \
+  --task-num 1 --result-dir results/jiuwenswarm-smoke
+```
+
+For DSH use `--agent-type dsh --agent-profile single --agent-executable dsh --endpoint /v1/chat/completions`.
+For Router runs use `swebench_agentinfer.yaml`, with `backend.base_url` pointing to the Router and
+`backend.metrics_url` directly to vLLM. The Router forwards transparently without the old registration/cleanup API.
+
+For captured traces, see [Trace Replay](run-trace-replay.md).

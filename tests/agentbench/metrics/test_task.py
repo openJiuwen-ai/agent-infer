@@ -8,18 +8,24 @@ from agentinfer.agentbench.benchkit.metrics.task import aggregate_task_results
 def test_aggregate_task_results_uses_execution_outcomes_and_patch_evidence() -> None:
     results = [
         AgentRunResult(
+            agent_type="claude",
+            profile_name="single",
             outcome=AgentRunOutcome.COMPLETED,
             termination_reason=None,
             duration_seconds=10.0,
             has_patch=True,
         ),
         AgentRunResult(
+            agent_type="claude",
+            profile_name="single",
             outcome=AgentRunOutcome.FAILED,
             termination_reason=TerminationReason.IDLE_AFTER_PATCH,
             duration_seconds=20.0,
             has_patch=True,
         ),
         AgentRunResult(
+            agent_type="claude",
+            profile_name="single",
             outcome=AgentRunOutcome.FAILED,
             termination_reason=TerminationReason.TIMEOUT,
             duration_seconds=30.0,

@@ -73,3 +73,13 @@ execution contract completed. To determine whether `model.patch` resolves a SWE-
 
 See [Benchmark methodology](../explanation/benchmark-methodology.md) for evaluation boundaries and fair-comparison
 requirements.
+
+## Multiple runtimes and Replay artifacts
+
+The run directory also includes `task_index.json`, mapping tasks to agent sessions and summarizing failures. Claude
+settings and terminal files apply to Claude only; JiuwenSwarm and DSH use their own isolated directories and
+execution evidence.
+
+Replay additionally writes `replay-source-analysis.json`, `replay-plan.json`, and `replay-execution.json`, or
+`replay-error.json` on failure. These describe planning, execution, and audit facts, not task correctness. See
+[Trace Replay](../how-to/run-trace-replay.md).

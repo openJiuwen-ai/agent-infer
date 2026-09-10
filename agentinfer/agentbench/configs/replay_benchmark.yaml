@@ -1,0 +1,64 @@
+# Trace Replay execution configuration.
+
+# === Experiment: per-run execution limits ===
+experiment:
+  task_num: null
+  result_dir: ../result_replay
+  max_concurrency: 1
+  task_timeout_seconds: 3600
+  run_timeout_seconds: null
+
+
+# === Backend: upstream LLM ===
+backend:
+  type: vllm                           # backend type; currently only vllm
+  base_url: http://127.0.0.1:8000      # vLLM Anthropic-compatible API base URL
+  metrics_url: null                    # complete vLLM /metrics URL when base_url points to a Router
+  tokenizer_base_url: null             # null uses backend.base_url for /tokenize and /detokenize
+  model: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8  # model used by Claude Code requests
+  endpoint: /v1/messages               # e.g., Anthropic Messages endpoint
+  api_key_env: null                    # environment variable containing the API key; null = none
+
+# === Replay: configuration for trace replay ===
+replay:
+  # Trace adapter: agentinfer | inferact_codex_swebenchpro | agentX | tracelab.
+  trace_type: agentinfer
+  # Source trace. Inferact conversion output is written under <result_dir>/convert_result/.
+  trace_path: ../data/replay/requests.jsonl
+  # Inferact additionally requires prompt_shape=trace_record, interval_mode=lognormal,
+  # and backend.endpoint=/v1/chat/completions.
+  trace_same_agent_gap_scale: 1.0
+  trace_same_agent_gap_offset_seconds: 0.0
+  interval_mode: trace
+  # Seed for deterministic session sampling and Backend requests.
+  sample_seed: 0
+  prompt_shape: claude_code_minimal_v1
+  # Replay omits cache_control markers; vLLM prefix caching is configured server-side.
+  # Lead title uses only title-system sharing; Lead main uses first tool/message sharing.
+  lead_title_sys_shared_prefix: 296
+  # Late conversation-name requests use a smaller independent system recipe.
+  lead_name_sys_shared_prefix: 105
+  lead_1st_sys_shared_prefix: 18
+  lead_1st_sys_session_prefix: 1466
+  lead_1st_tool_shared_prefix: 17550
+  lead_1st_msg_shared_prefix: 74
+  lead_1st_trailing_system_prefix: 459
+  subagent_tool_1st_shared_prefix: 6900
+  subagent_1st_sys_shared_prefix: 18
+  subagent_1st_sys_session_prefix: 732
+  subagent_1st_msg_shared_prefix: 74
+  lead_continuation_extra_system_ratio: 0.2146
+  subagent_continuation_extra_system_ratio: 0.2344
+  lead_continuation_system_tokens: 64
+  subagent_continuation_system_tokens: 32
+  # Optional caps on replayed input and output token targets; null preserves trace values.
+  max_input_tokens: null
+  max_output_tokens: null
+  # Strict rejects a non-append-only trace. Adaptive audits small filler trims and large context resets.
+  context_adjustment_mode: adaptive
+  context_micro_trim_max_tokens: 64
+  context_micro_trim_max_ratio: 0.005
+  # Accept an audited residual only after deterministic exact-suffix repair fails; 0 keeps strict behavior.
+  prompt_calibration_tolerance_tokens: 1
+  # Per-request Backend timeout in seconds.
+  request_timeout_seconds: 3600

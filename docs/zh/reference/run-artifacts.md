@@ -71,3 +71,10 @@ BenchKit 将每次运行写入一个全新的结果目录。原始请求事实�
 `PASS_TO_PASS` 测试后确定。
 
 评估边界和公平比较要求见[基准方法](../explanation/benchmark-methodology.md)。
+
+## 多运行时与 Replay 产物
+
+运行目录还包括 `task_index.json`，记录任务与 Agent 会话的对应关系和失败汇总。Claude 专属的设置和终端文件只适用于 Claude；JiuwenSwarm 和 DSH 使用各自隔离目录与执行证据。
+
+Replay 额外写出 `replay-source-analysis.json`、`replay-plan.json` 和 `replay-execution.json`；失败时写出
+`replay-error.json`。这些文件记录规划、执行和审计事实，不代表任务正确性。详见[回放指南](../how-to/run-trace-replay.md)。

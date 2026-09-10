@@ -15,7 +15,7 @@ from agentinfer.agentbench.agents.claude.transcript import (
     TranscriptNormalizer,
     is_transcript_complete,
 )
-from agentinfer.agentbench.agents.outcomes import TerminationReason
+from agentinfer.agentbench.agents.contracts import TerminationReason
 
 
 def test_loader_reads_only_json_objects(tmp_path: Path) -> None:

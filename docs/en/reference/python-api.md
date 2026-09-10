@@ -94,3 +94,24 @@ unset and preserves any explicit scheduler. Without vLLM, `agentinfer` remains i
 
 See [Integrate with vLLM](../how-to/integrate-vllm.md) for deployment steps and
 [Architecture](../explanation/architecture.md) for component interactions.
+
+## Replay Python entry points
+
+`agentinfer.agentbench.replay.config.load_replay_config(path: Path) -> ReplayBenchConfig`
+loads YAML and resolves paths relative to its directory. File errors raise `OSError`, malformed YAML raises
+`yaml.YAMLError`, and invalid configuration raises `pydantic.ValidationError`.
+
+`agentinfer.agentbench.replay.runner.run_replay`
+
+```python
+def run_replay(
+    config: ReplayBenchConfig,
+    *,
+    cli_metadata: dict[str, object] | None = None,
+) -> Path: ...
+```
+
+runs Replay synchronously and returns the artifact directory. `config` is resolved configuration; `cli_metadata`
+is optional invocation evidence. Reserved trace types raise `NotImplementedError`; execution errors propagate after
+failure artifacts are recorded. The synchronous entry uses `asyncio.run` and cannot run in a thread with an active
+event loop.

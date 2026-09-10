@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 
-"""Transparent Anthropic Messages request proxy."""
+"""Transparent benchmark request proxy for Anthropic and OpenAI-compatible APIs."""
 
 import asyncio
 import contextlib
@@ -21,8 +21,21 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from starlette.types import Receive, Scope, Send
 
-from agentinfer.scheduling.headers import AgentRequestIdentity, parse_agent_identity, select_router_headers
+from agentinfer.scheduling.headers import (
+    AgentRequestIdentity,
+    select_router_headers,
+)
+from agentinfer.scheduling.headers import (
+    parse_agent_identity as parse_header_identity,
+)
+from agentinfer.scheduling.identity import (
+    MetadataError,
+)
+from agentinfer.scheduling.identity import (
+    parse_agent_identity as parse_canonical_identity,
+)
 
+from .observers import _normalize_usage
 from .request_trace import RequestFact, RequestTraceWriter, TraceHealth
 
 _PROTOCOL_REQUEST_HEADERS = frozenset(
@@ -65,10 +78,11 @@ class RequestProxyLaunchConfig:
     shutdown_token: str
     stdout_path: Path
     stderr_path: Path
+    endpoint: str
 
 
 class RequestProxyServer:
-    """Forward Anthropic requests transparently while recording request facts."""
+    """Forward one configured model endpoint while recording request facts."""
 
     def __init__(
         self,
@@ -77,10 +91,14 @@ class RequestProxyServer:
         writer: RequestTraceWriter,
         request_timeout_seconds: float,
         shutdown_token: str,
+        endpoint: str,
         shutdown_timeout_seconds: float = 30,
         shutdown_callback: Callable[[], None] | None = None,
     ) -> None:
         self.upstream_url = upstream_url.rstrip("/")
+        if endpoint not in _build_usage_observers():
+            raise ValueError(f"unsupported request proxy endpoint: {endpoint!r}")
+        self.endpoint = endpoint
         self.run_id = run_id
         self.writer = writer
         self.shutdown_token = shutdown_token
@@ -98,7 +116,7 @@ class RequestProxyServer:
         self._close_health: TraceHealth | None = None
         self.app = FastAPI()
         self.app.add_api_route("/health", self.handle_health, methods=["GET"])
-        self.app.add_api_route("/v1/messages", self.handle_messages, methods=["POST"])
+        self.app.add_api_route(self.endpoint, self.handle_model_request, methods=["POST"])
         self.app.add_api_route("/shutdown", self.handle_shutdown, methods=["POST"])
 
     async def handle_health(self) -> dict[str, object]:
@@ -116,20 +134,20 @@ class RequestProxyServer:
             if self._active_requests == 0:
                 self._active_condition.notify_all()
 
-    async def handle_messages(self, request: Request) -> Response:
+    async def handle_model_request(self, request: Request) -> Response:
         await self._admit()
         release_here = True
         response: httpx.Response | None = None
         try:
             body = await request.body()
-            identity = parse_agent_identity(request.headers)
+            identity = _request_fact_identity(request.headers, body)
             request_id = str(uuid.uuid4())
             started = datetime.now(timezone.utc)
             started_clock = time.monotonic()
             try:
                 upstream_request = self.client.build_request(
                     "POST",
-                    f"{self.upstream_url}/v1/messages",
+                    f"{self.upstream_url}{self.endpoint}",
                     content=body,
                     headers=_upstream_headers(request.headers),
                 )
@@ -191,7 +209,7 @@ class RequestProxyServer:
                     raise
 
             first: float | None = None
-            usage_parser = _AnthropicSSEUsageObserver()
+            usage_parser = _build_usage_observers()[self.endpoint]()
             decoder = _ContentDecoder(content_encoding)
             error: str | None = None
             finalized = False
@@ -331,6 +349,7 @@ async def _serve_request_proxy(config: RequestProxyLaunchConfig) -> None:
         config.shutdown_token,
         shutdown_timeout_seconds=config.shutdown_timeout_seconds,
         shutdown_callback=lambda: setattr(uvicorn_server, "should_exit", True),
+        endpoint=config.endpoint,
     )
     uvicorn_server = uvicorn.Server(
         uvicorn.Config(proxy.app, host=config.host, port=config.port, log_level="warning", access_log=False)
@@ -419,46 +438,44 @@ class _ContentDecoder:
             return None
 
 
-class _AnthropicSSEUsageObserver:
-    def __init__(self) -> None:
-        self._buffer = b""
-        self.usage: dict[str, int] = {}
+def _build_usage_observers() -> dict[str, type]:
+    """Return the endpoint → usage-observer mapping derived from runtime registry.
 
-    def observe(self, chunk: bytes) -> bool:
-        self._buffer += chunk
-        observed_event = False
-        while True:
-            lf_boundary = self._buffer.find(b"\n\n")
-            crlf_boundary = self._buffer.find(b"\r\n\r\n")
-            boundaries = [(index, size) for index, size in ((lf_boundary, 2), (crlf_boundary, 4)) if index >= 0]
-            if not boundaries:
-                break
-            index, size = min(boundaries)
-            event, self._buffer = self._buffer[:index], self._buffer[index + size :]
-            data_lines = [line[5:].lstrip() for line in event.splitlines() if line.startswith(b"data:")]
-            if not data_lines:
-                continue
-            try:
-                payload = json.loads(b"\n".join(data_lines))
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                continue
-            if isinstance(payload, dict) and payload.get("type") == "content_block_delta":
-                observed_event = True
-            usage = payload.get("usage") if isinstance(payload, dict) else None
-            if not isinstance(usage, dict) and isinstance(payload, dict):
-                message = payload.get("message")
-                usage = message.get("usage") if isinstance(message, dict) else None
-            if isinstance(usage, dict):
-                for key in (
-                    "input_tokens",
-                    "output_tokens",
-                    "cache_creation_input_tokens",
-                    "cache_read_input_tokens",
-                ):
-                    value = usage.get(key)
-                    if isinstance(value, int):
-                        self.usage[key] = value
-        return observed_event
+    The import is deferred to break a circular dependency: server imports
+    lifecycle → process → server, and the registry imports runtimes that
+    import observers from this package's ``__init__``.
+    """
+
+    from ..agents.registry import RUNTIMES
+
+    return {rt.required_endpoint: rt.usage_observer_class for rt in RUNTIMES.values()}
+
+
+def _request_fact_identity(headers: Mapping[str, str], body: bytes) -> AgentRequestIdentity:
+    """Derive benchmark trace identity from canonical metadata without affecting forwarding."""
+
+    header_identity = parse_header_identity(headers)
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return header_identity
+    if not isinstance(payload, dict):
+        return header_identity
+    try:
+        identity = parse_canonical_identity(
+            vllm_xargs=payload.get("vllm_xargs"),
+            headers=headers,
+        )
+    except MetadataError:
+        return header_identity
+    if identity is None:
+        return header_identity
+    actor_role = identity.agent_role if identity.agent_role in {"lead", "subagent"} else "unknown"
+    return AgentRequestIdentity(
+        session_id=identity.task_id or identity.session_id,
+        actor_id=identity.agent_id or identity.program_id,
+        actor_role=actor_role,
+    )
 
 
 def _upstream_headers(headers: Mapping[str, str]) -> dict[str, str]:
@@ -481,7 +498,7 @@ def _usage(payload: bytes) -> dict[str, object]:
     except (json.JSONDecodeError, UnicodeDecodeError):
         return {}
     usage = row.get("usage") if isinstance(row, dict) else None
-    return usage if isinstance(usage, dict) else {}
+    return _normalize_usage(usage) if isinstance(usage, dict) else {}
 
 
 def _decode_payload(payload: bytes, encoding: str) -> bytes | None:

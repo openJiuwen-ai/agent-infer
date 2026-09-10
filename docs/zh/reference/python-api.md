@@ -89,3 +89,23 @@ def build_progress_ttl_controller(
 
 具体部署步骤见[接入 vLLM](../how-to/integrate-vllm.md)，组件协作关系见
 [架构概述](../explanation/architecture.md)。
+
+## Replay Python 入口
+
+`agentinfer.agentbench.replay.config.load_replay_config(path: Path) -> ReplayBenchConfig`
+读取 YAML 并相对于文件目录解析路径。文件读取失败抛出 `OSError`，无效 YAML 抛出 `yaml.YAMLError`，
+配置不符合模型时抛出 `pydantic.ValidationError`。
+
+`agentinfer.agentbench.replay.runner.run_replay`
+
+```python
+def run_replay(
+    config: ReplayBenchConfig,
+    *,
+    cli_metadata: dict[str, object] | None = None,
+) -> Path: ...
+```
+
+同步运行回放并返回产物目录。`config` 是已解析配置，`cli_metadata` 是可选的调用证据；
+预留 trace 类型抛出 `NotImplementedError`，执行错误在记录失败产物后向调用方传播。
+该同步入口内部使用 `asyncio.run`，不能在已有事件循环的线程内调用。

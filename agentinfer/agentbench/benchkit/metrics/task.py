@@ -9,8 +9,7 @@ from numpy import quantile
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
-from ...agents.contracts import AgentRunResult
-from ...agents.outcomes import AgentRunOutcome
+from ...agents.contracts import AgentRunOutcome, AgentRunResult
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))

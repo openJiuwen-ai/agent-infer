@@ -9,7 +9,6 @@ from pydantic import ValidationError
 from agentinfer.agentbench.benchkit.config import (
     AgentBenchConfig,
     RequestProxyConfig,
-    RouterConfig,
     load_config,
     resolve_config_paths,
 )
@@ -31,6 +30,87 @@ def test_defaults_and_nested_overrides() -> None:
     assert overridden.experiment.max_concurrency == 2
     assert overridden.agent.profile == "plan-subagent"
     assert overridden.backend.base_url == "http://127.0.0.1:9000"
+    assert default.backend.effective_metrics_url == "http://127.0.0.1:8000/metrics"
+    assert overridden.backend.effective_metrics_url == "http://127.0.0.1:9000/metrics"
+
+
+def test_explicit_metrics_url_is_used_as_complete_endpoint() -> None:
+    config = AgentBenchConfig.model_validate(
+        {"backend": {"base_url": "http://router:8400", "metrics_url": "http://vllm:8000/metrics"}}
+    )
+
+    assert config.backend.effective_metrics_url == "http://vllm:8000/metrics"
+
+
+def test_jiuwenswarm_profile_and_openai_endpoint() -> None:
+    config = AgentBenchConfig.model_validate(
+        {
+            "agent": {
+                "type": "jiuwenswarm",
+                "profile": "code.normal",
+                "executable": "jiuwenswarm",
+            },
+            "backend": {"endpoint": "/v1/chat/completions"},
+        }
+    )
+
+    assert config.agent.type == "jiuwenswarm"
+    assert config.agent.profile == "code.normal"
+    assert config.backend.endpoint == "/v1/chat/completions"
+
+
+def test_dsh_profile_and_openai_endpoint() -> None:
+    config = AgentBenchConfig.model_validate(
+        {
+            "agent": {
+                "type": "dsh",
+                "profile": "plan-subagent",
+                "executable": "dsh",
+            },
+            "backend": {"endpoint": "/v1/chat/completions"},
+        }
+    )
+
+    assert config.agent.type == "dsh"
+    assert config.agent.profile == "plan-subagent"
+    assert config.backend.endpoint == "/v1/chat/completions"
+
+
+@pytest.mark.parametrize(
+    ("agent_type", "profile"),
+    [
+        ("claude", "code.normal"),
+        ("jiuwenswarm", "single"),
+        ("jiuwenswarm", "code.team"),
+        ("dsh", "code.normal"),
+        ("claude", "autonomous"),
+    ],
+)
+def test_agent_type_profile_mismatch_is_rejected(agent_type: str, profile: str) -> None:
+    with pytest.raises(ValidationError, match="agent.profile"):
+        AgentBenchConfig.model_validate({"agent": {"type": agent_type, "profile": profile}})
+
+
+@pytest.mark.parametrize(
+    ("agent_type", "profile", "endpoint"),
+    [
+        ("claude", "single", "/v1/chat/completions"),
+        ("jiuwenswarm", "code.normal", "/v1/messages"),
+        ("dsh", "single", "/v1/messages"),
+    ],
+)
+def test_agent_endpoint_mismatch_is_rejected(
+    agent_type: str,
+    profile: str,
+    endpoint: str,
+) -> None:
+    with pytest.raises(ValidationError, match="backend.endpoint"):
+        AgentBenchConfig.model_validate(
+            {
+                "agent": {"type": agent_type, "profile": profile},
+                "backend": {"endpoint": endpoint},
+            }
+        )
 
 
 @pytest.mark.parametrize(
@@ -39,23 +119,12 @@ def test_defaults_and_nested_overrides() -> None:
         {"unknown": True},
         {"experiment": {"unknown": True}},
         {"request_proxy": {"router_url": "http://127.0.0.1:8400"}},
+        {"router": {"enabled": True, "base_url": "http://127.0.0.1:8400"}},
     ],
 )
 def test_unknown_fields_are_rejected(raw: dict[str, object]) -> None:
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         AgentBenchConfig.model_validate(raw)
-
-
-@pytest.mark.parametrize(
-    ("enabled", "base_url"),
-    [
-        (True, None),
-        (False, "http://127.0.0.1:8400"),
-    ],
-)
-def test_router_rejects_inconsistent_settings(enabled: bool, base_url: str | None) -> None:
-    with pytest.raises(ValidationError, match="router.enabled requires router.base_url"):
-        RouterConfig(enabled=enabled, base_url=base_url)
 
 
 @pytest.mark.parametrize(
@@ -109,6 +178,19 @@ agent:
     assert config.agent.executable == (tmp_path / "bin/claude").resolve()
 
 
+def test_load_config_none_resolves_cwd_relative_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    config = load_config(None)
+
+    assert config.dataset.index_path == (tmp_path / "data/swebench/instances.jsonl").resolve()
+    assert config.dataset.selection_path == (tmp_path / "data/swebench/task-lists/default.txt").resolve()
+    assert config.dataset.cache_dir == (tmp_path / "data/swebench/repo-cache").resolve()
+    assert config.experiment.result_dir == (tmp_path / "results").resolve()
+    # Bare executable stays a name for PATH lookup, not resolved against cwd.
+    assert config.agent.executable == Path("claude")
+
+
 def test_bare_executable_remains_for_path_lookup(tmp_path: Path) -> None:
     config = resolve_config_paths(AgentBenchConfig(), tmp_path)
 
@@ -116,15 +198,28 @@ def test_bare_executable_remains_for_path_lookup(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("filename", "router_enabled"),
+    ("filename", "base_url", "metrics_url", "agent_type", "endpoint"),
     [
-        ("swebench_vllm.yaml", False),
-        ("swebench_agentinfer.yaml", True),
+        ("swebench_vllm.yaml", "http://127.0.0.1:8000", None, "claude", "/v1/messages"),
+        (
+            "swebench_agentinfer.yaml",
+            "http://127.0.0.1:8400",
+            "http://127.0.0.1:8000/metrics",
+            "claude",
+            "/v1/messages",
+        ),
     ],
 )
-def test_sample_yaml_loads(filename: str, router_enabled: bool) -> None:
+def test_sample_yaml_loads(
+    filename: str,
+    base_url: str,
+    metrics_url: str | None,
+    agent_type: str,
+    endpoint: str,
+) -> None:
     config = load_config(Path("agentinfer/agentbench/configs") / filename)
 
-    assert config.router.enabled is router_enabled
-    assert bool(config.router.base_url) is router_enabled
-    assert config.backend.endpoint == "/v1/messages"
+    assert config.backend.base_url == base_url
+    assert config.backend.metrics_url == metrics_url
+    assert config.agent.type == agent_type
+    assert config.backend.endpoint == endpoint
