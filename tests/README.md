@@ -46,7 +46,7 @@ Subprocess end-to-end test via `vllm serve` with a real model.
 - `vllm==0.22.1` installed
 
 ```bash
-pip install -e .
+pip install -e ".[dev]"
 ```
 
 ### Run all tests
@@ -54,6 +54,10 @@ pip install -e .
 ```bash
 pytest tests/agentcache/ tests/agentbench/ -v
 ```
+
+### Run E2E performance benchmarks (GPU / NPU, real model)
+
+See [`tests/e2e/README.md`](e2e/README.md). These cases are not part of CPU CI.
 
 ### Run unit tests only (no GPU needed)
 
