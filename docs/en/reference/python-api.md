@@ -115,3 +115,14 @@ runs Replay synchronously and returns the artifact directory. `config` is resolv
 is optional invocation evidence. Reserved trace types raise `NotImplementedError`; execution errors propagate after
 failure artifacts are recorded. The synchronous entry uses `asyncio.run` and cannot run in a thread with an active
 event loop.
+
+## Synchronized server behavior
+
+`AgentCacheIdentityMiddleware` transfers `seed`, `min_tokens`, and `ignore_eos` from Anthropic Replay metadata
+`_agentinfer_replay_sampling` to the internal vLLM Chat request. Without that metadata, vLLM defaults are preserved.
+
+The lifecycle sender targets the explicit `X-data-parallel-rank` when present. Without it, delivery fans out to
+discovered internal-DP rank sockets to match vLLM load balancing. Invalid ranks do not emit a lifecycle signal.
+
+Progress-TTL adds `ProgressTTLResumeOrder` (`mru` / `fcfs`), cold-prefill and decode cost models, and dynamic forced-resume
+timeouts. See [Progress-TTL configuration](progress-ttl-config.md) for fields and migration notes.

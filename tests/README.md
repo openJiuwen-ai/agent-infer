@@ -72,3 +72,15 @@ pytest tests/agentcache/core/test_agent_scheduler_e2e.py -v
 ```bash
 pytest tests/agentcache/core/test_agent_scheduler_serve_e2e.py -v
 ```
+
+## Complete benchmark workflow
+
+The hermetic CLI-to-artifact smoke runs without a model service:
+
+```bash
+python -m pytest tests/agentbench/test_benchmark_smoke.py -q
+```
+
+Real benchmark scenarios are selected through `tests/e2e/run_benchmark.py` and
+`--test-config-file`; see [E2E benchmark tests](e2e/README.md).
+Calibration checks run with `python -m pytest tests/tools -q`.

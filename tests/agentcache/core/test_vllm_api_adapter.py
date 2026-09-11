@@ -20,12 +20,62 @@ from agentinfer.agentcache.core.api_adapter import (
     UnixLifecycleSender,
     _adapt_identity_request_body,
     _LifecycleResponseObserver,
+    _parse_anthropic_replay_sampling,
     _response_lifecycle,
 )
 from agentinfer.scheduling.identity import parse_agent_identity
 from agentinfer.scheduling.lifecycle import ProgramLifecycle
 
 pytestmark = pytest.mark.cpu_test
+
+
+def test_anthropic_replay_sampling_metadata_is_strictly_validated() -> None:
+    key = "_agentinfer_replay_sampling"
+
+    assert _parse_anthropic_replay_sampling(None) is None
+    assert _parse_anthropic_replay_sampling({}) is None
+    assert _parse_anthropic_replay_sampling({key: {"seed": 7, "min_tokens": 11, "ignore_eos": True}}) == (7, 11, True)
+
+
+@pytest.mark.parametrize(
+    ("sampling", "match"),
+    [
+        (None, "must be an object"),
+        ({}, "missing fields"),
+        ({"seed": True, "min_tokens": 1, "ignore_eos": True}, "seed must be"),
+        ({"seed": -1, "min_tokens": 1, "ignore_eos": True}, "seed must be"),
+        ({"seed": 1, "min_tokens": True, "ignore_eos": True}, "min_tokens must be"),
+        ({"seed": 1, "min_tokens": -1, "ignore_eos": True}, "min_tokens must be"),
+        ({"seed": 1, "min_tokens": 1, "ignore_eos": 1}, "ignore_eos must be"),
+    ],
+)
+def test_anthropic_replay_sampling_metadata_rejects_malformed_values(
+    sampling: object,
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        _parse_anthropic_replay_sampling({"_agentinfer_replay_sampling": sampling})
+
+
+def test_anthropic_bridge_without_replay_sampling_keeps_vllm_defaults() -> None:
+    from vllm.entrypoints.anthropic.protocol import AnthropicMessagesRequest
+    from vllm.entrypoints.anthropic.serving import AnthropicServingMessages
+
+    api_adapter._install_anthropic_identity_bridge()
+    anthropic_request = AnthropicMessagesRequest.model_validate(
+        {
+            "model": "qwen",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 8,
+            "metadata": {"caller": "benchkit"},
+        }
+    )
+
+    chat_request = AnthropicServingMessages._convert_anthropic_to_openai_request(anthropic_request)
+
+    assert chat_request.seed is None
+    assert chat_request.min_tokens == 0
+    assert chat_request.ignore_eos is False
 
 
 def test_openai_lifecycle_uses_post_tool_parser_semantics() -> None:
@@ -207,7 +257,14 @@ def test_identity_middleware_carries_anthropic_headers_to_internal_vllm_xargs() 
         "model": "qwen",
         "messages": [{"role": "user", "content": "hello"}],
         "max_tokens": 8,
-        "metadata": {"caller": "benchkit"},
+        "metadata": {
+            "caller": "benchkit",
+            "_agentinfer_replay_sampling": {
+                "seed": 7,
+                "min_tokens": 8,
+                "ignore_eos": True,
+            },
+        },
     }
     inbound = [
         {
@@ -244,6 +301,9 @@ def test_identity_middleware_carries_anthropic_headers_to_internal_vllm_xargs() 
     assert "vllm_xargs" not in adapted_payload
     anthropic_request = AnthropicMessagesRequest.model_validate(adapted_payload)
     chat_request = AnthropicServingMessages._convert_anthropic_to_openai_request(anthropic_request)
+    assert chat_request.seed == 7
+    assert chat_request.min_tokens == 8
+    assert chat_request.ignore_eos is True
     canonical = parse_agent_identity(vllm_xargs=chat_request.vllm_xargs, headers={})
     assert canonical is not None
     assert canonical.program_id == "session-a:child-a"
@@ -284,6 +344,21 @@ def test_identity_middleware_passes_oversized_request_through_without_unbounded_
     )
 
     assert bytes(captured_body) == b"12345678"
+
+
+def test_identity_middleware_ignores_provider_private_dsh_headers() -> None:
+    request_body = json.dumps({"model": "deepseek-v4", "messages": []}).encode()
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": [
+            (b"x-deepseek-harness-user-id", b"benchmark-root"),
+            (b"x-deepseek-harness-session-id", b"dsh-child"),
+        ],
+    }
+
+    assert _adapt_identity_request_body(scope, request_body) == request_body
 
 
 def test_identity_adapter_ignores_unsupported_body_locations() -> None:
@@ -372,6 +447,20 @@ def test_lifecycle_channel_isolated_by_dp_rank(tmp_path) -> None:
 
     assert sender.send(signal, 1) is True
     assert receiver_zero.receive() == ()
+    assert receiver_one.receive() == (signal,)
+    receiver_zero.close()
+    receiver_one.close()
+
+
+def test_lifecycle_channel_broadcasts_to_internal_dp_ranks_without_explicit_rank(tmp_path) -> None:
+    socket_path = str(tmp_path / "lifecycle.sock")
+    receiver_zero = UnixLifecycleReceiver(socket_path, 0)
+    receiver_one = UnixLifecycleReceiver(socket_path, 1)
+    sender = UnixLifecycleSender(socket_path)
+    signal = LifecycleSignal("program-1", ProgramLifecycle.TERMINAL)
+
+    assert sender.send(signal, None) is True
+    assert receiver_zero.receive() == (signal,)
     assert receiver_one.receive() == (signal,)
     receiver_zero.close()
     receiver_one.close()

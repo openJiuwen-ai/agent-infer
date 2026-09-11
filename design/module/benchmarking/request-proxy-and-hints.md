@@ -11,35 +11,45 @@ related_code_paths:
   - tests/agentbench/request_proxy/**
 depends_on:
   - index.md
+decision_refs:
+  - https://github.com/JiusiServe/AgentInfer/issues/8
+  - https://github.com/JiusiServe/AgentInfer/issues/27
 validation_paths:
   - tests/agentbench/request_proxy/**
   - tests/agentbench/test_headers.py
 upstream_refs:
-  - vLLM 0.23.0 Anthropic Messages API
-last_reviewed: 2026-07-21
+  - vLLM 0.23.0 Anthropic and OpenAI-compatible APIs
+last_reviewed: 2026-08-25
 ---
 
 ## Benchmark request proxy and hints
 
 ## Current boundary
 
-The Request Proxy is a benchmark-owned observation boundary. It transparently forwards Anthropic `POST /v1/messages`
-requests and raw response bytes, records immutable `RequestFact` rows, and exposes loopback-only health and
+The Request Proxy is a benchmark-owned observation boundary. It transparently forwards the endpoint selected by the
+active runtime, relays raw response bytes, records immutable `RequestFact` rows, and exposes loopback-only health and
 authenticated shutdown endpoints.
 
 ```text
-Claude Code -> Request Proxy -> vLLM             (baseline)
-                            -> Router -> vLLM     (candidate)
+Direct AgentCache:  Claude Code or JiuwenSwarm -> Request Proxy -> vLLM
+Router-assisted:    Claude Code or JiuwenSwarm -> Request Proxy -> Router -> vLLM
 ```
 
-It owns its HTTP client, in-flight admission, subprocess lifecycle, trace queue/file, and trace health. BenchKit owns
-neither its server internals nor request-level metric formulas.
+Claude Code uses `POST /v1/messages`; JiuwenSwarm uses `POST /v1/chat/completions`. Selecting the endpoint is
+configuration validation against the active runtime, not protocol translation by the proxy.
+
+The proxy owns its HTTP client, in-flight admission, subprocess lifecycle, trace queue/file, and trace health.
+BenchKit owns neither its server internals nor request-level metric formulas. Trace rows are immutable; adapters must attach
+any scheduling identity before forwarding so the proxy can observe it while requests are in flight.
 
 ## Hint status
 
-Despite this document's issue-27 filename, the current proxy does not construct or inject hints, `agentic_context`,
-Programs, scheduling policy, or protocol transformations. Router-owned serving metadata is outside this benchmark
-module. Historical hint and midlayer designs in issue #8 are not current implementation contracts.
+The current proxy does not construct or inject hints, `agentic_context`, Programs, scheduling policy, or protocol
+transformations. For Router-assisted OpenAI-compatible requests, Router can opt into its
+`agent_hint_affinity` middleware, which copies an already-present `agent_hint.session_id` into its routing session
+parameter when the request does not set one. That Router-side operation does not change the proxy's transparent relay
+and does not apply to Claude Code's `/v1/messages`. Router-owned serving metadata is outside this benchmark module.
+Historical hint and midlayer designs are not current implementation contracts.
 
 ### BENCH-INV-006: Proxy forwarding remains transparent
 

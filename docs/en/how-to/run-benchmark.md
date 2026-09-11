@@ -118,3 +118,5 @@ For Router runs use `swebench_agentinfer.yaml`, with `backend.base_url` pointing
 `backend.metrics_url` directly to vLLM. The Router forwards transparently without the old registration/cleanup API.
 
 For captured traces, see [Trace Replay](run-trace-replay.md).
+
+For the local smoke and JSON-driven scenarios, see [complete benchmark validation](run-e2e-benchmark.md).

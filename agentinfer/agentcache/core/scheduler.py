@@ -72,6 +72,9 @@ class EmbeddedSchedulerController(Protocol[RetainedRequestT]):
     def needs_schedule_cycle(self, now_monotonic_s: float) -> bool:
         """Return whether this native poll needs AgentCache strategy work."""
 
+    def run_due_lightweight_checks(self, now_monotonic_s: float) -> None:
+        """Apply due factor-only checks without entering a full scheduling cycle."""
+
     def consume_admitted_requests(
         self,
     ) -> tuple[tuple[RequestPoolEntry[RetainedRequestT], DispatchTarget], ...]:
@@ -80,8 +83,15 @@ class EmbeddedSchedulerController(Protocol[RetainedRequestT]):
     def on_stream_output(self, request_id: str, total_output_tokens: int) -> None:
         """Observe one native output update."""
 
-    def on_prefix_cache_observation(self, request_id: str, cached_prefix_tokens: int) -> None:
-        """Observe the native prefix-cache hit boundary for one Program segment."""
+    def on_prefix_cache_observation(
+        self,
+        request_id: str,
+        cached_prefix_tokens: int,
+        shared_prefix_tokens: int | None = None,
+        hbm_cached_prefix_tokens: int | None = None,
+        hbm_hit_ref_zero_tokens: int | None = None,
+    ) -> None:
+        """Observe total and local cache hits plus the pre-allocation ref-count-zero subset."""
 
     def on_request_completion(self, request_id: str, total_tokens: int) -> None:
         """Observe terminal request cleanup without success/failure semantics."""
@@ -101,6 +111,7 @@ class _VllmAdmissionHooks:
 
     def __init__(self, owner: Scheduler, vllm_config: object, kv_cache_config: object, block_size: int) -> None:
         attach_agentinfer_to_vllm_logging()
+        self._owner = owner
         additional = getattr(vllm_config, "additional_config", {})
         settings = additional.get("agentcache", {}) if isinstance(additional, dict) else {}
         if not isinstance(settings, dict):
@@ -124,6 +135,7 @@ class _VllmAdmissionHooks:
         # EngineCore passes resolve_kv_cache_block_sizes() as block_size, which already includes DCP and PCP.
         self.local_hbm_kv_tokens = int(kv_cache_config.num_blocks) * int(block_size)
         self.tracked_native: set[str] = set()
+        self._local_prefix_observations: dict[str, tuple[int, int]] = {}
         self._prefix_refresh_pending = False
         self.controller: EmbeddedSchedulerController[Request] | None = None
         self.lifecycle_receiver: UnixLifecycleReceiver | None = None
@@ -133,6 +145,7 @@ class _VllmAdmissionHooks:
                 raise ValueError("agentcache.controller_factory must be a non-empty import path")
             factory = cast(ControllerFactory, _resolve_object(factory_path))
             self.controller = factory(self.backend_pool_info(owner), settings)
+            self._install_prefix_lookup_observer(owner)
             socket_path = settings.get("lifecycle_socket_path") or os.environ.get(LIFECYCLE_SOCKET_ENV)
             if socket_path is not None:
                 if not isinstance(socket_path, str) or not socket_path:
@@ -166,7 +179,11 @@ class _VllmAdmissionHooks:
         self._drain_lifecycle_signals()
         if self.controller is None:
             return
-        needs_cycle = self.controller.needs_schedule_cycle(time.monotonic())
+        now = time.monotonic()
+        lightweight_check = getattr(self.controller, "run_due_lightweight_checks", None)
+        if callable(lightweight_check):
+            lightweight_check(now)
+        needs_cycle = self.controller.needs_schedule_cycle(now)
         if not needs_cycle and not self._prefix_refresh_pending:
             return
         if self._prefix_refresh_pending:
@@ -261,6 +278,7 @@ class _VllmAdmissionHooks:
                     )
                     self.controller.on_request_completion(request_id, total_tokens)
                     self.tracked_native.discard(request_id)
+                    self._local_prefix_observations.pop(request_id, None)
                     completed_request = True
         if completed_request:
             self._prefix_refresh_pending = True
@@ -272,10 +290,18 @@ class _VllmAdmissionHooks:
         for request in getattr(scheduler_output, "scheduled_new_reqs", ()):
             request_id = str(getattr(request, "req_id", ""))
             if request_id in self.tracked_native:
-                self.controller.on_prefix_cache_observation(
-                    request_id,
-                    max(0, int(getattr(request, "num_computed_tokens", 0))),
-                )
+                cached_tokens = max(0, int(getattr(request, "num_computed_tokens", 0)))
+                local_observation = self._local_prefix_observations.pop(request_id, None)
+                if local_observation is None:
+                    self.controller.on_prefix_cache_observation(request_id, cached_tokens)
+                else:
+                    self.controller.on_prefix_cache_observation(
+                        request_id,
+                        cached_tokens,
+                        local_observation[1],
+                        local_observation[0],
+                        max(0, local_observation[0] - local_observation[1]),
+                    )
 
     def cancel_retained(self, request_ids: str | Iterable[str] | None) -> list[tuple[str, int]]:
         """Cancel attempts that have not entered native vLLM yet."""
@@ -316,7 +342,42 @@ class _VllmAdmissionHooks:
                 if request_id in self.tracked_native:
                     self.controller.on_request_completion(request_id, token_counts.get(request_id, 0))
                     self.tracked_native.discard(request_id)
+                    self._local_prefix_observations.pop(request_id, None)
         return retained + native
+
+    def _install_prefix_lookup_observer(self, owner: Scheduler) -> None:
+        """Wrap the real vLLM lookup to observe block ownership before allocation mutates ``ref_cnt``."""
+        kv_cache_manager = getattr(owner, "kv_cache_manager", None)
+        native_get_computed_blocks = getattr(kv_cache_manager, "get_computed_blocks", None)
+        if kv_cache_manager is None or not callable(native_get_computed_blocks):
+            logger.warning("AgentInfer exact shared-prefix observation unavailable: get_computed_blocks is missing")
+            return
+
+        def observed_get_computed_blocks(request: Request):
+            computed_blocks, cached_tokens = native_get_computed_blocks(request)
+            if request.request_id in self.tracked_native:
+                cached = max(0, int(cached_tokens))
+                self._local_prefix_observations[request.request_id] = (
+                    cached,
+                    self._ref_count_shared_tokens(computed_blocks, cached),
+                )
+            return computed_blocks, cached_tokens
+
+        kv_cache_manager.get_computed_blocks = observed_get_computed_blocks
+
+    @staticmethod
+    def _ref_count_shared_tokens(computed_blocks: object, cached_tokens: int) -> int:
+        """Return a conservative token-equivalent count of hit blocks already referenced by native requests."""
+        if cached_tokens <= 0:
+            return 0
+        shared_lengths: list[int] = []
+        for group in getattr(computed_blocks, "blocks", ()):
+            blocks = tuple(group)
+            if not blocks:
+                continue
+            referenced_blocks = sum(int(getattr(block, "ref_cnt", 0)) > 0 for block in blocks)
+            shared_lengths.append(cached_tokens * referenced_blocks // len(blocks))
+        return min(cached_tokens, min(shared_lengths)) if shared_lengths else 0
 
     def unfinished_count(self, native_count: int) -> int:
         """Merge retained and native liveness without exposing request objects to EngineCore."""

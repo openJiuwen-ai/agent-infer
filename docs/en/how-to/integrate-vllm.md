@@ -79,3 +79,5 @@ See [Architecture](../explanation/architecture.md) for component responsibilitie
 [Run a benchmark](run-benchmark.md).
 
 [release-wheel]: https://github.com/openjiuwen-ai/agent-infer/releases/download/0.1.0/agentinfer-0.1.0-py3-none-any.whl
+
+See [Progress-TTL configuration](../reference/progress-ttl-config.md) for current settings, defaults, and migration notes.

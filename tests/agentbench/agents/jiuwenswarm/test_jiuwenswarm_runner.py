@@ -301,7 +301,10 @@ def test_prompt_delivery_is_bounded_by_prompt_and_task_timeouts(
         def killpg(_pid: int, _signal: int) -> None:
             process.kill()
 
-        monkeypatch.setattr(runner.os, "killpg", killpg)
+        # Windows has no os.killpg; the production kill path uses process.kill()
+        # there (runner._kill_cli_process_group), so inject the attribute so the
+        # POSIX killpg simulation still applies to the fake process.
+        monkeypatch.setattr(runner.os, "killpg", killpg, raising=False)
         result = await runner._communicate_with_timeout(
             process,
             b"prompt",

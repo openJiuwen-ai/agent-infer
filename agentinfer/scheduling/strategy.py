@@ -180,6 +180,20 @@ class SchedulingStrategy(Generic[StrategyGlobalFactorsT, StrategyProgramFactorsT
             transitions: Lock-scoped capability for caller-owned core state changes.
         """
 
+    def next_lightweight_check_at(
+        self,
+        strategy_factors: StrategyFactors[StrategyGlobalFactorsT, StrategyProgramFactorsT],
+    ) -> float | None:
+        """Return the earliest factor-only deadline that needs no full scheduling cycle."""
+        return None
+
+    def handle_lightweight_check(
+        self,
+        strategy_factors: StrategyFactors[StrategyGlobalFactorsT, StrategyProgramFactorsT],
+        now_monotonic_s: float,
+    ) -> None:
+        """Apply due factor-only expiry without constructing a scheduling snapshot."""
+
     def shared_prefix_freshness_seconds(
         self,
         snapshot: SchedulingSnapshot,

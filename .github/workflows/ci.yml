@@ -58,6 +58,7 @@ jobs:
           pytest --timeout=120 -v --durations=20 \
             tests/agentbench \
             tests/scheduling \
+            tests/tools \
             tests/agentcache/test_entrypoints.py
 
   dco:

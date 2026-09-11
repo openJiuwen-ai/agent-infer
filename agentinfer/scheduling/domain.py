@@ -72,7 +72,6 @@ class ProgramTokenObservation:
 
     Args:
         estimated_context_tokens: Router-side estimate of current context tokens.
-        estimated_next_round_tokens: Estimated token growth for the next model round.
         shared_prefix_tokens: Prefix tokens observed as already cached for this Program's current segment.
         shared_prefix_fresh_until_monotonic_s: Deadline before which the runtime retains this shared-prefix observation.
         actual_resident_tokens: Optional backend-observed resident KV tokens.
@@ -84,7 +83,6 @@ class ProgramTokenObservation:
     """
 
     estimated_context_tokens: int
-    estimated_next_round_tokens: int = 0
     shared_prefix_tokens: int = 0
     shared_prefix_fresh_until_monotonic_s: float | None = None
     actual_resident_tokens: int | None = None
@@ -98,7 +96,6 @@ class ProgramTokenObservation:
         """Validate non-negative counts and a positive supplied KV block size."""
         counts = (
             self.estimated_context_tokens,
-            self.estimated_next_round_tokens,
             self.shared_prefix_tokens,
             self.actual_resident_tokens,
             self.actual_allocated_blocks,

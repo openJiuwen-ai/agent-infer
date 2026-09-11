@@ -22,8 +22,12 @@ reported as exact execution parity.
 
 ## Migration provenance
 
-Migrated from JiusiServe/AgentInfer commit `af93e654606d5f5365a64aaacfc5cb63cb0fcfb7`
-onto openJiuwen-ai/agent-infer base `49a68d947201daddd05bee989856f291811953d8`.
-The import preserves the `agentinfer.agentbench` package path and target SPDX notices.
-Integration changes cover Replay CLI delegation, DSH identity headers, dependency and YAML packaging,
-and Node 20-compatible bridge tests. Legacy Router control modules are replaced by transparent forwarding.
+The complete `agentinfer/` package and related tests are synchronized from
+JiusiServe/AgentInfer commit `abcaaba9b8e4960ba5e29add24c1a7b99d6c14ad`.
+This supersedes the initial AgentBench-only import from `af93e654606d5f5365a64aaacfc5cb63cb0fcfb7`.
+Destination integration preserves SPDX notices, Node 20-compatible bridge tests,
+YAML package data, and the bilingual documentation layout.
+
+The synchronized package includes Replay sampling conversion, internal-DP lifecycle delivery,
+and the Progress-TTL cost model used by the benchmark launchers. Related surfaces include
+`tests/e2e/`, `tools/calibration/`, and benchmark integration/investigation skills.

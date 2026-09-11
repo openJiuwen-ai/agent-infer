@@ -109,3 +109,14 @@ def run_replay(
 同步运行回放并返回产物目录。`config` 是已解析配置，`cli_metadata` 是可选的调用证据；
 预留 trace 类型抛出 `NotImplementedError`，执行错误在记录失败产物后向调用方传播。
 该同步入口内部使用 `asyncio.run`，不能在已有事件循环的线程内调用。
+
+## 已同步的服务端行为
+
+`AgentCacheIdentityMiddleware` 将 Anthropic Replay 元数据 `_agentinfer_replay_sampling` 中的
+`seed`、`min_tokens`、`ignore_eos` 传递到 vLLM 内部 Chat 请求；无该元数据时保留 vLLM 默认值。
+
+生命周期发送器在存在 `X-data-parallel-rank` 时仅发送到指定 rank；未指定时向发现的内部 DP rank
+socket 广播，以匹配 vLLM 的内部负载均衡。无效 rank 不发送生命周期信号。
+
+Progress-TTL 新增 `ProgressTTLResumeOrder`（`mru` / `fcfs`），并使用冷 prefill 成本模型、decode 成本模型
+和动态强制恢复超时。字段与迁移说明见[Progress-TTL 配置](progress-ttl-config.md)。

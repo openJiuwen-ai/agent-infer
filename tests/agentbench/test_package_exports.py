@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 
-"""Verify collector and metric package exports."""
+"""Verify collector and metric package re-export contracts."""
 
 
 def test_collector_package_exports() -> None:

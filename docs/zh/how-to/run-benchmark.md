@@ -114,3 +114,5 @@ DSH 对应参数为 `--agent-type dsh --agent-profile single --agent-executable 
 仅透明转发，不需要旧注册/清理接口。
 
 已有请求 trace 可使用[Trace Replay](run-trace-replay.md)。
+
+完整的本地烟雾测试和 JSON 场景验证见[运行完整基准验证](run-e2e-benchmark.md)。
