@@ -162,31 +162,55 @@ class UnixLifecycleReceiver:
 
 
 class UnixLifecycleSender:
-    """Short-lived API-side sender that targets one rank-specific EngineCore socket."""
+    """Short-lived API-side sender for one explicit rank or all internal-DP ranks."""
 
     def __init__(self, socket_path: str) -> None:
         if not socket_path:
             raise ValueError("lifecycle socket path must not be empty")
         self.socket_path = socket_path
 
-    def send(self, signal: LifecycleSignal, dp_rank: int) -> bool:
-        """Best-effort delivery of one bounded datagram to the selected DP rank."""
+    def send(self, signal: LifecycleSignal, dp_rank: int | None) -> bool:
+        """Best-effort delivery to one selected rank or every discoverable internal rank."""
         payload = json.dumps(
             {"program_id": signal.program_id, "lifecycle": signal.lifecycle.value},
             separators=(",", ":"),
         ).encode()
         if len(payload) > _MAX_SIGNAL_BYTES:
             raise ValueError("lifecycle signal exceeds datagram limit")
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        targets = (
+            (_rank_socket_path(self.socket_path, dp_rank),)
+            if dp_rank is not None
+            else self._discover_internal_rank_sockets()
+        )
+        if not targets:
+            targets = (_rank_socket_path(self.socket_path, 0),)
+        delivered = False
+        for target in targets:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            try:
+                sock.setblocking(False)
+                sock.sendto(payload, str(target))
+                delivered = True
+            except (FileNotFoundError, BlockingIOError, ConnectionRefusedError, OSError) as exc:
+                logger.warning("AgentCache lifecycle signal delivery to %s failed: %s", target, exc)
+            finally:
+                sock.close()
+        return delivered
+
+    def _discover_internal_rank_sockets(self) -> tuple[Path, ...]:
+        """Return live-looking ``.dpN`` endpoints without depending on vLLM DP internals."""
+        base = Path(self.socket_path)
+        prefix = f"{base.name}.dp"
         try:
-            sock.setblocking(False)
-            sock.sendto(payload, str(_rank_socket_path(self.socket_path, dp_rank)))
-        except (FileNotFoundError, BlockingIOError, ConnectionRefusedError, OSError) as exc:
-            logger.warning("AgentCache lifecycle signal delivery failed: %s", exc)
-            return False
-        finally:
-            sock.close()
-        return True
+            candidates = tuple(base.parent.iterdir())
+        except OSError:
+            return ()
+        ranked: list[tuple[int, Path]] = []
+        for candidate in candidates:
+            suffix = candidate.name.removeprefix(prefix)
+            if candidate.name.startswith(prefix) and suffix.isdigit():
+                ranked.append((int(suffix), candidate))
+        return tuple(path for _, path in sorted(ranked))
 
 
 def _rank_socket_path(socket_path: str, dp_rank: int) -> Path:
@@ -442,8 +466,9 @@ class AgentCacheLifecycleMiddleware:
         )
         if metadata is None:
             return
-        dp_rank = _request_dp_rank(headers)
-        if dp_rank is None:
+        try:
+            dp_rank = _request_dp_rank(headers)
+        except ValueError:
             logger.warning("AgentCache lifecycle signal has an invalid X-data-parallel-rank header")
             return
         self.sender.send(LifecycleSignal(metadata.program_id, lifecycle), dp_rank)
@@ -550,16 +575,18 @@ def _request_headers(scope: Mapping[str, object]) -> dict[str, str]:
 
 
 def _request_dp_rank(headers: Mapping[str, str]) -> int | None:
-    """Return the Router-selected DP rank, defaulting headerless DP=1 traffic to rank zero."""
+    """Return an explicit Router-selected rank, or ``None`` for internal DP load balancing."""
     normalized = {key.lower(): value for key, value in headers.items()}
     raw_rank = normalized.get("x-data-parallel-rank")
     if raw_rank is None:
-        return 0
+        return None
     try:
         dp_rank = int(raw_rank)
-    except ValueError:
-        return None
-    return dp_rank if dp_rank >= 0 else None
+    except ValueError as exc:
+        raise ValueError("data parallel rank must be an integer") from exc
+    if dp_rank < 0:
+        raise ValueError("data parallel rank must be non-negative")
+    return dp_rank
 
 
 def _response_lifecycle(endpoint: ApiEndpoint, payload: object) -> ProgramLifecycle:

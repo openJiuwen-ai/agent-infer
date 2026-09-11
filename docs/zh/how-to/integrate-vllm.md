@@ -52,6 +52,44 @@ vllm serve meta-llama/Llama-3.1-8B-Instruct \
 根据部署需要追加张量并行、端口、模型专用工具解析和 Prefix Cache 等标准 vLLM 参数。上游参数见
 [vLLM Quickstart](https://docs.vllm.ai/en/latest/getting_started/quickstart/)。
 
+### 配置 Progress-TTL 策略参数
+
+策略参数位于 `additional_config.agentcache.progress_ttl`。下面的示例展示主要的部署标定参数和当前策略使用的工作量前视防饥饿边界：
+
+```bash
+--additional-config '{
+  "agentcache": {
+    "controller_factory": "agentinfer.agentcache.core.factory.build_progress_ttl_controller",
+    "progress_ttl": {
+      "ttl_min_seconds": 0.05,
+      "ttl_max_seconds": 32,
+      "resume_capacity_ratio": 1.0,
+      "resume_order": "mru",
+      "ttl_prefill_model_intercept_seconds": 0.042935,
+      "ttl_prefill_model_linear_seconds_per_1k_tokens": 0.080027,
+      "ttl_prefill_model_quadratic_seconds_per_1k_tokens_squared": 0.00220962,
+      "decode_step_fixed_seconds": 0.012112,
+      "decode_step_seconds_per_request": 0.0006939,
+      "decode_step_seconds_per_context_token": 2.2516e-7,
+      "force_resume_timeout_scale": 3.0,
+      "force_resume_timeout_min_seconds": 30,
+      "force_resume_timeout_max_seconds": 300
+    }
+  }
+}'
+```
+
+Prefill 和 Decode 系数与部署环境相关，应通过标定获得。请求首次进入等待状态时，Force-resume 会冻结
+deadline：用请求前方剩余轮数除以近期聚合请求吞吐，乘以 `force_resume_timeout_scale`，再限制到配置的
+最小值和最大值之间。在有界吞吐窗口尚未完整时，策略保守地使用最大 timeout。
+
+策略会拒绝已移除的历史字段，而不是静默忽略。请将
+`ttl_prefill_seconds_per_1k_uncached_tokens` 替换为三个二次 Prefill 系数，并将
+`force_resume_timeout_seconds` 替换为上述 scale、最小值和最大值。请删除
+`target_min_segment_rounds`、`privileged_lookahead_rounds`、`pause_capacity_lookahead_rounds`、
+`resume_fairness_weight`、`resume_resource_penalty_weight`、`capacity_safety_margin_tokens`、
+`ttl_impact_multiplier`、`uncached_ratio_default` 和可配置的 `decode_buffer_tokens`。
+
 ## 了解 CLI 委托行为
 
 AgentInfer 会安装一个委托型 `vllm` 控制台脚本：

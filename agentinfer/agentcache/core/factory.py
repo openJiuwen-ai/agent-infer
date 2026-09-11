@@ -16,47 +16,61 @@ from agentinfer.scheduling.progress_ttl import (
     ProgressTTLGlobalFactors,
     ProgressTTLMode,
     ProgressTTLProgramFactors,
+    ProgressTTLResumeOrder,
     build_progress_ttl_strategy,
 )
 from agentinfer.scheduling.runtime import ProgramScheduler
 
-_FIXED_PROGRESS_TTL_SETTINGS = frozenset(
-    {
-        "resume_fairness_weight",
-        "resume_resource_penalty_weight",
-        "capacity_safety_margin_tokens",
-        "decode_buffer_tokens",
-    }
-)
+_FIXED_PROGRESS_TTL_SETTINGS = frozenset({"decode_buffer_tokens"})
 
 _CONFIGURABLE_PROGRESS_TTL_SETTINGS = frozenset(
     {
         "mode",
-        "target_min_segment_rounds",
         "target_max_segment_rounds",
         "ttl_min_seconds",
         "ttl_max_seconds",
         "ttl_max_cache_miss_impact_ratio",
         "auto_enable_utility_seconds",
         "auto_disable_utility_seconds",
-        "ttl_prefill_seconds_per_1k_uncached_tokens",
+        "ttl_prefill_model_intercept_seconds",
+        "ttl_prefill_model_linear_seconds_per_1k_tokens",
+        "ttl_prefill_model_quadratic_seconds_per_1k_tokens_squared",
         "ttl_decode_throughput_alpha",
         "shared_prefix_freshness_warmup_seconds",
         "shared_prefix_freshness_kv_turnovers",
         "resume_capacity_ratio",
+        "resume_order",
         "resume_reclaim_acting_programs",
         "pause_capacity_ratio",
-        "pause_capacity_lookahead_rounds",
-        "privileged_lookahead_rounds",
         "privileged_max_context_tokens",
+        "privileged_ttl_seconds",
         "use_fixed_input_token_growth",
         "fixed_input_token_growth_per_round",
-        "force_resume_timeout_seconds",
+        "enable_batch_gain_admission",
+        "decode_step_fixed_seconds",
+        "decode_step_seconds_per_request",
+        "decode_step_seconds_per_context_token",
+        "force_resume_timeout_scale",
+        "force_resume_timeout_min_seconds",
+        "force_resume_timeout_max_seconds",
         "paused_program_ttl_seconds",
     }
 )
 
-_REMOVED_PROGRESS_TTL_SETTINGS = frozenset({"ttl_impact_multiplier", "uncached_ratio_default"})
+_REMOVED_PROGRESS_TTL_SETTINGS = frozenset(
+    {
+        "ttl_impact_multiplier",
+        "uncached_ratio_default",
+        "target_min_segment_rounds",
+        "privileged_lookahead_rounds",
+        "ttl_prefill_seconds_per_1k_uncached_tokens",
+        "resume_fairness_weight",
+        "resume_resource_penalty_weight",
+        "capacity_safety_margin_tokens",
+        "pause_capacity_lookahead_rounds",
+        "force_resume_timeout_seconds",
+    }
+)
 
 
 def build_progress_ttl_controller(
@@ -86,7 +100,6 @@ def build_progress_ttl_controller(
     defaults = ProgressTTLConfig()
     config = ProgressTTLConfig(
         mode=_mode_setting(raw, "mode", defaults.mode),
-        target_min_segment_rounds=_int_setting(raw, "target_min_segment_rounds", defaults.target_min_segment_rounds),
         target_max_segment_rounds=_int_setting(raw, "target_max_segment_rounds", defaults.target_max_segment_rounds),
         ttl_min_seconds=_float_setting(raw, "ttl_min_seconds", defaults.ttl_min_seconds),
         ttl_max_seconds=_float_setting(raw, "ttl_max_seconds", defaults.ttl_max_seconds),
@@ -105,10 +118,20 @@ def build_progress_ttl_controller(
             "auto_disable_utility_seconds",
             defaults.auto_disable_utility_seconds,
         ),
-        ttl_prefill_seconds_per_1k_uncached_tokens=_float_setting(
+        ttl_prefill_model_intercept_seconds=_float_setting(
             raw,
-            "ttl_prefill_seconds_per_1k_uncached_tokens",
-            defaults.ttl_prefill_seconds_per_1k_uncached_tokens,
+            "ttl_prefill_model_intercept_seconds",
+            defaults.ttl_prefill_model_intercept_seconds,
+        ),
+        ttl_prefill_model_linear_seconds_per_1k_tokens=_float_setting(
+            raw,
+            "ttl_prefill_model_linear_seconds_per_1k_tokens",
+            defaults.ttl_prefill_model_linear_seconds_per_1k_tokens,
+        ),
+        ttl_prefill_model_quadratic_seconds_per_1k_tokens_squared=_float_setting(
+            raw,
+            "ttl_prefill_model_quadratic_seconds_per_1k_tokens_squared",
+            defaults.ttl_prefill_model_quadratic_seconds_per_1k_tokens_squared,
         ),
         ttl_decode_throughput_alpha=_float_setting(
             raw,
@@ -130,6 +153,7 @@ def build_progress_ttl_controller(
             "resume_capacity_ratio",
             defaults.resume_capacity_ratio,
         ),
+        resume_order=_resume_order_setting(raw, "resume_order", defaults.resume_order),
         resume_reclaim_acting_programs=_bool_setting(
             raw,
             "resume_reclaim_acting_programs",
@@ -140,20 +164,15 @@ def build_progress_ttl_controller(
             "pause_capacity_ratio",
             defaults.pause_capacity_ratio,
         ),
-        pause_capacity_lookahead_rounds=_float_setting(
-            raw,
-            "pause_capacity_lookahead_rounds",
-            defaults.pause_capacity_lookahead_rounds,
-        ),
-        privileged_lookahead_rounds=_float_setting(
-            raw,
-            "privileged_lookahead_rounds",
-            defaults.privileged_lookahead_rounds,
-        ),
         privileged_max_context_tokens=_int_setting(
             raw,
             "privileged_max_context_tokens",
             defaults.privileged_max_context_tokens,
+        ),
+        privileged_ttl_seconds=_float_setting(
+            raw,
+            "privileged_ttl_seconds",
+            defaults.privileged_ttl_seconds,
         ),
         use_fixed_input_token_growth=_bool_setting(
             raw,
@@ -165,10 +184,40 @@ def build_progress_ttl_controller(
             "fixed_input_token_growth_per_round",
             defaults.fixed_input_token_growth_per_round,
         ),
-        force_resume_timeout_seconds=_float_setting(
+        enable_batch_gain_admission=_bool_setting(
             raw,
-            "force_resume_timeout_seconds",
-            defaults.force_resume_timeout_seconds,
+            "enable_batch_gain_admission",
+            defaults.enable_batch_gain_admission,
+        ),
+        decode_step_fixed_seconds=_float_setting(
+            raw,
+            "decode_step_fixed_seconds",
+            defaults.decode_step_fixed_seconds,
+        ),
+        decode_step_seconds_per_request=_float_setting(
+            raw,
+            "decode_step_seconds_per_request",
+            defaults.decode_step_seconds_per_request,
+        ),
+        decode_step_seconds_per_context_token=_float_setting(
+            raw,
+            "decode_step_seconds_per_context_token",
+            defaults.decode_step_seconds_per_context_token,
+        ),
+        force_resume_timeout_scale=_float_setting(
+            raw,
+            "force_resume_timeout_scale",
+            defaults.force_resume_timeout_scale,
+        ),
+        force_resume_timeout_min_seconds=_float_setting(
+            raw,
+            "force_resume_timeout_min_seconds",
+            defaults.force_resume_timeout_min_seconds,
+        ),
+        force_resume_timeout_max_seconds=_float_setting(
+            raw,
+            "force_resume_timeout_max_seconds",
+            defaults.force_resume_timeout_max_seconds,
         ),
         paused_program_ttl_seconds=_float_setting(
             raw,
@@ -240,6 +289,21 @@ def _mode_setting(settings: JsonMapping, name: str, default: ProgressTTLMode) ->
         return ProgressTTLMode(value)
     except ValueError as exc:
         raise ValueError(f"progress_ttl.{name} must be one of: on, off, auto") from exc
+
+
+def _resume_order_setting(
+    settings: JsonMapping,
+    name: str,
+    default: ProgressTTLResumeOrder,
+) -> ProgressTTLResumeOrder:
+    """Read the ordering used for ordinary resume candidates."""
+    value = settings.get(name, default.value)
+    if not isinstance(value, str):
+        raise ValueError(f"progress_ttl.{name} must be one of: mru, fcfs")
+    try:
+        return ProgressTTLResumeOrder(value)
+    except ValueError as exc:
+        raise ValueError(f"progress_ttl.{name} must be one of: mru, fcfs") from exc
 
 
 def _float_setting(

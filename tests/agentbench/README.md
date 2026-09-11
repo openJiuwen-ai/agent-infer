@@ -44,8 +44,13 @@ also requires an AgentInfer runtime build that provides
 `AgentCacheAsyncSchedulerBridge`, `AgentCacheLifecycleMiddleware`, and the
 progress-TTL controller in `VENV`.
 
-The Scheduler comparison uses policy fields supported by the destination controller factory.
-`VLLM_ENV_SCRIPT` and `VLLM_EXTRA_ARGS` configure the engine environment and deployment arguments shared by both arms.
+The Scheduler comparison defaults its Progress-TTL cost model to the checked
+NPU/GLM reference values. GPU or other NPU deployments can override
+`PRIVILEGED_MAX_CONTEXT_TOKENS`, the three `TTL_PREFILL_MODEL_*` values,
+`TTL_DECODE_THROUGHPUT_ALPHA`, and the three `DECODE_STEP_*` values without
+changing the script. The destination controller factory must support these
+policy fields. `VLLM_ENV_SCRIPT` and `VLLM_EXTRA_ARGS` configure the engine
+environment and deployment arguments shared by both arms.
 
 Before a manual run, record the branch/commit, host, virtualenv, ports, configs,
 dataset, artifact directories, explicit tmux names, commands, stop conditions,
