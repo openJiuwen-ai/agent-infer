@@ -1,0 +1,3552 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 6b9ecec..78f227a 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2504,6 +2504,16 @@ dependencies = [
+  "serde",
+ ]
+ 
++[[package]]
++name = "minijinja-contrib"
++version = "2.18.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "8c6302e47d2b51f9fc978268ff7f5a014de5caa2ad48440309fd10ee711480d7"
++dependencies = [
++ "minijinja",
++ "serde",
++]
++
+ [[package]]
+ name = "minimal-lexical"
+ version = "0.2.1"
+@@ -4828,6 +4838,7 @@ dependencies = [
+  "metrics",
+  "metrics-exporter-prometheus",
+  "minijinja",
++ "minijinja-contrib",
+  "once_cell",
+  "opentelemetry",
+  "opentelemetry-http",
+diff --git a/Cargo.toml b/Cargo.toml
+index 9489359..7a3a530 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -80,6 +80,7 @@ strum = { version = "0.26", features = ["derive"] }
+ once_cell = "1.21.3"
+ zmq = "0.10.0"
+ rmp-serde = "1.3"
++minijinja-contrib = { version = "=2.18.0", features = ["pycompat"] }
+ 
+ [dev-dependencies]
+ criterion = { version = "0.5", features = ["html_reports"] }
+diff --git a/README.md b/README.md
+index c6bdf12..73902fc 100644
+--- a/README.md
++++ b/README.md
+@@ -125,6 +125,74 @@ cargo run --release -- \
+ 
+ ## Configuration
+ 
++### Router middleware
++
++Router-native middleware is opt-in through repeatable `--middleware` options.
++For OpenAI-compatible agent requests, enable `agent_hint_affinity` to copy
++`agent_hint.session_id` into `session_params.session_id` before routing:
++
++Build and invoke the Rust release binary directly:
++
++```bash
++cd agentrouter
++cargo build --release
++
++./target/release/vllm-router \
++    --worker-urls http://localhost:8080 http://localhost:8081 \
++    --policy cache_aware \
++    --middleware agent_hint_affinity
++```
++
++Or install the Python package, whose console command forwards the same option
++through PyO3 to the Rust Router:
++
++```bash
++cd agentrouter
++python -m pip install -e .
++
++vllm-router \
++    --worker-urls http://localhost:8080 http://localhost:8081 \
++    --policy cache_aware \
++    --middleware agent_hint_affinity
++```
++
++For one vLLM endpoint exposing multiple intra-node DP ranks, the Router DP size
++must match vLLM's `--data-parallel-size`:
++
++```bash
++./target/release/vllm-router \
++    --worker-urls http://localhost:8080 \
++    --intra-node-data-parallel-size 4 \
++    --policy cache_aware \
++    --chat-routing-key-mode session-id-full-history-fallback \
++    --middleware agent_hint_affinity
++```
++
++The middleware applies only to `/v1/chat/completions`. Middleware names select
++built-in Rust implementations; Python ASGI import paths are not loaded by the
++Rust Router.
++
++To retain the same session affinity and also translate
++`agent_hint.cache_control.msg_offset` into token and block coordinates, use the
++`agent_hint_token_offsets` middleware:
++
++```bash
++./target/release/vllm-router \
++    --worker-urls http://localhost:8080 \
++    --policy cache_aware \
++    --middleware agent_hint_token_offsets \
++    --agent-hint-tokenizer /models/Qwen/tokenizer.json \
++    --agent-hint-chat-template /models/Qwen/chat_template.jinja \
++    --agent-hint-block-size 128
++```
++
++The tokenizer, chat template, and block size must match the backend. The Router
++loads the tokenizer once at startup, recalculates client-provided derived
++offsets, and forwards `token_offset`, `block_offset`, and
++`intra_block_offset`. It does not execute cache offload, prefetch, or eviction;
++the backend must consume those fields. `agent_hint_affinity` and
++`agent_hint_token_offsets` are mutually exclusive.
++
+ ### Authentication
+ 
+ Enable bearer-token validation by listing validation URLs (comma-separated) in `.env` via `API_KEY_VALIDATION_URLS` or passing `--api-key-validation-urls`.
+diff --git a/py_src/vllm_router/router.py b/py_src/vllm_router/router.py
+index 5d92b90..9381471 100644
+--- a/py_src/vllm_router/router.py
++++ b/py_src/vllm_router/router.py
+@@ -1,6 +1,6 @@
+ from typing import Optional
+ 
+-from vllm_router.router_args import RouterArgs
++from vllm_router.router_args import RouterArgs, normalize_chat_routing_key_mode
+ from vllm_router_rs import PolicyType
+ from vllm_router_rs import Router as _Router
+ 
+@@ -15,6 +15,7 @@ def policy_from_str(policy_str: Optional[str]) -> PolicyType:
+         "cache_aware": PolicyType.CacheAware,
+         "power_of_two": PolicyType.PowerOfTwo,
+         "consistent_hash": PolicyType.ConsistentHash,
++        "agent_aware": PolicyType.AgentAware,
+     }
+     return policy_map[policy_str]
+ 
+@@ -31,17 +32,23 @@ class Router:
+             - PolicyType.RoundRobin: Distribute requests in round-robin fashion
+             - PolicyType.CacheAware: Distribute requests based on cache state and load balance
+             - PolicyType.PowerOfTwo: Select best of two random workers based on load (PD mode only)
++            - PolicyType.AgentAware: Hash-pin Programs and apply rank-local admission/TTL
+         host: Host address to bind the router server. Default: '127.0.0.1'
+         port: Port number to bind the router server. Default: 3001
+         worker_startup_timeout_secs: Timeout in seconds for worker startup. Default: 300
+         worker_startup_check_interval: Interval in seconds between checks for worker initialization. Default: 10
+         cache_threshold: Cache threshold (0.0-1.0) for cache-aware routing. Routes to cached worker
+             if the match rate exceeds threshold, otherwise routes to the worker with the smallest
+-            tree. Default: 0.5
++            tree. Default: 0.3
++        chat_routing_key_mode: Chat key for cache_aware. Default:
++            'session_id_full_history_fallback'. Also 'full_history' or 'session_id'.
++            Hyphens accepted.
++        middleware: Built-in Rust Router middleware names to enable. Python ASGI
++            import paths are unsupported. Default: [].
+         balance_abs_threshold: Load balancing is triggered when (max_load - min_load) > abs_threshold
+-            AND max_load > min_load * rel_threshold. Otherwise, use cache aware. Default: 32
++            AND max_load > min_load * rel_threshold. Otherwise, use cache aware. Default: 64
+         balance_rel_threshold: Load balancing is triggered when (max_load - min_load) > abs_threshold
+-            AND max_load > min_load * rel_threshold. Otherwise, use cache aware. Default: 1.0001
++            AND max_load > min_load * rel_threshold. Otherwise, use cache aware. Default: 1.5
+         eviction_interval_secs: Interval in seconds between cache eviction operations in cache-aware
+             routing. Default: 60
+         max_payload_size: Maximum payload size in bytes. Default: 256MB
+@@ -126,6 +133,9 @@ class Router:
+         )
+         args_dict["prefill_policy"] = policy_from_str(args_dict["prefill_policy"])
+         args_dict["decode_policy"] = policy_from_str(args_dict["decode_policy"])
++        args_dict["chat_routing_key_mode"] = normalize_chat_routing_key_mode(
++            args_dict.get("chat_routing_key_mode") or "session_id_full_history_fallback"
++        )
+ 
+         # remove mini_lb parameter
+         args_dict.pop("mini_lb")
+diff --git a/py_src/vllm_router/router_args.py b/py_src/vllm_router/router_args.py
+index 5771bf4..8302056 100644
+--- a/py_src/vllm_router/router_args.py
++++ b/py_src/vllm_router/router_args.py
+@@ -3,8 +3,43 @@ import dataclasses
+ import logging
+ from typing import Dict, List, Optional
+ 
++try:
++    from vllm_router_rs import supported_router_middlewares
++except ImportError:
++    # Python-only MiniLB mode cannot enable Router-native Rust middleware.
++    SUPPORTED_MIDDLEWARES = ()
++else:
++    SUPPORTED_MIDDLEWARES = tuple(supported_router_middlewares())
++
+ logger = logging.getLogger(__name__)
+ 
++# Values accepted by the Rust PyO3 constructor (src/lib.rs). Hyphens are
++# normalized to underscores so the Python CLI matches `vllm-router` (Rust).
++CHAT_ROUTING_KEY_MODES = (
++    "full_history",
++    "session_id",
++    "session_id_full_history_fallback",
++)
++
++
++def normalize_chat_routing_key_mode(value: str) -> str:
++    """Map CLI spellings to the Rust/PyO3 snake_case names."""
++    normalized = value.strip().replace("-", "_")
++    if normalized not in CHAT_ROUTING_KEY_MODES:
++        raise ValueError(
++            f"invalid chat routing key mode {value!r}. "
++            f"Choose from: {', '.join(CHAT_ROUTING_KEY_MODES)} "
++            "(hyphens also accepted, e.g. session-id-full-history-fallback)"
++        )
++    return normalized
++
++
++def parse_chat_routing_key_mode(value: str) -> str:
++    try:
++        return normalize_chat_routing_key_mode(value)
++    except ValueError as exc:
++        raise argparse.ArgumentTypeError(str(exc)) from exc
++
+ 
+ @dataclasses.dataclass
+ class RouterArgs:
+@@ -30,6 +65,13 @@ class RouterArgs:
+     cache_threshold: float = 0.3
+     balance_abs_threshold: int = 64
+     balance_rel_threshold: float = 1.5
++    chat_routing_key_mode: str = (
++        "session_id_full_history_fallback"  # session then full history
++    )
++    middleware: List[str] = dataclasses.field(default_factory=list)
++    agent_hint_tokenizer: Optional[str] = None
++    agent_hint_chat_template: Optional[str] = None
++    agent_hint_block_size: Optional[int] = None
+     eviction_interval_secs: int = 120
+     max_tree_size: int = 2**26
+     max_payload_size: int = 512 * 1024 * 1024  # 512MB default for large batches
+@@ -140,6 +182,7 @@ class RouterArgs:
+                 "cache_aware",
+                 "power_of_two",
+                 "consistent_hash",
++                "agent_aware",
+             ],
+             help="Load balancing policy to use. In PD mode, this is used for both prefill and decode unless overridden",
+         )
+@@ -153,6 +196,7 @@ class RouterArgs:
+                 "cache_aware",
+                 "power_of_two",
+                 "consistent_hash",
++                "agent_aware",
+             ],
+             help="Specific policy for prefill nodes in PD mode. If not specified, uses the main policy",
+         )
+@@ -166,6 +210,7 @@ class RouterArgs:
+                 "cache_aware",
+                 "power_of_two",
+                 "consistent_hash",
++                "agent_aware",
+             ],
+             help="Specific policy for decode nodes in PD mode. If not specified, uses the main policy",
+         )
+@@ -226,6 +271,46 @@ class RouterArgs:
+             default=RouterArgs.balance_rel_threshold,
+             help="Load balancing is triggered when (max_load - min_load) > abs_threshold AND max_load > min_load * rel_threshold. Otherwise, use cache aware",
+         )
++        parser.add_argument(
++            f"--{prefix}chat-routing-key-mode",
++            type=parse_chat_routing_key_mode,
++            default=RouterArgs.chat_routing_key_mode,
++            help=(
++                "Chat text key for cache_aware. Default: "
++                "session_id_full_history_fallback (session_id first, then "
++                "full history). Also: full_history, session_id. "
++                "Hyphens accepted (session-id-full-history-fallback)."
++            ),
++        )
++        parser.add_argument(
++            f"--{prefix}middleware",
++            action="append",
++            choices=SUPPORTED_MIDDLEWARES,
++            default=[],
++            help=(
++                "Built-in Rust Router middleware to enable; Python ASGI "
++                "import paths are unsupported. Repeat the option to enable "
++                "multiple middleware."
++            ),
++        )
++        parser.add_argument(
++            f"--{prefix}agent-hint-tokenizer",
++            type=str,
++            default=None,
++            help="Path to tokenizer.json used by agent_hint_token_offsets.",
++        )
++        parser.add_argument(
++            f"--{prefix}agent-hint-chat-template",
++            type=str,
++            default=None,
++            help="Optional chat template used by agent_hint_token_offsets.",
++        )
++        parser.add_argument(
++            f"--{prefix}agent-hint-block-size",
++            type=int,
++            default=None,
++            help="Backend KV block size used by agent_hint_token_offsets.",
++        )
+         parser.add_argument(
+             f"--{prefix}eviction-interval-secs",
+             type=int,
+@@ -515,9 +600,36 @@ class RouterArgs:
+         # Mooncake-specific annotation
+         args_dict["bootstrap_port_annotation"] = "vllm.ai/bootstrap-port"
+ 
++        if "chat_routing_key_mode" in args_dict and args_dict["chat_routing_key_mode"]:
++            args_dict["chat_routing_key_mode"] = normalize_chat_routing_key_mode(
++                args_dict["chat_routing_key_mode"]
++            )
++
+         return cls(**args_dict)
+ 
+     def _validate_router_args(self):
++        self.chat_routing_key_mode = normalize_chat_routing_key_mode(
++            self.chat_routing_key_mode
++        )
++        unsupported_middlewares = set(self.middleware) - set(SUPPORTED_MIDDLEWARES)
++        if unsupported_middlewares:
++            unsupported = ", ".join(sorted(unsupported_middlewares))
++            raise ValueError(f"Unsupported Router middleware: {unsupported}")
++        if {
++            "agent_hint_affinity",
++            "agent_hint_token_offsets",
++        }.issubset(self.middleware):
++            raise ValueError(
++                "agent_hint_affinity and agent_hint_token_offsets are mutually exclusive"
++            )
++        if "agent_hint_token_offsets" in self.middleware:
++            if not self.agent_hint_tokenizer:
++                raise ValueError(
++                    "agent_hint_tokenizer is required by agent_hint_token_offsets"
++                )
++            if not self.agent_hint_block_size or self.agent_hint_block_size <= 0:
++                raise ValueError("agent_hint_block_size must be greater than zero")
++
+         # Validate configuration based on mode
+         if self.vllm_pd_disaggregation:
+             # Validate PD configuration - skip URL requirements if using service discovery
+diff --git a/py_test/unit/test_arg_parser.py b/py_test/unit/test_arg_parser.py
+index c7a43f9..f42bff0 100644
+--- a/py_test/unit/test_arg_parser.py
++++ b/py_test/unit/test_arg_parser.py
+@@ -10,6 +10,8 @@ from types import SimpleNamespace
+ import pytest
+ from vllm_router.launch_router import RouterArgs, parse_router_args
+ from vllm_router.router import policy_from_str
++from vllm_router.router_args import SUPPORTED_MIDDLEWARES
++from vllm_router_rs import supported_router_middlewares
+ 
+ 
+ class TestRouterArgs:
+@@ -23,6 +25,11 @@ class TestRouterArgs:
+         assert args.host == "127.0.0.1"
+         assert args.port == 30000
+         assert args.policy == "cache_aware"
++        assert args.chat_routing_key_mode == "session_id_full_history_fallback"
++        assert args.middleware == []
++        assert args.agent_hint_tokenizer is None
++        assert args.agent_hint_chat_template is None
++        assert args.agent_hint_block_size is None
+         assert args.worker_urls == []
+         assert args.vllm_pd_disaggregation is False
+         assert args.prefill_urls == []
+@@ -439,8 +446,65 @@ class TestParseRouterArgs:
+         assert router_args.port == 30001
+         assert router_args.worker_urls == ["http://worker1:8000", "http://worker2:8000"]
+         assert router_args.policy == "round_robin"
++        assert router_args.chat_routing_key_mode == "session_id_full_history_fallback"
+ 
+-    def test_parse_pd_args(self):
++    def test_parse_chat_routing_key_mode(self):
++        """Hyphen and underscore spellings both map to the Rust/PyO3 names."""
++        hyphen = parse_router_args(
++            ["--chat-routing-key-mode", "session-id-full-history-fallback"]
++        )
++        assert hyphen.chat_routing_key_mode == "session_id_full_history_fallback"
++
++        underscore = parse_router_args(
++            ["--chat-routing-key-mode", "session_id_full_history_fallback"]
++        )
++        assert underscore.chat_routing_key_mode == "session_id_full_history_fallback"
++
++        session_only = parse_router_args(["--chat-routing-key-mode", "session-id"])
++        assert session_only.chat_routing_key_mode == "session_id"
++
++        full_history = parse_router_args(["--chat-routing-key-mode", "full_history"])
++        assert full_history.chat_routing_key_mode == "full_history"
++
++    def test_parse_chat_routing_key_mode_invalid(self):
++        with pytest.raises(SystemExit):
++            parse_router_args(["--chat-routing-key-mode", "not-a-mode"])
++
++    def test_parse_router_middleware(self):
++        router_args = parse_router_args(["--middleware", "agent_hint_affinity"])
++        assert router_args.middleware == ["agent_hint_affinity"]
++        assert tuple(supported_router_middlewares()) == SUPPORTED_MIDDLEWARES
++
++    def test_parse_router_middleware_invalid(self):
++        with pytest.raises(SystemExit):
++            parse_router_args(["--middleware", "not-a-middleware"])
++
++    def test_programmatic_router_middleware_validation(self):
++        with pytest.raises(ValueError, match="not-a-middleware"):
++            RouterArgs(middleware=["not-a-middleware"])._validate_router_args()
++
++    def test_parse_agent_hint_token_offset_middleware(self):
++        router_args = parse_router_args(
++            [
++                "--middleware",
++                "agent_hint_token_offsets",
++                "--agent-hint-tokenizer",
++                "/models/tokenizer.json",
++                "--agent-hint-chat-template",
++                "/models/chat_template.jinja",
++                "--agent-hint-block-size",
++                "128",
++            ]
++        )
++        assert router_args.middleware == ["agent_hint_token_offsets"]
++        assert router_args.agent_hint_tokenizer == "/models/tokenizer.json"
++        assert router_args.agent_hint_block_size == 128
++
++    def test_agent_hint_token_offset_middleware_requires_config(self):
++        with pytest.raises(ValueError, match="agent_hint_tokenizer"):
++            RouterArgs(middleware=["agent_hint_token_offsets"])._validate_router_args()
++
++    def test_parse_pd_disaggregation_args(self):
+         """Test parsing PD disaggregated mode arguments."""
+         args = [
+             "--vllm-pd-disaggregation",
+diff --git a/src/agent_hint_token_offsets.rs b/src/agent_hint_token_offsets.rs
+new file mode 100644
+index 0000000..798bae6
+--- /dev/null
++++ b/src/agent_hint_token_offsets.rs
+@@ -0,0 +1,510 @@
++use std::sync::Arc;
++
++use serde_json::Value;
++use thiserror::Error;
++
++use crate::middleware::inject_agent_hint_into_session_params_value;
++use crate::tokenizer::huggingface::HuggingFaceTokenizer;
++use crate::tokenizer::traits::{Encoder, Tokenizer as TokenizerTrait};
++
++const DERIVED_CACHE_FIELDS: [&str; 3] = ["token_offset", "block_offset", "intra_block_offset"];
++const CHAT_MESSAGE_MARKERS: [&str; 4] = [
++    "<|im_start|>",
++    "<|start_header_id|>",
++    "<start_of_turn>",
++    "[INST]",
++];
++
++#[derive(Debug, Error, PartialEq, Eq)]
++pub enum TokenOffsetError {
++    #[error("{0}")]
++    InvalidRequest(String),
++    #[error("{0}")]
++    Internal(String),
++}
++
++pub trait MessageOffsetCalculator: Send + Sync {
++    fn message_token_offsets(
++        &self,
++        messages: &[Value],
++        tools: Option<&[Value]>,
++        template_kwargs: Option<&serde_json::Map<String, Value>>,
++        add_generation_prompt: bool,
++    ) -> Result<Vec<usize>, String>;
++}
++
++struct HuggingFaceMessageOffsetCalculator {
++    tokenizer: HuggingFaceTokenizer,
++}
++
++impl HuggingFaceMessageOffsetCalculator {
++    fn from_files(tokenizer_path: &str, chat_template_path: Option<&str>) -> Result<Self, String> {
++        let tokenizer =
++            HuggingFaceTokenizer::from_file_with_chat_template(tokenizer_path, chat_template_path)
++                .map_err(|err| err.to_string())?;
++        if !tokenizer.has_chat_template() {
++            return Err("no chat template found; provide --agent-hint-chat-template".to_string());
++        }
++        Ok(Self { tokenizer })
++    }
++
++    fn encode(&self, rendered: &str) -> Result<Vec<u32>, String> {
++        self.tokenizer
++            .encode(rendered)
++            .map(|encoding| encoding.token_ids().to_vec())
++            .map_err(|err| err.to_string())
++    }
++}
++
++impl MessageOffsetCalculator for HuggingFaceMessageOffsetCalculator {
++    fn message_token_offsets(
++        &self,
++        messages: &[Value],
++        tools: Option<&[Value]>,
++        template_kwargs: Option<&serde_json::Map<String, Value>>,
++        add_generation_prompt: bool,
++    ) -> Result<Vec<usize>, String> {
++        let rendered = self
++            .tokenizer
++            .apply_chat_template_values_with_kwargs(
++                messages,
++                tools,
++                add_generation_prompt,
++                template_kwargs,
++            )
++            .map_err(|err| err.to_string())?;
++        let token_ids = self.encode(&rendered)?;
++
++        for marker in CHAT_MESSAGE_MARKERS {
++            let Some(marker_id) = self.tokenizer.token_to_id(marker) else {
++                continue;
++            };
++            let offsets: Vec<usize> = token_ids
++                .iter()
++                .enumerate()
++                .filter_map(|(index, token_id)| (*token_id == marker_id).then_some(index))
++                .collect();
++            if offsets.len() == messages.len()
++                || (add_generation_prompt && offsets.len() == messages.len() + 1)
++            {
++                return Ok(offsets.into_iter().take(messages.len()).collect());
++            }
++        }
++
++        // Generic append-only fallback. It is intentionally strict: every
++        // rendered prefix must be an exact token prefix of the complete chat.
++        let mut offsets = Vec::with_capacity(messages.len());
++        for index in 0..messages.len() {
++            let prefix = self
++                .tokenizer
++                .apply_chat_template_values_with_kwargs(
++                    &messages[..index],
++                    tools,
++                    false,
++                    template_kwargs,
++                )
++                .map_err(|err| err.to_string())?;
++            let prefix_ids = self.encode(&prefix)?;
++            if !token_ids.starts_with(&prefix_ids) {
++                return Err(format!(
++                    "chat template is not append-only at message index {index}"
++                ));
++            }
++            offsets.push(prefix_ids.len());
++        }
++        Ok(offsets)
++    }
++}
++
++#[derive(Clone)]
++pub struct AgentHintTokenOffsetState {
++    pub max_payload_size: usize,
++    pub block_size: usize,
++    calculator: Arc<dyn MessageOffsetCalculator>,
++}
++
++impl AgentHintTokenOffsetState {
++    pub fn from_files(
++        max_payload_size: usize,
++        block_size: usize,
++        tokenizer_path: &str,
++        chat_template_path: Option<&str>,
++    ) -> Result<Self, String> {
++        if block_size == 0 {
++            return Err("agent hint block size must be greater than zero".to_string());
++        }
++        let calculator =
++            HuggingFaceMessageOffsetCalculator::from_files(tokenizer_path, chat_template_path)?;
++        Ok(Self {
++            max_payload_size,
++            block_size,
++            calculator: Arc::new(calculator),
++        })
++    }
++
++    #[cfg(test)]
++    pub(crate) fn for_test(
++        max_payload_size: usize,
++        block_size: usize,
++        calculator: Arc<dyn MessageOffsetCalculator>,
++    ) -> Self {
++        Self {
++            max_payload_size,
++            block_size,
++            calculator,
++        }
++    }
++}
++
++fn non_empty_session_id(agent_hint: &Value) -> bool {
++    agent_hint
++        .get("session_id")
++        .and_then(Value::as_str)
++        .map(str::trim)
++        .is_some_and(|session_id| !session_id.is_empty())
++}
++
++fn parse_msg_offset(
++    cache_control: &serde_json::Map<String, Value>,
++    count: usize,
++) -> Result<usize, TokenOffsetError> {
++    let offset = match cache_control.get("msg_offset") {
++        None | Some(Value::Null) => count,
++        Some(Value::Number(number)) => number
++            .as_u64()
++            .and_then(|value| usize::try_from(value).ok())
++            .ok_or_else(|| {
++                TokenOffsetError::InvalidRequest(
++                    "agent_hint.cache_control.msg_offset must be a positive integer".to_string(),
++                )
++            })?,
++        Some(_) => {
++            return Err(TokenOffsetError::InvalidRequest(
++                "agent_hint.cache_control.msg_offset must be a positive integer".to_string(),
++            ))
++        }
++    };
++    if offset == 0 || offset > count {
++        return Err(TokenOffsetError::InvalidRequest(format!(
++            "agent_hint.cache_control.msg_offset must be in [1, {count}]"
++        )));
++    }
++    Ok(offset)
++}
++
++pub fn rewrite_agent_hint_token_offsets(
++    bytes: &[u8],
++    state: &AgentHintTokenOffsetState,
++) -> Result<Option<Vec<u8>>, TokenOffsetError> {
++    let mut value: Value = serde_json::from_slice(bytes).map_err(|err| {
++        TokenOffsetError::InvalidRequest(format!("invalid JSON request body: {err}"))
++    })?;
++    if !value.is_object() {
++        return Err(TokenOffsetError::InvalidRequest(
++            "request body must be a JSON object".to_string(),
++        ));
++    }
++
++    let session_injected = inject_agent_hint_into_session_params_value(&mut value);
++    let Some(agent_hint_value) = value.get("agent_hint") else {
++        return if session_injected {
++            serde_json::to_vec(&value)
++                .map(Some)
++                .map_err(|err| TokenOffsetError::Internal(err.to_string()))
++        } else {
++            Ok(None)
++        };
++    };
++    if !agent_hint_value.is_object() {
++        return Err(TokenOffsetError::InvalidRequest(
++            "agent_hint must be a JSON object".to_string(),
++        ));
++    }
++    if agent_hint_value.get("cache_control").is_none() {
++        return if session_injected {
++            serde_json::to_vec(&value)
++                .map(Some)
++                .map_err(|err| TokenOffsetError::Internal(err.to_string()))
++        } else {
++            Ok(None)
++        };
++    }
++    if !non_empty_session_id(agent_hint_value) {
++        return Err(TokenOffsetError::InvalidRequest(
++            "agent_hint.session_id is required for cache offset translation".to_string(),
++        ));
++    }
++
++    let messages = value
++        .get("messages")
++        .and_then(Value::as_array)
++        .filter(|messages| !messages.is_empty())
++        .cloned()
++        .ok_or_else(|| {
++            TokenOffsetError::InvalidRequest(
++                "a non-empty messages array is required for cache offset translation".to_string(),
++            )
++        })?;
++    let tools = match value.get("tools") {
++        None | Some(Value::Null) => None,
++        Some(Value::Array(tools)) => Some(tools.clone()),
++        Some(_) => {
++            return Err(TokenOffsetError::InvalidRequest(
++                "tools must be an array when provided".to_string(),
++            ))
++        }
++    };
++    let template_kwargs = match value.get("chat_template_kwargs") {
++        None | Some(Value::Null) => None,
++        Some(Value::Object(kwargs)) => Some(kwargs.clone()),
++        Some(_) => {
++            return Err(TokenOffsetError::InvalidRequest(
++                "chat_template_kwargs must be a JSON object when provided".to_string(),
++            ))
++        }
++    };
++    let add_generation_prompt = match value.get("add_generation_prompt") {
++        None | Some(Value::Null) => true,
++        Some(Value::Bool(value)) => *value,
++        Some(_) => {
++            return Err(TokenOffsetError::InvalidRequest(
++                "add_generation_prompt must be a boolean when provided".to_string(),
++            ))
++        }
++    };
++    let msg_offset = {
++        let cache_control = agent_hint_value
++            .get("cache_control")
++            .and_then(Value::as_object)
++            .ok_or_else(|| {
++                TokenOffsetError::InvalidRequest(
++                    "agent_hint.cache_control must be a JSON object".to_string(),
++                )
++            })?;
++        match cache_control.get("type") {
++            None | Some(Value::Null) => {}
++            Some(Value::String(value)) if value.is_empty() || value == "ephemeral" => {}
++            _ => {
++                return Err(TokenOffsetError::InvalidRequest(
++                    "agent_hint.cache_control.type must be 'ephemeral'".to_string(),
++                ))
++            }
++        }
++        parse_msg_offset(cache_control, messages.len())?
++    };
++
++    let offsets = state
++        .calculator
++        .message_token_offsets(
++            &messages,
++            tools.as_deref(),
++            template_kwargs.as_ref(),
++            add_generation_prompt,
++        )
++        .map_err(|err| {
++            TokenOffsetError::Internal(format!("failed to calculate message token offsets: {err}"))
++        })?;
++    if offsets.len() != messages.len() {
++        return Err(TokenOffsetError::Internal(format!(
++            "tokenizer produced {} message offsets for {} messages",
++            offsets.len(),
++            messages.len()
++        )));
++    }
++
++    let agent_hint = value
++        .get_mut("agent_hint")
++        .and_then(Value::as_object_mut)
++        .expect("agent_hint shape checked above");
++    let cache_control = agent_hint
++        .get_mut("cache_control")
++        .and_then(Value::as_object_mut)
++        .ok_or_else(|| {
++            TokenOffsetError::InvalidRequest(
++                "agent_hint.cache_control must be a JSON object".to_string(),
++            )
++        })?;
++
++    if !matches!(
++        cache_control.get("type"),
++        Some(Value::String(value)) if value == "ephemeral"
++    ) {
++        cache_control.insert("type".to_string(), Value::String("ephemeral".to_string()));
++    }
++
++    for field in DERIVED_CACHE_FIELDS {
++        cache_control.remove(field);
++    }
++    cache_control.insert("msg_offset".to_string(), Value::from(msg_offset));
++    let token_offset = offsets[msg_offset - 1];
++    cache_control.insert("token_offset".to_string(), Value::from(token_offset));
++    cache_control.insert(
++        "block_offset".to_string(),
++        Value::from(token_offset / state.block_size),
++    );
++    cache_control.insert(
++        "intra_block_offset".to_string(),
++        Value::from(token_offset % state.block_size),
++    );
++
++    serde_json::to_vec(&value)
++        .map(Some)
++        .map_err(|err| TokenOffsetError::Internal(err.to_string()))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::fs;
++    use tempfile::TempDir;
++
++    struct FixedOffsets(Vec<usize>);
++
++    impl MessageOffsetCalculator for FixedOffsets {
++        fn message_token_offsets(
++            &self,
++            _messages: &[Value],
++            _tools: Option<&[Value]>,
++            _template_kwargs: Option<&serde_json::Map<String, Value>>,
++            _add_generation_prompt: bool,
++        ) -> Result<Vec<usize>, String> {
++            Ok(self.0.clone())
++        }
++    }
++
++    fn state(offsets: Vec<usize>) -> AgentHintTokenOffsetState {
++        AgentHintTokenOffsetState::for_test(1024 * 1024, 128, Arc::new(FixedOffsets(offsets)))
++    }
++
++    #[test]
++    fn rewrites_session_and_cache_offsets() {
++        let body = serde_json::to_vec(&serde_json::json!({
++            "messages": [
++                {"role": "user", "content": "first"},
++                {"role": "assistant", "content": "second"}
++            ],
++            "agent_hint": {
++                "session_id": "session-1",
++                "cache_control": {
++                    "type": "ephemeral",
++                    "msg_offset": 2,
++                    "token_offset": 999,
++                    "extension": true
++                }
++            },
++            "vllm_xargs": {"agentic_context": "{\"program_id\":\"session-1\"}"}
++        }))
++        .unwrap();
++
++        let rewritten = rewrite_agent_hint_token_offsets(&body, &state(vec![5, 130]))
++            .unwrap()
++            .unwrap();
++        let value: Value = serde_json::from_slice(&rewritten).unwrap();
++        assert_eq!(value["session_params"]["session_id"], "session-1");
++        assert_eq!(value["agent_hint"]["cache_control"]["token_offset"], 130);
++        assert_eq!(value["agent_hint"]["cache_control"]["block_offset"], 1);
++        assert_eq!(
++            value["agent_hint"]["cache_control"]["intra_block_offset"],
++            2
++        );
++        assert_eq!(value["agent_hint"]["cache_control"]["extension"], true);
++        assert_eq!(
++            value["vllm_xargs"]["agentic_context"],
++            "{\"program_id\":\"session-1\"}"
++        );
++    }
++
++    #[test]
++    fn defaults_msg_offset_to_last_message() {
++        let body = br#"{
++            "messages":[{"role":"user","content":"first"},{"role":"assistant","content":"second"}],
++            "agent_hint":{"session_id":"session-1","cache_control":{}}
++        }"#;
++        let rewritten = rewrite_agent_hint_token_offsets(body, &state(vec![7, 257]))
++            .unwrap()
++            .unwrap();
++        let value: Value = serde_json::from_slice(&rewritten).unwrap();
++        assert_eq!(value["agent_hint"]["cache_control"]["msg_offset"], 2);
++        assert_eq!(value["agent_hint"]["cache_control"]["token_offset"], 257);
++        assert_eq!(value["agent_hint"]["cache_control"]["block_offset"], 2);
++        assert_eq!(
++            value["agent_hint"]["cache_control"]["intra_block_offset"],
++            1
++        );
++    }
++
++    #[test]
++    fn rejects_out_of_range_msg_offset() {
++        let body = br#"{
++            "messages":[{"role":"user","content":"first"}],
++            "agent_hint":{"session_id":"session-1","cache_control":{"msg_offset":2}}
++        }"#;
++        assert_eq!(
++            rewrite_agent_hint_token_offsets(body, &state(vec![0])),
++            Err(TokenOffsetError::InvalidRequest(
++                "agent_hint.cache_control.msg_offset must be in [1, 1]".to_string()
++            ))
++        );
++    }
++
++    #[test]
++    fn session_only_hint_retains_affinity_behavior() {
++        let body = br#"{
++            "messages":[{"role":"user","content":"first"}],
++            "agent_hint":{"session_id":"session-1"}
++        }"#;
++        let rewritten = rewrite_agent_hint_token_offsets(body, &state(vec![0]))
++            .unwrap()
++            .unwrap();
++        let value: Value = serde_json::from_slice(&rewritten).unwrap();
++        assert_eq!(value["session_params"]["session_id"], "session-1");
++        assert!(value["agent_hint"].get("cache_control").is_none());
++    }
++
++    #[test]
++    fn huggingface_calculator_uses_configured_chat_template() {
++        let temp_dir = TempDir::new().unwrap();
++        let tokenizer_path = temp_dir.path().join("tokenizer.json");
++        fs::write(
++            &tokenizer_path,
++            r#"{
++                "version":"1.0",
++                "truncation":null,
++                "padding":null,
++                "added_tokens":[],
++                "normalizer":null,
++                "pre_tokenizer":{"type":"Whitespace"},
++                "post_processor":null,
++                "decoder":null,
++                "model":{
++                    "type":"WordLevel",
++                    "vocab":{"first":0,"second":1,"[UNK]":2},
++                    "unk_token":"[UNK]"
++                }
++            }"#,
++        )
++        .unwrap();
++        let template_path = temp_dir.path().join("chat_template.jinja");
++        fs::write(
++            &template_path,
++            "{% for message in messages %}{{ message.content }} {% endfor %}",
++        )
++        .unwrap();
++
++        let calculator = HuggingFaceMessageOffsetCalculator::from_files(
++            tokenizer_path.to_str().unwrap(),
++            Some(template_path.to_str().unwrap()),
++        )
++        .unwrap();
++        let messages = vec![
++            serde_json::json!({"role":"user","content":"first"}),
++            serde_json::json!({"role":"assistant","content":"second"}),
++        ];
++        assert_eq!(
++            calculator
++                .message_token_offsets(&messages, None, None, false)
++                .unwrap(),
++            vec![0, 1]
++        );
++    }
++}
+diff --git a/src/lib.rs b/src/lib.rs
+index 5c4c406..dc8286a 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,4 +1,5 @@
+ use pyo3::prelude::*;
++pub mod agent_hint_token_offsets;
+ pub mod config;
+ pub mod logging;
+ use std::collections::HashMap;
+@@ -10,6 +11,7 @@ pub mod middleware;
+ pub mod otel_http;
+ pub mod otel_trace;
+ pub mod policies;
++pub mod program_scheduler;
+ pub mod protocols;
+ pub mod routers;
+ pub mod server;
+@@ -18,6 +20,11 @@ pub mod tokenizer;
+ pub mod tree;
+ use crate::metrics::PrometheusConfig;
+ 
++#[pyfunction]
++fn supported_router_middlewares() -> Vec<String> {
++    middleware::RouterMiddleware::supported_names()
++}
++
+ #[pyclass(eq)]
+ #[derive(Clone, PartialEq, Debug)]
+ pub enum PolicyType {
+@@ -26,6 +33,7 @@ pub enum PolicyType {
+     CacheAware,
+     PowerOfTwo,
+     ConsistentHash,
++    AgentAware,
+ }
+ 
+ #[pyclass]
+@@ -42,6 +50,11 @@ struct Router {
+     balance_rel_threshold: f32,
+     eviction_interval_secs: u64,
+     max_tree_size: usize,
++    chat_routing_key_mode: String,
++    middleware: Vec<middleware::RouterMiddleware>,
++    agent_hint_tokenizer: Option<String>,
++    agent_hint_chat_template: Option<String>,
++    agent_hint_block_size: Option<usize>,
+     max_payload_size: usize,
+     intra_node_data_parallel_size: usize,
+     api_key: Option<String>,
+@@ -103,7 +116,8 @@ impl Router {
+     /// Convert PyO3 Router to RouterConfig
+     pub fn to_router_config(&self) -> config::ConfigResult<config::RouterConfig> {
+         use config::{
+-            DiscoveryConfig, MetricsConfig, PolicyConfig as ConfigPolicyConfig, RoutingMode,
++            ChatRoutingKeyMode, DiscoveryConfig, MetricsConfig, PolicyConfig as ConfigPolicyConfig,
++            RoutingMode,
+         };
+ 
+         // Convert policy helper function
+@@ -124,6 +138,28 @@ impl Router {
+                 PolicyType::ConsistentHash => ConfigPolicyConfig::ConsistentHash {
+                     virtual_nodes: 160, // Default value
+                 },
++                PolicyType::AgentAware => ConfigPolicyConfig::AgentAware {
++                    hash_virtual_nodes: config::types::default_program_hash_virtual_nodes(),
++                    token_capacity_per_dp: None,
++                    max_active_programs_per_dp: config::types::default_program_max_active_per_dp(),
++                    decode_buffer_tokens: config::types::default_program_decode_buffer_tokens(),
++                    acting_ttl_secs: config::types::default_program_acting_ttl_secs(),
++                    high_watermark_ratio: config::types::default_program_high_watermark_ratio(),
++                    low_watermark_ratio: config::types::default_program_low_watermark_ratio(),
++                    metrics_interval_secs: config::types::default_program_metrics_interval_secs(),
++                    queue_timeout_secs: config::types::default_program_queue_timeout_secs(),
++                    force_resume_timeout_secs:
++                        config::types::default_program_force_resume_timeout_secs(),
++                    max_segment_rounds: config::types::default_program_max_segment_rounds(),
++                    paused_retention_ttl_secs:
++                        config::types::default_program_paused_retention_ttl_secs(),
++                    stats_window_size: config::types::default_program_stats_window_size(),
++                    privileged_max_context_tokens:
++                        config::types::default_program_privileged_max_context_tokens(),
++                    privileged_ttl_secs: config::types::default_program_privileged_ttl_secs(),
++                    enable_batch_gain_admission:
++                        config::types::default_program_enable_batch_gain_admission(),
++                },
+             }
+         };
+ 
+@@ -182,6 +218,12 @@ impl Router {
+             port: self.port,
+             connection_mode: config::ConnectionMode::Http,
+             max_payload_size: self.max_payload_size,
++            chat_routing_key_mode: match self.chat_routing_key_mode.as_str() {
++                "full_history" => ChatRoutingKeyMode::FullHistory,
++                "session_id" => ChatRoutingKeyMode::SessionId,
++                // Default / unknown values map to session-id then full-history fallback.
++                _ => ChatRoutingKeyMode::SessionIdFullHistoryFallback,
++            },
+             request_timeout_secs: self.request_timeout_secs,
+             worker_startup_timeout_secs: self.worker_startup_timeout_secs,
+             worker_startup_check_interval_secs: self.worker_startup_check_interval,
+@@ -256,6 +298,8 @@ impl Router {
+         balance_rel_threshold = 1.5,
+         eviction_interval_secs = 120,
+         max_tree_size = 2usize.pow(26),
++        chat_routing_key_mode = "session_id_full_history_fallback".to_string(),
++        middleware = vec![],
+         max_payload_size = 512 * 1024 * 1024,  // 512MB default for large batches
+         intra_node_data_parallel_size = 1,
+         api_key = None,
+@@ -310,6 +354,9 @@ impl Router {
+         otlp_traces_endpoint = None,
+         // KV connector default (PD disaggregation)
+         kv_connector = String::from("nixl"),
++        agent_hint_tokenizer = None,
++        agent_hint_chat_template = None,
++        agent_hint_block_size = None,
+     ))]
+     #[allow(clippy::too_many_arguments)]
+     fn new(
+@@ -324,6 +371,8 @@ impl Router {
+         balance_rel_threshold: f32,
+         eviction_interval_secs: u64,
+         max_tree_size: usize,
++        chat_routing_key_mode: String,
++        middleware: Vec<String>,
+         max_payload_size: usize,
+         intra_node_data_parallel_size: usize,
+         api_key: Option<String>,
+@@ -372,7 +421,22 @@ impl Router {
+         enable_trace: bool,
+         otlp_traces_endpoint: Option<String>,
+         kv_connector: String,
++        agent_hint_tokenizer: Option<String>,
++        agent_hint_chat_template: Option<String>,
++        agent_hint_block_size: Option<usize>,
+     ) -> PyResult<Self> {
++        let middleware = middleware
++            .into_iter()
++            .map(|name| middleware::RouterMiddleware::parse(&name))
++            .collect::<Result<Vec<_>, _>>()
++            .map_err(pyo3::exceptions::PyValueError::new_err)?;
++        middleware::validate_agent_hint_middleware_config(
++            &middleware,
++            agent_hint_tokenizer.as_deref(),
++            agent_hint_block_size,
++        )
++        .map_err(pyo3::exceptions::PyValueError::new_err)?;
++
+         Ok(Router {
+             host,
+             port,
+@@ -385,6 +449,11 @@ impl Router {
+             balance_rel_threshold,
+             eviction_interval_secs,
+             max_tree_size,
++            chat_routing_key_mode,
++            middleware,
++            agent_hint_tokenizer,
++            agent_hint_chat_template,
++            agent_hint_block_size,
+             max_payload_size,
+             intra_node_data_parallel_size,
+             api_key,
+@@ -487,6 +556,10 @@ impl Router {
+                 host: self.host.clone(),
+                 port: self.port,
+                 router_config,
++                middlewares: self.middleware.clone(),
++                agent_hint_tokenizer: self.agent_hint_tokenizer.clone(),
++                agent_hint_chat_template: self.agent_hint_chat_template.clone(),
++                agent_hint_block_size: self.agent_hint_block_size,
+                 max_payload_size: self.max_payload_size,
+                 log_dir: self.log_dir.clone(),
+                 log_level: self.log_level.clone(),
+@@ -513,5 +586,6 @@ impl Router {
+ fn vllm_router_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+     m.add_class::<PolicyType>()?;
+     m.add_class::<Router>()?;
++    m.add_function(wrap_pyfunction!(supported_router_middlewares, m)?)?;
+     Ok(())
+ }
+diff --git a/src/main.rs b/src/main.rs
+index a642898..c0f191f 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,11 +1,12 @@
+ use clap::{ArgAction, Parser, ValueEnum};
+ use std::collections::HashMap;
+ use vllm_router_rs::config::{
+-    CircuitBreakerConfig, ConfigError, ConfigResult, ConnectionMode, DiscoveryConfig,
+-    HealthCheckConfig, HistoryBackend, KvConnector, MetricsConfig, PolicyConfig, RetryConfig,
+-    RouterConfig, RoutingMode, TraceConfig,
++    ChatRoutingKeyMode, CircuitBreakerConfig, ConfigError, ConfigResult, ConnectionMode,
++    DiscoveryConfig, HealthCheckConfig, HistoryBackend, KvConnector, MetricsConfig, PolicyConfig,
++    RetryConfig, RouterConfig, RoutingMode, TraceConfig,
+ };
+ use vllm_router_rs::metrics::PrometheusConfig;
++use vllm_router_rs::middleware::RouterMiddleware;
+ use vllm_router_rs::server::{self, ServerConfig};
+ use vllm_router_rs::service_discovery::ServiceDiscoveryConfig;
+ 
+@@ -44,6 +45,26 @@ fn parse_prefill_args() -> Vec<(String, Option<u16>)> {
+     prefill_entries
+ }
+ 
++#[derive(Debug, Clone, Copy, Default, ValueEnum)]
++enum CliChatRoutingKeyMode {
++    FullHistory,
++    SessionId,
++    #[default]
++    SessionIdFullHistoryFallback,
++}
++
++impl From<CliChatRoutingKeyMode> for ChatRoutingKeyMode {
++    fn from(mode: CliChatRoutingKeyMode) -> Self {
++        match mode {
++            CliChatRoutingKeyMode::FullHistory => ChatRoutingKeyMode::FullHistory,
++            CliChatRoutingKeyMode::SessionId => ChatRoutingKeyMode::SessionId,
++            CliChatRoutingKeyMode::SessionIdFullHistoryFallback => {
++                ChatRoutingKeyMode::SessionIdFullHistoryFallback
++            }
++        }
++    }
++}
++
+ #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+ pub enum Backend {
+     #[value(name = "vllm")]
+@@ -107,7 +128,7 @@ struct CliArgs {
+     worker_urls: Vec<String>,
+ 
+     /// Load balancing policy to use
+-    #[arg(long, default_value = "cache_aware", value_parser = ["random", "round_robin", "cache_aware", "power_of_two", "consistent_hash", "rendezvous_hash"])]
++    #[arg(long, default_value = "cache_aware", value_parser = ["random", "round_robin", "cache_aware", "power_of_two", "consistent_hash", "rendezvous_hash", "agent_aware"])]
+     policy: String,
+ 
+     /// Enable vLLM PD (Prefill-Decode) disaggregated mode with vLLM-specific two-stage processing
+@@ -124,11 +145,11 @@ struct CliArgs {
+     decode: Vec<String>,
+ 
+     /// Specific policy for prefill nodes in PD mode
+-    #[arg(long, value_parser = ["random", "round_robin", "cache_aware", "power_of_two", "consistent_hash", "rendezvous_hash"])]
++    #[arg(long, value_parser = ["random", "round_robin", "cache_aware", "power_of_two", "consistent_hash", "rendezvous_hash", "agent_aware"])]
+     prefill_policy: Option<String>,
+ 
+     /// Specific policy for decode nodes in PD mode
+-    #[arg(long, value_parser = ["random", "round_robin", "cache_aware", "power_of_two", "consistent_hash", "rendezvous_hash"])]
++    #[arg(long, value_parser = ["random", "round_robin", "cache_aware", "power_of_two", "consistent_hash", "rendezvous_hash", "agent_aware"])]
+     decode_policy: Option<String>,
+ 
+     /// Timeout in seconds for worker startup
+@@ -159,6 +180,103 @@ struct CliArgs {
+     #[arg(long, default_value_t = 67108864)] // 2^26
+     max_tree_size: usize,
+ 
++    /// Chat routing text used by text-aware policies such as cache_aware.
++    /// Default: session-id first, then full chat history (agent / multi-turn).
++    #[arg(
++        long,
++        value_enum,
++        default_value_t = CliChatRoutingKeyMode::SessionIdFullHistoryFallback
++    )]
++    chat_routing_key_mode: CliChatRoutingKeyMode,
++
++    /// Built-in Router middleware to enable; Python ASGI import paths are unsupported
++    #[arg(long = "middleware", action = ArgAction::Append, value_enum)]
++    middleware: Vec<RouterMiddleware>,
++
++    /// Hugging Face tokenizer.json used by agent_hint_token_offsets
++    #[arg(long)]
++    agent_hint_tokenizer: Option<String>,
++
++    /// Optional chat template used by agent_hint_token_offsets
++    #[arg(long)]
++    agent_hint_chat_template: Option<String>,
++
++    /// Backend KV block size used by agent_hint_token_offsets
++    #[arg(long)]
++    agent_hint_block_size: Option<usize>,
++
++    /// Explicit logical token capacity for each DP rank.
++    #[arg(long)]
++    program_token_capacity_per_dp: Option<usize>,
++
++    /// Virtual nodes in the Program-to-DP Consistent Hash ring.
++    #[arg(long, default_value_t = 160)]
++    program_hash_virtual_nodes: u32,
++
++    /// Coarse active-Program bound per DP before `/metrics` capacity is ready.
++    #[arg(long, default_value_t = 64)]
++    program_max_active_per_dp: usize,
++
++    /// Logical decode-token reserve per active Program.
++    #[arg(long, default_value_t = 100)]
++    program_decode_buffer_tokens: usize,
++
++    /// Bootstrap and maximum fitted Acting KV-protection TTL.
++    #[arg(long, default_value_t = 10.0)]
++    program_acting_ttl_secs: f64,
++
++    /// High watermark for periodic Program capacity repair.
++    #[arg(long, default_value_t = 1.0)]
++    program_high_watermark: f64,
++
++    /// Low watermark used for Program admission and restore.
++    #[arg(long, default_value_t = 1.0)]
++    program_low_watermark: f64,
++
++    /// Existing vLLM `/metrics` polling interval.
++    #[arg(long, default_value_t = 1)]
++    program_metrics_interval_secs: u64,
++
++    /// Rank-local Program admission queue timeout.
++    #[arg(long, default_value_t = 600)]
++    program_queue_timeout_secs: u64,
++
++    /// Force a queued Program to resume on its home rank after this deadline.
++    #[arg(long, default_value_t = 300)]
++    program_force_resume_timeout_secs: u64,
++
++    /// Yield a completed service segment at this many rounds when the home
++    /// rank has queued reasoning demand.
++    #[arg(long, default_value_t = 14)]
++    program_max_segment_rounds: usize,
++
++    /// Release an idle paused Program generation after this many seconds.
++    #[arg(long, default_value_t = 1800)]
++    program_paused_retention_ttl_secs: u64,
++
++    /// Samples retained in each rank-local rolling statistics window.
++    #[arg(long, default_value_t = 100)]
++    program_stats_window_size: usize,
++
++    /// Context size used to derive bounded progress-privilege slots.
++    #[arg(long, default_value_t = 262144)]
++    program_privileged_max_context_tokens: usize,
++
++    /// Bounded progress-privilege lifetime in seconds.
++    #[arg(long, default_value_t = 5.0)]
++    program_privileged_ttl_secs: f64,
++
++    /// Enable the fitted batch-gain admission exception; an optional BOOL can disable it.
++    #[arg(
++        long,
++        default_value_t = true,
++        action = ArgAction::Set,
++        num_args = 0..=1,
++        default_missing_value = "true",
++        value_name = "BOOL"
++    )]
++    program_enable_batch_gain_admission: bool,
++
+     /// Maximum payload size in bytes
+     #[arg(long, default_value_t = 536870912)] // 512MB
+     max_payload_size: usize,
+@@ -373,6 +491,24 @@ impl CliArgs {
+                 virtual_nodes: 160, // Default value
+             },
+             "rendezvous_hash" => PolicyConfig::RendezvousHash,
++            "agent_aware" => PolicyConfig::AgentAware {
++                hash_virtual_nodes: self.program_hash_virtual_nodes,
++                token_capacity_per_dp: self.program_token_capacity_per_dp,
++                max_active_programs_per_dp: self.program_max_active_per_dp,
++                decode_buffer_tokens: self.program_decode_buffer_tokens,
++                acting_ttl_secs: self.program_acting_ttl_secs,
++                high_watermark_ratio: self.program_high_watermark,
++                low_watermark_ratio: self.program_low_watermark,
++                metrics_interval_secs: self.program_metrics_interval_secs,
++                queue_timeout_secs: self.program_queue_timeout_secs,
++                force_resume_timeout_secs: self.program_force_resume_timeout_secs,
++                max_segment_rounds: self.program_max_segment_rounds,
++                paused_retention_ttl_secs: self.program_paused_retention_ttl_secs,
++                stats_window_size: self.program_stats_window_size,
++                privileged_max_context_tokens: self.program_privileged_max_context_tokens,
++                privileged_ttl_secs: self.program_privileged_ttl_secs,
++                enable_batch_gain_admission: self.program_enable_batch_gain_admission,
++            },
+             _ => PolicyConfig::RoundRobin, // Fallback
+         }
+     }
+@@ -382,6 +518,13 @@ impl CliArgs {
+         &self,
+         prefill_urls: Vec<(String, Option<u16>)>,
+     ) -> ConfigResult<RouterConfig> {
++        vllm_router_rs::middleware::validate_agent_hint_middleware_config(
++            &self.middleware,
++            self.agent_hint_tokenizer.as_deref(),
++            self.agent_hint_block_size,
++        )
++        .map_err(|reason| ConfigError::ValidationFailed { reason })?;
++
+         // Determine routing mode
+         let mode = if self.enable_igw {
+             // IGW mode - routing mode is not used in IGW, but we need to provide a placeholder
+@@ -522,6 +665,7 @@ impl CliArgs {
+             } else {
+                 Some(self.request_id_headers.clone())
+             },
++            chat_routing_key_mode: self.chat_routing_key_mode.into(),
+             max_concurrent_requests: self.max_concurrent_requests,
+             queue_size: 100,        // Default queue size
+             queue_timeout_secs: 60, // Default timeout
+@@ -590,6 +734,10 @@ impl CliArgs {
+             host: self.host.clone(),
+             port: self.port,
+             router_config,
++            middlewares: self.middleware.clone(),
++            agent_hint_tokenizer: self.agent_hint_tokenizer.clone(),
++            agent_hint_chat_template: self.agent_hint_chat_template.clone(),
++            agent_hint_block_size: self.agent_hint_block_size,
+             max_payload_size: self.max_payload_size,
+             log_dir: self.log_dir.clone(),
+             log_level: Some(self.log_level.clone()),
+@@ -738,3 +886,64 @@ Provide --worker-urls or PD flags as usual.",
+ 
+     Ok(())
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn parses_router_middleware_option() {
++        let args = CliArgs::try_parse_from(["vllm-router", "--middleware", "agent_hint_affinity"])
++            .unwrap();
++        assert_eq!(args.middleware, vec![RouterMiddleware::AgentHintAffinity]);
++    }
++
++    #[test]
++    fn parses_agent_hint_token_offset_options() {
++        let args = CliArgs::try_parse_from([
++            "vllm-router",
++            "--middleware",
++            "agent_hint_token_offsets",
++            "--agent-hint-tokenizer",
++            "/models/tokenizer.json",
++            "--agent-hint-chat-template",
++            "/models/chat_template.jinja",
++            "--agent-hint-block-size",
++            "128",
++        ])
++        .unwrap();
++        assert_eq!(
++            args.middleware,
++            vec![RouterMiddleware::AgentHintTokenOffsets]
++        );
++        assert_eq!(
++            args.agent_hint_tokenizer.as_deref(),
++            Some("/models/tokenizer.json")
++        );
++        assert_eq!(args.agent_hint_block_size, Some(128));
++    }
++
++    #[test]
++    fn rejects_unknown_router_middleware() {
++        assert!(CliArgs::try_parse_from(["vllm-router", "--middleware", "unknown",]).is_err());
++    }
++
++    #[test]
++    fn batch_gain_admission_accepts_bare_flag() {
++        let args =
++            CliArgs::try_parse_from(["vllm-router", "--program-enable-batch-gain-admission"])
++                .unwrap();
++        assert!(args.program_enable_batch_gain_admission);
++    }
++
++    #[test]
++    fn batch_gain_admission_accepts_explicit_false() {
++        let args = CliArgs::try_parse_from([
++            "vllm-router",
++            "--program-enable-batch-gain-admission",
++            "false",
++        ])
++        .unwrap();
++        assert!(!args.program_enable_batch_gain_admission);
++    }
++}
+diff --git a/src/middleware.rs b/src/middleware.rs
+index e5daa1f..a43e1d0 100644
+--- a/src/middleware.rs
++++ b/src/middleware.rs
+@@ -2,7 +2,10 @@ use axum::{
+     extract::Request, extract::State, http::HeaderValue, http::StatusCode, middleware::Next,
+     response::IntoResponse, response::Response,
+ };
++use clap::ValueEnum;
+ use rand::Rng;
++use std::error::Error as StdError;
++use std::fmt;
+ use std::sync::atomic::{AtomicU64, Ordering};
+ use std::sync::Arc;
+ use std::time::Duration;
+@@ -16,9 +19,277 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
+ 
+ pub use crate::core::token_bucket::TokenBucket;
+ 
++use crate::agent_hint_token_offsets::{
++    rewrite_agent_hint_token_offsets, AgentHintTokenOffsetState, TokenOffsetError,
++};
+ use crate::metrics::RouterMetrics;
+ use crate::server::AppState;
+ 
++/// Router-native middleware selectable with repeatable `--middleware` flags.
++#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
++pub enum RouterMiddleware {
++    #[value(name = "agent_hint_affinity")]
++    AgentHintAffinity,
++    #[value(name = "agent_hint_token_offsets")]
++    AgentHintTokenOffsets,
++}
++
++impl RouterMiddleware {
++    pub fn parse(value: &str) -> Result<Self, String> {
++        <Self as ValueEnum>::from_str(value.trim(), false).map_err(|_| {
++            format!(
++                "unsupported Router middleware '{value}'; supported values: {}",
++                Self::supported_names().join(", ")
++            )
++        })
++    }
++
++    pub fn supported_names() -> Vec<String> {
++        Self::value_variants()
++            .iter()
++            .filter_map(ValueEnum::to_possible_value)
++            .map(|value| value.get_name().to_string())
++            .collect()
++    }
++}
++
++impl fmt::Display for RouterMiddleware {
++    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
++        let value = self
++            .to_possible_value()
++            .expect("RouterMiddleware variants must have clap names");
++        formatter.write_str(value.get_name())
++    }
++}
++
++pub fn validate_agent_hint_middleware_config(
++    middlewares: &[RouterMiddleware],
++    tokenizer_path: Option<&str>,
++    block_size: Option<usize>,
++) -> Result<(), String> {
++    let affinity_enabled = middlewares.contains(&RouterMiddleware::AgentHintAffinity);
++    let offsets_enabled = middlewares.contains(&RouterMiddleware::AgentHintTokenOffsets);
++    if affinity_enabled && offsets_enabled {
++        return Err(format!(
++            "{} and {} are mutually exclusive",
++            RouterMiddleware::AgentHintAffinity,
++            RouterMiddleware::AgentHintTokenOffsets
++        ));
++    }
++    if offsets_enabled {
++        if tokenizer_path
++            .map(str::trim)
++            .filter(|v| !v.is_empty())
++            .is_none()
++        {
++            return Err(format!(
++                "--agent-hint-tokenizer is required with --middleware {}",
++                RouterMiddleware::AgentHintTokenOffsets
++            ));
++        }
++        if block_size == Some(0) || block_size.is_none() {
++            return Err(format!(
++                "--agent-hint-block-size must be greater than zero with --middleware {}",
++                RouterMiddleware::AgentHintTokenOffsets
++            ));
++        }
++    }
++    Ok(())
++}
++
++/// Read `agent_hint.session_id` from a JSON body (ignores `parent_session_id`).
++/// Thin helper for tests; production injection parses the body once.
++pub fn session_id_from_agent_hint_body(bytes: &[u8]) -> Option<String> {
++    let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
++    session_id_from_agent_hint_value(&value)
++}
++
++fn session_id_from_agent_hint_value(value: &serde_json::Value) -> Option<String> {
++    value
++        .get("agent_hint")?
++        .get("session_id")?
++        .as_str()
++        .map(str::trim)
++        .filter(|s| !s.is_empty())
++        .map(|s| s.to_string())
++}
++
++fn body_has_session_params_session_id(value: &serde_json::Value) -> bool {
++    value
++        .get("session_params")
++        .and_then(|sp| sp.get("session_id"))
++        .and_then(|v| v.as_str())
++        .map(|s| !s.trim().is_empty())
++        .unwrap_or(false)
++}
++
++pub(crate) fn inject_agent_hint_into_session_params_value(value: &mut serde_json::Value) -> bool {
++    if body_has_session_params_session_id(value) {
++        return false;
++    }
++
++    let Some(session_id) = session_id_from_agent_hint_value(value) else {
++        return false;
++    };
++    let Some(obj) = value.as_object_mut() else {
++        return false;
++    };
++    let session_params = obj
++        .entry("session_params")
++        .or_insert_with(|| serde_json::json!({}));
++    let Some(session_params) = session_params.as_object_mut() else {
++        return false;
++    };
++    session_params.insert(
++        "session_id".to_string(),
++        serde_json::Value::String(session_id),
++    );
++    true
++}
++
++/// Copy `agent_hint.session_id` into `session_params.session_id` when missing.
++///
++/// Returns the rewritten body bytes, or `None` when no change is needed / possible.
++/// Existing `session_params.session_id` is never overwritten. `agent_hint` is kept
++/// for upstream passthrough.
++///
++/// Parses JSON directly (no byte pre-filter) so escaped keys such as
++/// `\u0061gent_hint` still normalize correctly.
++pub fn inject_agent_hint_into_session_params(bytes: &[u8]) -> Option<Vec<u8>> {
++    let mut value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
++    if !inject_agent_hint_into_session_params_value(&mut value) {
++        return None;
++    }
++
++    serde_json::to_vec(&value).ok()
++}
++
++fn error_indicates_payload_too_large(err: &(dyn StdError + 'static)) -> bool {
++    // axum::body::to_bytes wraps http_body_util::LengthLimitError, whose
++    // Display text is "length limit exceeded".
++    let mut current: Option<&(dyn StdError + 'static)> = Some(err);
++    while let Some(e) = current {
++        if e.to_string().contains("length limit exceeded") {
++            return true;
++        }
++        current = e.source();
++    }
++    false
++}
++
++/// Adapter: client `agent_hint.session_id` → router `session_params.session_id`.
++///
++/// `max_payload_size` bounds body buffering (aligned with the app payload limit).
++pub async fn agent_hint_affinity_middleware(
++    State(max_payload_size): State<usize>,
++    request: Request,
++    next: Next,
++) -> Response {
++    let (parts, body) = request.into_parts();
++    let bytes = match axum::body::to_bytes(body, max_payload_size).await {
++        Ok(bytes) => bytes,
++        Err(err) => {
++            if error_indicates_payload_too_large(&err) {
++                warn!(
++                    "agent_hint middleware rejected oversized body (limit {} bytes)",
++                    max_payload_size
++                );
++                return StatusCode::PAYLOAD_TOO_LARGE.into_response();
++            }
++            // Body already failed; let the handler see an empty body instead of
++            // collapsing every failure into a generic 400 here.
++            warn!(
++                "Failed to read request body for agent_hint middleware: {}",
++                err
++            );
++            let request = Request::from_parts(parts, axum::body::Body::empty());
++            return next.run(request).await;
++        }
++    };
++
++    let bytes = match inject_agent_hint_into_session_params(&bytes) {
++        Some(rewritten) => {
++            debug!("agent_hint middleware copied session_id into session_params");
++            rewritten.into()
++        }
++        None => bytes,
++    };
++
++    let request = Request::from_parts(parts, axum::body::Body::from(bytes));
++    next.run(request).await
++}
++
++fn log_agent_hint_token_offset_duration(started_at: &Instant, outcome: &str) {
++    let elapsed = started_at.elapsed();
++    debug!(
++        duration_us = elapsed.as_micros() as u64,
++        duration_ms = elapsed.as_secs_f64() * 1000.0,
++        outcome,
++        "agent_hint token offset middleware completed"
++    );
++}
++
++/// Adapter: session affinity plus message-offset → token/block coordinates.
++pub async fn agent_hint_token_offsets_middleware(
++    State(state): State<AgentHintTokenOffsetState>,
++    request: Request,
++    next: Next,
++) -> Response {
++    let started_at = Instant::now();
++    let (parts, body) = request.into_parts();
++    let bytes = match axum::body::to_bytes(body, state.max_payload_size).await {
++        Ok(bytes) => bytes,
++        Err(err) if error_indicates_payload_too_large(&err) => {
++            log_agent_hint_token_offset_duration(&started_at, "payload_too_large");
++            return StatusCode::PAYLOAD_TOO_LARGE.into_response();
++        }
++        Err(err) => {
++            error!("Failed to read request body for token offset middleware: {err}");
++            log_agent_hint_token_offset_duration(&started_at, "body_read_error");
++            return StatusCode::BAD_REQUEST.into_response();
++        }
++    };
++
++    let (bytes, outcome) = match rewrite_agent_hint_token_offsets(&bytes, &state) {
++        Ok(Some(rewritten)) => {
++            debug!("agent_hint token offset middleware rewrote request");
++            (rewritten.into(), "rewritten")
++        }
++        Ok(None) => (bytes, "unchanged"),
++        Err(TokenOffsetError::InvalidRequest(message)) => {
++            log_agent_hint_token_offset_duration(&started_at, "invalid_request");
++            return (
++                StatusCode::BAD_REQUEST,
++                axum::Json(serde_json::json!({
++                    "error": {
++                        "message": message,
++                        "type": "invalid_request_error"
++                    }
++                })),
++            )
++                .into_response();
++        }
++        Err(TokenOffsetError::Internal(message)) => {
++            error!("agent_hint token offset middleware failed: {message}");
++            log_agent_hint_token_offset_duration(&started_at, "internal_error");
++            return (
++                StatusCode::INTERNAL_SERVER_ERROR,
++                axum::Json(serde_json::json!({
++                    "error": {
++                        "message": "failed to calculate agent hint token offsets",
++                        "type": "server_error"
++                    }
++                })),
++            )
++                .into_response();
++        }
++    };
++
++    log_agent_hint_token_offset_duration(&started_at, outcome);
++    next.run(Request::from_parts(parts, axum::body::Body::from(bytes)))
++        .await
++}
++
+ /// Generate OpenAI-compatible request ID based on endpoint
+ fn generate_request_id(path: &str) -> String {
+     let prefix = if path.contains("/chat/completions") {
+@@ -585,3 +856,92 @@ pub async fn concurrency_limit_middleware(
+         }
+     }
+ }
++
++#[cfg(test)]
++mod agent_hint_tests {
++    use super::*;
++
++    #[test]
++    fn test_router_middleware_name_parsing() {
++        assert_eq!(
++            RouterMiddleware::parse("agent_hint_affinity"),
++            Ok(RouterMiddleware::AgentHintAffinity)
++        );
++        assert_eq!(
++            RouterMiddleware::parse("agent_hint_token_offsets"),
++            Ok(RouterMiddleware::AgentHintTokenOffsets)
++        );
++        assert_eq!(
++            RouterMiddleware::supported_names(),
++            vec!["agent_hint_affinity", "agent_hint_token_offsets"]
++        );
++        let error = RouterMiddleware::parse("unknown").unwrap_err();
++        assert!(error.contains("agent_hint_affinity"));
++        assert!(error.contains("agent_hint_token_offsets"));
++    }
++
++    #[test]
++    fn test_agent_hint_middleware_config_validation() {
++        assert!(validate_agent_hint_middleware_config(
++            &[RouterMiddleware::AgentHintTokenOffsets],
++            Some("/models/tokenizer.json"),
++            Some(128),
++        )
++        .is_ok());
++        assert!(validate_agent_hint_middleware_config(
++            &[RouterMiddleware::AgentHintTokenOffsets],
++            None,
++            Some(128),
++        )
++        .is_err());
++        assert!(validate_agent_hint_middleware_config(
++            &[
++                RouterMiddleware::AgentHintAffinity,
++                RouterMiddleware::AgentHintTokenOffsets,
++            ],
++            Some("/models/tokenizer.json"),
++            Some(128),
++        )
++        .is_err());
++    }
++
++    #[test]
++    fn test_session_id_from_agent_hint_ignores_parent() {
++        let body = br#"{"agent_hint":{"session_id":"child-1","parent_session_id":"root-1"},"messages":[]}"#;
++        assert_eq!(
++            session_id_from_agent_hint_body(body).as_deref(),
++            Some("child-1")
++        );
++    }
++
++    #[test]
++    fn test_inject_copies_session_id_into_session_params() {
++        let body = br#"{"agent_hint":{"session_id":"child-1","parent_session_id":"root-1"},"messages":[]}"#;
++        let rewritten = inject_agent_hint_into_session_params(body).expect("rewrite");
++        let value: serde_json::Value = serde_json::from_slice(&rewritten).unwrap();
++        assert_eq!(value["session_params"]["session_id"], "child-1");
++        assert_eq!(value["agent_hint"]["session_id"], "child-1");
++        assert_eq!(value["agent_hint"]["parent_session_id"], "root-1");
++    }
++
++    #[test]
++    fn test_inject_does_not_overwrite_existing_session_params() {
++        let body = br#"{"session_params":{"session_id":"already"},"agent_hint":{"session_id":"child-1"},"messages":[]}"#;
++        assert!(inject_agent_hint_into_session_params(body).is_none());
++    }
++
++    #[test]
++    fn test_inject_absent_without_agent_hint() {
++        let body = br#"{"messages":[]}"#;
++        assert!(inject_agent_hint_into_session_params(body).is_none());
++    }
++
++    #[test]
++    fn test_inject_accepts_unicode_escaped_agent_hint_key() {
++        // \u0061 == 'a' → key deserializes as agent_hint
++        let body = br#"{"\u0061gent_hint":{"session_id":"child-esc","parent_session_id":"root-1"},"messages":[]}"#;
++        let rewritten = inject_agent_hint_into_session_params(body).expect("rewrite");
++        let value: serde_json::Value = serde_json::from_slice(&rewritten).unwrap();
++        assert_eq!(value["session_params"]["session_id"], "child-esc");
++    }
++}
+diff --git a/src/policies/hash_key.rs b/src/policies/hash_key.rs
+index 08c8d31..55c7ddf 100644
+--- a/src/policies/hash_key.rs
++++ b/src/policies/hash_key.rs
+@@ -9,6 +9,8 @@ use tracing::debug;
+ 
+ /// HTTP header names to check for session ID (case-insensitive, checked in order)
+ pub(crate) const SESSION_HEADER_NAMES: &[&str] = &[
++    "x-claude-code-session-id",
++    "session-id",
+     "x-session-id",
+     "x-user-id",
+     "x-tenant-id",
+@@ -20,8 +22,9 @@ pub(crate) const SESSION_HEADER_NAMES: &[&str] = &[
+ /// Extract hash key with priority: HTTP headers > body fields > request content hash
+ ///
+ /// Priority order:
+-/// 1. HTTP Headers: x-session-id, x-user-id, x-tenant-id, x-correlation-id, x-request-id, x-trace-id
++/// 1. HTTP Headers: Claude/Codex session identity, then generic session/user/trace identity
+ /// 2. Body: session_params.session_id (nested)
++///    (Agent-hint middleware may copy agent_hint.session_id into session_params.)
+ /// 3. Body: user field (OpenAI format)
+ /// 4. Body: session_id (legacy)
+ /// 5. Body: user_id (legacy)
+@@ -356,6 +359,18 @@ mod tests {
+         assert_eq!(key, "header:x-session-id:sess-1");
+     }
+ 
++    #[test]
++    fn test_framework_session_headers_precede_generic_identity() {
++        let mut headers = HashMap::new();
++        headers.insert("x-session-id".to_string(), "generic".to_string());
++        headers.insert("session-id".to_string(), "codex".to_string());
++        headers.insert("x-claude-code-session-id".to_string(), "claude".to_string());
++        assert_eq!(
++            extract_hash_key_from_headers(&headers).as_deref(),
++            Some("header:x-claude-code-session-id:claude")
++        );
++    }
++
+     #[test]
+     fn test_header_extraction_skips_empty() {
+         let mut headers = HashMap::new();
+@@ -375,6 +390,16 @@ mod tests {
+ 
+     // === extract_hash_key_from_body tests ===
+ 
++    #[test]
++    fn test_body_extraction_does_not_use_agent_hint_parent() {
++        // Naive field scan finds agent_hint.session_id as a bare "session_id",
++        // not parent_session_id. Middleware normally lifts this into
++        // session_params first; without that, sticky key is still the child.
++        let text = r#"{"agent_hint": {"session_id": "child-1", "parent_session_id": "root-1"}, "prompt": "hi"}"#;
++        let key = extract_hash_key_from_body(Some(text));
++        assert_eq!(key.as_deref(), Some("session:child-1"));
++    }
++
+     #[test]
+     fn test_body_extraction_session_params_priority() {
+         // session_params.session_id takes priority over direct session_id
+diff --git a/src/protocols/spec.rs b/src/protocols/spec.rs
+index 3ed54dc..3b894b3 100644
+--- a/src/protocols/spec.rs
++++ b/src/protocols/spec.rs
+@@ -64,20 +64,26 @@ use std::collections::HashMap;
+ pub enum ChatMessage {
+     System {
+         role: String,
+-        content: String,
++        content: MessageContent,
++        #[serde(skip_serializing_if = "Option::is_none")]
++        name: Option<String>,
++    },
++    Developer {
++        role: String,
++        content: MessageContent,
+         #[serde(skip_serializing_if = "Option::is_none")]
+         name: Option<String>,
+     },
+     User {
+         role: String, // "user"
+-        content: UserMessageContent,
++        content: MessageContent,
+         #[serde(skip_serializing_if = "Option::is_none")]
+         name: Option<String>,
+     },
+     Assistant {
+         role: String, // "assistant"
+         #[serde(skip_serializing_if = "Option::is_none")]
+-        content: Option<String>,
++        content: Option<MessageContent>,
+         #[serde(skip_serializing_if = "Option::is_none")]
+         name: Option<String>,
+         #[serde(skip_serializing_if = "Option::is_none")]
+@@ -117,13 +123,7 @@ impl<'de> Deserialize<'de> for ChatMessage {
+         match role {
+             "assistant" => Ok(ChatMessage::Assistant {
+                 role: role.to_string(),
+-                content: value.get("content").and_then(|c| {
+-                    if c.is_null() {
+-                        None
+-                    } else {
+-                        c.as_str().map(String::from)
+-                    }
+-                }),
++                content: MessageContent::parse_nullable(value.get("content")),
+                 name: value.get("name").and_then(|n| {
+                     if n.is_null() {
+                         None
+@@ -157,11 +157,18 @@ impl<'de> Deserialize<'de> for ChatMessage {
+             }),
+             "system" => Ok(ChatMessage::System {
+                 role: role.to_string(),
+-                content: value
+-                    .get("content")
+-                    .and_then(|c| c.as_str())
+-                    .unwrap_or("")
+-                    .to_string(),
++                content: MessageContent::parse_or_empty(value.get("content")),
++                name: value.get("name").and_then(|n| {
++                    if n.is_null() {
++                        None
++                    } else {
++                        n.as_str().map(String::from)
++                    }
++                }),
++            }),
++            "developer" => Ok(ChatMessage::Developer {
++                role: role.to_string(),
++                content: MessageContent::parse_or_empty(value.get("content")),
+                 name: value.get("name").and_then(|n| {
+                     if n.is_null() {
+                         None
+@@ -171,13 +178,7 @@ impl<'de> Deserialize<'de> for ChatMessage {
+                 }),
+             }),
+             "user" => {
+-                let content = value
+-                    .get("content")
+-                    .map(|c| {
+-                        serde_json::from_value(c.clone())
+-                            .unwrap_or(UserMessageContent::Text(String::new()))
+-                    })
+-                    .unwrap_or(UserMessageContent::Text(String::new()));
++                let content = MessageContent::parse_or_empty(value.get("content"));
+                 Ok(ChatMessage::User {
+                     role: role.to_string(),
+                     content,
+@@ -263,23 +264,70 @@ pub struct StructuredOutputsParams {
+     pub whitespace_pattern: Option<String>,
+ }
+ 
+-#[derive(Debug, Clone, Deserialize, Serialize)]
++#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+ #[serde(untagged)]
+-pub enum UserMessageContent {
++pub enum MessageContent {
+     Text(String),
+     Parts(Vec<ContentPart>),
+ }
+ 
+-#[derive(Debug, Clone, Deserialize, Serialize)]
++impl MessageContent {
++    /// Missing / null / unusable JSON becomes `Text("")`. Empty text is valid.
++    fn parse_or_empty(value: Option<&Value>) -> Self {
++        match value {
++            Some(content) => serde_json::from_value(content.clone())
++                .unwrap_or_else(|_| MessageContent::Text(String::new())),
++            None => MessageContent::Text(String::new()),
++        }
++    }
++
++    /// Missing / null stays `None` (assistant tool-call turns). Empty string is `Some(Text(""))`.
++    fn parse_nullable(value: Option<&Value>) -> Option<Self> {
++        let content = value?;
++        if content.is_null() {
++            return None;
++        }
++        Some(
++            serde_json::from_value(content.clone())
++                .unwrap_or_else(|_| MessageContent::Text(String::new())),
++        )
++    }
++
++    fn routing_texts(&self) -> Vec<&str> {
++        match self {
++            MessageContent::Text(text) => {
++                if text.trim().is_empty() {
++                    Vec::new()
++                } else {
++                    vec![text.as_str()]
++                }
++            }
++            MessageContent::Parts(parts) => parts
++                .iter()
++                .filter_map(|part| match part {
++                    ContentPart::Text { text } if !text.trim().is_empty() => Some(text.as_str()),
++                    ContentPart::Refusal { refusal } if !refusal.trim().is_empty() => {
++                        Some(refusal.as_str())
++                    }
++                    _ => None,
++                })
++                .collect(),
++        }
++    }
++}
++
++#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+ #[serde(tag = "type")]
+ pub enum ContentPart {
+     #[serde(rename = "text")]
+     Text { text: String },
+     #[serde(rename = "image_url")]
+     ImageUrl { image_url: ImageUrl },
++    #[serde(rename = "refusal")]
++    Refusal { refusal: String },
+ }
+ 
+-#[derive(Debug, Clone, Deserialize, Serialize)]
++#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+ pub struct ImageUrl {
+     pub url: String,
+     #[serde(skip_serializing_if = "Option::is_none")]
+@@ -344,6 +392,85 @@ pub struct FunctionCallDelta {
+     pub arguments: Option<String>,
+ }
+ 
++// ============= Agent Hint (session topology + cache hints) =============
++
++/// Prompt-cache control carried inside `agent_hint` (Claude-compatible shape).
++#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
++pub struct AgentHintCacheControl {
++    #[serde(rename = "type")]
++    pub cache_type: String,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub ttl: Option<u64>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub msg_offset: Option<i64>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub token_offset: Option<usize>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub block_offset: Option<usize>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub intra_block_offset: Option<usize>,
++    #[serde(flatten)]
++    pub other: serde_json::Map<String, serde_json::Value>,
++}
++
++/// One KV-cache management edit (offload / prefetch / evict).
++#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
++pub struct AgentHintContextEdit {
++    #[serde(rename = "type")]
++    pub edit_type: String,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub start: Option<i64>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub end: Option<i64>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub target: Option<String>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub start_token: Option<usize>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub end_token: Option<usize>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub block_start: Option<usize>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub block_end: Option<usize>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub block_intra_start: Option<usize>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub block_intra_end: Option<usize>,
++    #[serde(flatten)]
++    pub other: serde_json::Map<String, serde_json::Value>,
++}
++
++/// Explicit KV-cache management instructions from the agent framework.
++#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
++pub struct AgentHintContextManagement {
++    pub manage_request: bool,
++    #[serde(default, skip_serializing_if = "Vec::is_empty")]
++    pub edits: Vec<AgentHintContextEdit>,
++}
++
++/// Agent framework hint embedded in chat completion requests.
++///
++/// Middleware copies `session_id` into `session_params.session_id` for routing.
++/// Other fields (including `parent_session_id`) are passthrough for upstream.
++#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
++pub struct AgentHint {
++    pub session_id: String,
++    /// Parent agent session; for a root agent this equals `session_id`.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub parent_session_id: Option<String>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub cache_control: Option<AgentHintCacheControl>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub context_management: Option<AgentHintContextManagement>,
++    /// AgentInfer scheduling hints (identity layer); ignored by routing.
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub blocks_parent: Option<bool>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub expected_resume: Option<bool>,
++    #[serde(flatten)]
++    pub other: serde_json::Map<String, serde_json::Value>,
++}
++
+ // ============= Request =============
+ 
+ #[derive(Debug, Clone, Deserialize, Serialize)]
+@@ -497,6 +624,10 @@ pub struct ChatCompletionRequest {
+     #[serde(skip_serializing_if = "Option::is_none")]
+     pub session_params: Option<HashMap<String, serde_json::Value>>,
+ 
++    /// Agent framework session topology + cache management hints
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub agent_hint: Option<AgentHint>,
++
+     /// Separate reasoning content from final answer (O1-style models)
+     #[serde(default = "default_true")]
+     pub separate_reasoning: bool,
+@@ -533,6 +664,148 @@ pub struct ChatCompletionRequest {
+     pub other: serde_json::Map<String, serde_json::Value>,
+ }
+ 
++impl ChatCompletionRequest {
++    const SESSION_ID_ROUTING_TERMINATOR: &'static str = "\x1f";
++
++    /// Build a routing key from text-like chat history and tool schemas.
++    ///
++    /// This lets cache-aware routing consider the full conversational prefix
++    /// rather than only a session identifier.
++    pub fn extract_full_history_routing_text(&self) -> String {
++        let mut parts = Vec::new();
++
++        for message in &self.messages {
++            match message {
++                ChatMessage::System { content, .. } => {
++                    for text in content.routing_texts() {
++                        parts.push(format!("system:{}", text.trim()));
++                    }
++                }
++                ChatMessage::Developer { content, .. } => {
++                    for text in content.routing_texts() {
++                        parts.push(format!("developer:{}", text.trim()));
++                    }
++                }
++                ChatMessage::User { content, .. } => {
++                    for text in content.routing_texts() {
++                        parts.push(format!("user:{}", text.trim()));
++                    }
++                }
++                ChatMessage::Assistant {
++                    content,
++                    tool_calls,
++                    function_call,
++                    ..
++                } => {
++                    if let Some(content) = content {
++                        for text in content.routing_texts() {
++                            parts.push(format!("assistant:{}", text.trim()));
++                        }
++                    }
++
++                    if let Some(calls) = tool_calls {
++                        for call in calls {
++                            if let Some(arguments) = &call.function.arguments {
++                                if !arguments.trim().is_empty() {
++                                    parts.push(format!(
++                                        "assistant_tool_call:{}:{}",
++                                        call.function.name.trim(),
++                                        arguments.trim()
++                                    ));
++                                }
++                            }
++                        }
++                    }
++
++                    if let Some(call) = function_call {
++                        if let Some(arguments) = &call.arguments {
++                            if !arguments.trim().is_empty() {
++                                parts.push(format!(
++                                    "assistant_function_call:{}:{}",
++                                    call.name.trim(),
++                                    arguments.trim()
++                                ));
++                            }
++                        }
++                    }
++                }
++                ChatMessage::Tool { content, .. } => {
++                    if let Some(text) = content.as_str() {
++                        if !text.trim().is_empty() {
++                            parts.push(format!("tool:{}", text.trim()));
++                        }
++                    } else if let Some(arr) = content.as_array() {
++                        for item in arr {
++                            if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
++                                if !text.trim().is_empty() {
++                                    parts.push(format!("tool:{}", text.trim()));
++                                }
++                            }
++                        }
++                    }
++                }
++                ChatMessage::Function { content, name, .. } if !content.trim().is_empty() => {
++                    parts.push(format!("function:{}:{}", name.trim(), content.trim()));
++                }
++                _ => {}
++            }
++        }
++
++        if let Some(tools) = &self.tools {
++            let mut tools_by_name: Vec<&Tool> = tools.iter().collect();
++            tools_by_name.sort_by(|a, b| a.function.name.cmp(&b.function.name));
++
++            for tool in tools_by_name {
++                let parameters = serde_json::to_string(&tool.function.parameters)
++                    .unwrap_or_else(|_| "{}".to_string());
++                let description = tool.function.description.as_deref().unwrap_or("").trim();
++                parts.push(format!(
++                    "tool_schema:{}:{}:{}",
++                    tool.function.name.trim(),
++                    description,
++                    parameters
++                ));
++            }
++        }
++
++        if let Some(functions) = &self.functions {
++            let mut functions_by_name: Vec<&Function> = functions.iter().collect();
++            functions_by_name.sort_by(|a, b| a.name.cmp(&b.name));
++
++            for function in functions_by_name {
++                let parameters = serde_json::to_string(&function.parameters)
++                    .unwrap_or_else(|_| "{}".to_string());
++                let description = function.description.as_deref().unwrap_or("").trim();
++                parts.push(format!(
++                    "function_schema:{}:{}:{}",
++                    function.name.trim(),
++                    description,
++                    parameters
++                ));
++            }
++        }
++
++        parts.join("\n")
++    }
++
++    pub fn extract_session_id_for_routing(&self) -> Option<String> {
++        let session_params = self.session_params.as_ref()?;
++        let session_id = session_params.get("session_id")?.as_str()?.trim();
++        if session_id.is_empty() {
++            None
++        } else {
++            Some(session_id.to_string())
++        }
++    }
++
++    pub fn extract_session_id_key_for_routing(&self) -> Option<String> {
++        self.extract_session_id_for_routing().map(|mut session_id| {
++            session_id.push_str(Self::SESSION_ID_ROUTING_TERMINATOR);
++            session_id
++        })
++    }
++}
++
+ impl GenerationRequest for ChatCompletionRequest {
+     fn is_stream(&self) -> bool {
+         self.stream
+@@ -543,20 +816,22 @@ impl GenerationRequest for ChatCompletionRequest {
+     }
+ 
+     fn extract_text_for_routing(&self) -> String {
+-        // Use session_id from session_params for session-based routing
+-        if let Some(ref session_params) = self.session_params {
+-            if let Some(session_id) = session_params.get("session_id") {
+-                if let Some(session_id_str) = session_id.as_str() {
+-                    if !session_id_str.trim().is_empty() {
+-                        return session_id_str.to_string();
+-                    }
+-                }
+-            }
++        let full_history = self.extract_full_history_routing_text();
++        if !full_history.is_empty() {
++            return full_history;
++        }
++
++        // Fall back to session_id when the chat body has no usable history text.
++        if let Some(session_id) = self.extract_session_id_key_for_routing() {
++            return session_id;
+         }
+ 
+-        // Return empty string if no session_id - let routing policy handle this case
+         String::new()
+     }
++
++    fn extract_program_identity_payload(&self) -> Option<Value> {
++        program_identity_payload(&self.other, self.agent_hint.as_ref())
++    }
+ }
+ 
+ // ============= Regular Response =============
+@@ -767,6 +1042,10 @@ impl GenerationRequest for CompletionRequest {
+     fn extract_text_for_routing(&self) -> String {
+         self.prompt.extract_text_for_routing()
+     }
++
++    fn extract_program_identity_payload(&self) -> Option<Value> {
++        program_identity_payload(&self.other, None)
++    }
+ }
+ 
+ // ============= Regular Response =============
+@@ -2007,6 +2286,10 @@ impl GenerationRequest for InferenceGenerateRequest {
+             .collect::<Vec<String>>()
+             .join(" ")
+     }
++
++    fn extract_program_identity_payload(&self) -> Option<Value> {
++        program_identity_payload(&self.other, None)
++    }
+ }
+ 
+ // ==================================================================
+@@ -2285,6 +2568,28 @@ pub trait GenerationRequest: Send + Sync {
+ 
+     /// Extract text content for routing decisions
+     fn extract_text_for_routing(&self) -> String;
++
++    /// Extract only the small body subset used for Program identity.
++    fn extract_program_identity_payload(&self) -> Option<Value> {
++        None
++    }
++}
++
++fn program_identity_payload(
++    other: &serde_json::Map<String, Value>,
++    agent_hint: Option<&AgentHint>,
++) -> Option<Value> {
++    let mut payload = serde_json::Map::new();
++    if let Some(vllm_xargs) = other.get("vllm_xargs") {
++        payload.insert("vllm_xargs".to_string(), vllm_xargs.clone());
++    }
++    if let Some(raw_agent_hint) = other.get("agent_hint") {
++        payload.insert("agent_hint".to_string(), raw_agent_hint.clone());
++    }
++    if let Some(agent_hint) = agent_hint.and_then(|hint| serde_json::to_value(hint).ok()) {
++        payload.insert("agent_hint".to_string(), agent_hint);
++    }
++    (!payload.is_empty()).then_some(Value::Object(payload))
+ }
+ 
+ /// Helper type for string or array of strings
+@@ -2411,6 +2716,109 @@ mod tests {
+     use super::*;
+     use serde_json;
+ 
++    // ==================================================================
++    // =  AgentHint type / passthrough TESTS                            =
++    // ==================================================================
++
++    #[test]
++    fn test_agent_hint_deserialize() {
++        let body = serde_json::json!({
++            "model": "test-model",
++            "messages": [{"role": "user", "content": "hi"}],
++            "agent_hint": {
++                "session_id": "child-1",
++                "parent_session_id": "root-1",
++                "cache_control": {"type": "ephemeral"},
++                "context_management": {
++                    "manage_request": false,
++                    "edits": [{"type": "offload", "start": 0, "end": 10}]
++                }
++            }
++        });
++        let req: ChatCompletionRequest = serde_json::from_value(body).unwrap();
++        let hint = req.agent_hint.as_ref().expect("agent_hint present");
++        assert_eq!(hint.session_id, "child-1");
++        assert_eq!(hint.parent_session_id.as_deref(), Some("root-1"));
++        assert_eq!(
++            hint.cache_control.as_ref().map(|c| c.cache_type.as_str()),
++            Some("ephemeral")
++        );
++        // Without middleware, agent_hint alone does not become a session routing key.
++        assert_eq!(req.extract_session_id_for_routing(), None);
++        // With messages present, cache-aware prefers full history text.
++        assert!(req.extract_text_for_routing().contains("user:hi"));
++        let identity = req.extract_program_identity_payload().unwrap();
++        assert_eq!(identity["agent_hint"]["session_id"], "child-1");
++    }
++
++    #[test]
++    fn test_identity_free_chat_has_no_program_payload() {
++        let req: ChatCompletionRequest = serde_json::from_value(serde_json::json!({
++            "model": "test-model",
++            "messages": [{"role": "user", "content": "hi"}]
++        }))
++        .unwrap();
++        assert_eq!(req.extract_program_identity_payload(), None);
++    }
++
++    #[test]
++    fn test_agent_hint_alone_does_not_set_session_routing_key() {
++        let body = serde_json::json!({
++            "messages": [],
++            "agent_hint": {
++                "session_id": "root-1",
++                "parent_session_id": "root-1"
++            }
++        });
++        let req: ChatCompletionRequest = serde_json::from_value(body).unwrap();
++        assert_eq!(
++            req.agent_hint.as_ref().map(|h| h.session_id.as_str()),
++            Some("root-1")
++        );
++        assert_eq!(req.extract_session_id_for_routing(), None);
++        assert_eq!(req.extract_text_for_routing(), "");
++    }
++
++    #[test]
++    fn test_session_params_fallback_when_history_empty() {
++        let body = serde_json::json!({
++            "messages": [],
++            "session_params": {"session_id": "legacy-session"},
++            "agent_hint": {
++                "session_id": "child-9",
++                "parent_session_id": "root-9"
++            }
++        });
++        let req: ChatCompletionRequest = serde_json::from_value(body).unwrap();
++        assert_eq!(
++            req.extract_session_id_for_routing().as_deref(),
++            Some("legacy-session")
++        );
++        assert_eq!(
++            req.extract_text_for_routing(),
++            req.extract_session_id_key_for_routing().unwrap()
++        );
++    }
++
++    #[test]
++    fn test_agent_hint_passthrough_roundtrip() {
++        let body = serde_json::json!({
++            "messages": [{"role": "user", "content": "hi"}],
++            "agent_hint": {
++                "session_id": "s1",
++                "parent_session_id": "s1",
++                "blocks_parent": false,
++                "expected_resume": true
++            }
++        });
++        let req: ChatCompletionRequest = serde_json::from_value(body).unwrap();
++        let forwarded = serde_json::to_value(&req).unwrap();
++        assert_eq!(forwarded["agent_hint"]["session_id"], "s1");
++        assert_eq!(forwarded["agent_hint"]["parent_session_id"], "s1");
++        assert_eq!(forwarded["agent_hint"]["blocks_parent"], false);
++        assert_eq!(forwarded["agent_hint"]["expected_resume"], true);
++    }
++
+     // ==================================================================
+     // =  InferenceGenerateRequest (/inference/v1/generate) TESTS       =
+     // ==================================================================
+@@ -3246,6 +3654,25 @@ mod tests {
+         assert_eq!(request.get_model(), Some("gpt-4"));
+     }
+ 
++    #[test]
++    fn test_chat_session_id_routing_key_has_terminator() {
++        let json = r#"{
++            "model": "gpt-4",
++            "messages": [{"role": "user", "content": "Hello"}],
++            "session_params": {"session_id": "session-1"}
++        }"#;
++
++        let request: ChatCompletionRequest = serde_json::from_str(json).unwrap();
++        assert_eq!(
++            request.extract_session_id_for_routing().as_deref(),
++            Some("session-1")
++        );
++        assert_eq!(
++            request.extract_session_id_key_for_routing().as_deref(),
++            Some("session-1\x1f")
++        );
++    }
++
+     #[test]
+     fn test_chat_completion_request_with_null_model() {
+         let json = r#"{
+@@ -3611,7 +4038,10 @@ mod tests {
+             ChatMessage::Assistant {
+                 content, reasoning, ..
+             } => {
+-                assert_eq!(content.as_ref().unwrap(), "Hello there!");
++                assert_eq!(
++                    content,
++                    Some(MessageContent::Text("Hello there!".to_string()))
++                );
+                 assert_eq!(
+                     reasoning.as_ref().unwrap(),
+                     "Let me think about how to greet the user..."
+@@ -3684,12 +4114,45 @@ mod tests {
+ 
+         match message {
+             ChatMessage::System { content, .. } => {
+-                assert_eq!(content, "You are a helpful assistant.");
++                assert_eq!(
++                    content,
++                    MessageContent::Text("You are a helpful assistant.".to_string())
++                );
+             }
+             _ => panic!("Expected System message"),
+         }
+     }
+ 
++    #[test]
++    fn test_chat_message_system_and_developer_multipart_text_roundtrip() {
++        let json = r#"{
++            "role": "developer",
++            "content": [
++                {"type": "text", "text": "Always inspect before editing."},
++                {"type": "text", "text": "Never commit secrets."}
++            ]
++        }"#;
++
++        let message: ChatMessage = serde_json::from_str(json).unwrap();
++        match &message {
++            ChatMessage::Developer {
++                content: MessageContent::Parts(parts),
++                ..
++            } => {
++                assert_eq!(parts.len(), 2);
++            }
++            other => panic!("Expected multipart developer, got {other:?}"),
++        }
++
++        let forwarded = serde_json::to_value(&message).unwrap();
++        assert!(forwarded["content"].is_array());
++        assert_eq!(
++            forwarded["content"][0]["text"],
++            "Always inspect before editing."
++        );
++        assert_eq!(forwarded["content"][1]["text"], "Never commit secrets.");
++    }
++
+     #[test]
+     fn test_chat_message_user_text() {
+         let json = r#"{
+@@ -3701,7 +4164,7 @@ mod tests {
+ 
+         match message {
+             ChatMessage::User { content, .. } => match content {
+-                UserMessageContent::Text(text) => assert_eq!(text, "Hello!"),
++                MessageContent::Text(text) => assert_eq!(text, "Hello!"),
+                 _ => panic!("Expected Text content"),
+             },
+             _ => panic!("Expected User message"),
+@@ -3780,7 +4243,7 @@ mod tests {
+     fn test_chat_message_roundtrip_serialization() {
+         let original = ChatMessage::Assistant {
+             role: "assistant".to_string(),
+-            content: Some("Hello!".to_string()),
++            content: Some(MessageContent::Text("Hello!".to_string())),
+             name: None,
+             tool_calls: None,
+             function_call: None,
+@@ -3794,7 +4257,7 @@ mod tests {
+             ChatMessage::Assistant {
+                 content, reasoning, ..
+             } => {
+-                assert_eq!(content.as_ref().unwrap(), "Hello!");
++                assert_eq!(content, Some(MessageContent::Text("Hello!".to_string())));
+                 assert_eq!(reasoning.as_ref().unwrap(), "Thinking...");
+             }
+             _ => panic!("Expected Assistant message"),
+diff --git a/src/protocols/validation.rs b/src/protocols/validation.rs
+index 112ce4d..2c5f213 100644
+--- a/src/protocols/validation.rs
++++ b/src/protocols/validation.rs
+@@ -6,7 +6,7 @@ use std::fmt::Display;
+ 
+ // Import types from spec module
+ use crate::protocols::spec::{
+-    ChatCompletionRequest, ChatMessage, ResponseFormat, StringOrArray, UserMessageContent,
++    ChatCompletionRequest, ChatMessage, MessageContent, ResponseFormat, StringOrArray,
+ };
+ 
+ /// Validation constants for OpenAI API parameters
+@@ -618,14 +618,14 @@ impl ChatCompletionRequest {
+         for (i, msg) in self.messages.iter().enumerate() {
+             if let ChatMessage::User { content, .. } = msg {
+                 match content {
+-                    UserMessageContent::Text(text) if text.is_empty() => {
++                    MessageContent::Text(text) if text.is_empty() => {
+                         return Err(ValidationError::InvalidValue {
+                             parameter: format!("messages[{}].content", i),
+                             value: "empty".to_string(),
+                             reason: "message content cannot be empty".to_string(),
+                         });
+                     }
+-                    UserMessageContent::Parts(parts) if parts.is_empty() => {
++                    MessageContent::Parts(parts) if parts.is_empty() => {
+                         return Err(ValidationError::InvalidValue {
+                             parameter: format!("messages[{}].content", i),
+                             value: "empty array".to_string(),
+@@ -877,7 +877,7 @@ mod tests {
+                 model: Some("gpt-4".to_string()),
+                 messages: vec![ChatMessage::User {
+                     role: "user".to_string(),
+-                    content: UserMessageContent::Text("Hello".to_string()),
++                    content: MessageContent::Text("Hello".to_string()),
+                     name: None,
+                 }],
+                 temperature: Some(1.0),
+@@ -919,6 +919,7 @@ mod tests {
+                 skip_special_tokens: true,
+                 lora_path: None,
+                 session_params: None,
++                agent_hint: None,
+                 separate_reasoning: true,
+                 stream_reasoning: true,
+                 chat_template_kwargs: None,
+diff --git a/src/server.rs b/src/server.rs
+index d7c16df..310666a 100644
+--- a/src/server.rs
++++ b/src/server.rs
+@@ -679,6 +679,10 @@ pub struct ServerConfig {
+     pub host: String,
+     pub port: u16,
+     pub router_config: RouterConfig,
++    pub middlewares: Vec<middleware::RouterMiddleware>,
++    pub agent_hint_tokenizer: Option<String>,
++    pub agent_hint_chat_template: Option<String>,
++    pub agent_hint_block_size: Option<usize>,
+     pub max_payload_size: usize,
+     pub log_dir: Option<String>,
+     pub log_level: Option<String>,
+@@ -689,6 +693,44 @@ pub struct ServerConfig {
+     pub trace_config: Option<TraceConfig>,
+ }
+ 
++#[derive(Clone, Default)]
++pub struct ChatMiddlewareConfig {
++    pub middlewares: Vec<middleware::RouterMiddleware>,
++    pub token_offset_state: Option<crate::agent_hint_token_offsets::AgentHintTokenOffsetState>,
++}
++
++fn apply_chat_middlewares<S>(
++    mut routes: Router<S>,
++    max_payload_size: usize,
++    config: &ChatMiddlewareConfig,
++) -> Router<S>
++where
++    S: Clone + Send + Sync + 'static,
++{
++    if config
++        .middlewares
++        .contains(&middleware::RouterMiddleware::AgentHintTokenOffsets)
++    {
++        let state = config
++            .token_offset_state
++            .clone()
++            .expect("agent_hint_token_offsets middleware requires initialized tokenizer state");
++        routes = routes.route_layer(axum::middleware::from_fn_with_state(
++            state,
++            middleware::agent_hint_token_offsets_middleware,
++        ));
++    } else if config
++        .middlewares
++        .contains(&middleware::RouterMiddleware::AgentHintAffinity)
++    {
++        routes = routes.route_layer(axum::middleware::from_fn_with_state(
++            max_payload_size,
++            middleware::agent_hint_affinity_middleware,
++        ));
++    }
++    routes
++}
++
+ /// Build the Axum application with all routes and middleware using the
+ /// current runtime OpenTelemetry state.
+ pub fn build_app(
+@@ -717,11 +759,40 @@ pub fn build_app_with_request_tracing(
+     enable_transparent_proxy: bool,
+     enable_request_tracing: bool,
+ ) -> Router {
+-    // Create routes
+-    let protected_routes = Router::new()
++    build_app_with_middlewares_and_request_tracing(
++        app_state,
++        max_payload_size,
++        request_id_headers,
++        cors_allowed_origins,
++        enable_transparent_proxy,
++        ChatMiddlewareConfig::default(),
++        enable_request_tracing,
++    )
++}
++
++/// Build the Axum application with configured Router-native middleware.
++pub fn build_app_with_middlewares_and_request_tracing(
++    app_state: Arc<AppState>,
++    max_payload_size: usize,
++    request_id_headers: Vec<String>,
++    cors_allowed_origins: Vec<String>,
++    enable_transparent_proxy: bool,
++    middleware_config: ChatMiddlewareConfig,
++    enable_request_tracing: bool,
++) -> Router {
++    // Chat routes get the agent_hint → session_params adapter only when it was
++    // selected with --middleware. Other protected routes always skip that
++    // buffering/parse cost.
++    //
++    // Layer order on the request path (outer → inner):
++    //   concurrency_limit → configured chat middleware → handler
++    // Declaring concurrency last makes it outermost (axum reverse order).
++    let chat_routes = Router::new().route("/v1/chat/completions", post(v1_chat_completions));
++    let chat_routes = apply_chat_middlewares(chat_routes, max_payload_size, &middleware_config);
++
++    let other_protected_routes = Router::new()
+         .route("/generate", post(generate))
+         .route("/inference/v1/generate", post(inference_generate))
+-        .route("/v1/chat/completions", post(v1_chat_completions))
+         .route("/v1/completions", post(v1_completions))
+         .route("/rerank", post(rerank))
+         .route("/v1/rerank", post(v1_rerank))
+@@ -736,7 +807,11 @@ pub fn build_app_with_request_tracing(
+         .route(
+             "/v1/responses/{response_id}/input",
+             get(v1_responses_list_input_items),
+-        )
++        );
++
++    let protected_routes = Router::new()
++        .merge(chat_routes)
++        .merge(other_protected_routes)
+         .route_layer(axum::middleware::from_fn_with_state(
+             app_state.clone(),
+             middleware::concurrency_limit_middleware,
+@@ -1022,13 +1097,45 @@ pub async fn startup(config: ServerConfig) -> Result<(), Box<dyn std::error::Err
+     // Build the application
+     // Enable transparent proxy for all routing modes
+     let enable_transparent_proxy = true;
++    let token_offset_state = if config
++        .middlewares
++        .contains(&middleware::RouterMiddleware::AgentHintTokenOffsets)
++    {
++        let tokenizer_path = config.agent_hint_tokenizer.as_deref().ok_or_else(|| {
++            std::io::Error::new(
++                std::io::ErrorKind::InvalidInput,
++                "agent_hint_token_offsets requires --agent-hint-tokenizer",
++            )
++        })?;
++        let block_size = config.agent_hint_block_size.ok_or_else(|| {
++            std::io::Error::new(
++                std::io::ErrorKind::InvalidInput,
++                "agent_hint_token_offsets requires --agent-hint-block-size",
++            )
++        })?;
++        Some(
++            crate::agent_hint_token_offsets::AgentHintTokenOffsetState::from_files(
++                config.max_payload_size,
++                block_size,
++                tokenizer_path,
++                config.agent_hint_chat_template.as_deref(),
++            )
++            .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?,
++        )
++    } else {
++        None
++    };
+ 
+-    let app = build_app_with_request_tracing(
++    let app = build_app_with_middlewares_and_request_tracing(
+         app_state,
+         config.max_payload_size,
+         request_id_headers,
+         config.router_config.cors_allowed_origins.clone(),
+         enable_transparent_proxy,
++        ChatMiddlewareConfig {
++            middlewares: config.middlewares.clone(),
++            token_offset_state,
++        },
+         crate::otel_trace::is_otel_enabled(),
+     );
+ 
+@@ -1099,3 +1206,118 @@ fn create_cors_layer(allowed_origins: Vec<String>) -> tower_http::cors::CorsLaye
+ 
+     cors.max_age(Duration::from_secs(3600))
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use axum::{body::Body, http::Request, Json};
++    use http_body_util::BodyExt;
++    use serde_json::{json, Value};
++    use tower::ServiceExt;
++
++    struct FixedOffsets;
++
++    impl crate::agent_hint_token_offsets::MessageOffsetCalculator for FixedOffsets {
++        fn message_token_offsets(
++            &self,
++            messages: &[Value],
++            _tools: Option<&[Value]>,
++            _template_kwargs: Option<&serde_json::Map<String, Value>>,
++            _add_generation_prompt: bool,
++        ) -> Result<Vec<usize>, String> {
++            Ok((0..messages.len()).map(|index| index * 130).collect())
++        }
++    }
++
++    async fn echo_json(Json(payload): Json<Value>) -> Json<Value> {
++        Json(payload)
++    }
++
++    async fn run_chat_middleware(middlewares: &[middleware::RouterMiddleware]) -> Value {
++        let app = apply_chat_middlewares(
++            Router::new().route("/", post(echo_json)),
++            1024 * 1024,
++            &ChatMiddlewareConfig {
++                middlewares: middlewares.to_vec(),
++                token_offset_state: None,
++            },
++        );
++        let request = Request::builder()
++            .method("POST")
++            .uri("/")
++            .header(http::header::CONTENT_TYPE, "application/json")
++            .body(Body::from(
++                json!({
++                    "messages": [],
++                    "agent_hint": {
++                        "session_id": "child-1",
++                        "parent_session_id": "root-1"
++                    }
++                })
++                .to_string(),
++            ))
++            .unwrap();
++        let response = app.oneshot(request).await.unwrap();
++        let bytes = response.into_body().collect().await.unwrap().to_bytes();
++        serde_json::from_slice(&bytes).unwrap()
++    }
++
++    #[tokio::test]
++    async fn configured_agent_hint_middleware_rewrites_chat_body() {
++        let payload = run_chat_middleware(&[middleware::RouterMiddleware::AgentHintAffinity]).await;
++        assert_eq!(payload["session_params"]["session_id"], "child-1");
++    }
++
++    #[tokio::test]
++    async fn chat_body_is_unchanged_without_configured_middleware() {
++        let payload = run_chat_middleware(&[]).await;
++        assert!(payload.get("session_params").is_none());
++        assert_eq!(payload["agent_hint"]["session_id"], "child-1");
++    }
++
++    #[tokio::test]
++    async fn configured_token_offset_middleware_rewrites_chat_body() {
++        let state = crate::agent_hint_token_offsets::AgentHintTokenOffsetState::for_test(
++            1024 * 1024,
++            128,
++            Arc::new(FixedOffsets),
++        );
++        let app = apply_chat_middlewares(
++            Router::new().route("/", post(echo_json)),
++            1024 * 1024,
++            &ChatMiddlewareConfig {
++                middlewares: vec![middleware::RouterMiddleware::AgentHintTokenOffsets],
++                token_offset_state: Some(state),
++            },
++        );
++        let request = Request::builder()
++            .method("POST")
++            .uri("/")
++            .header(http::header::CONTENT_TYPE, "application/json")
++            .body(Body::from(
++                json!({
++                    "messages": [
++                        {"role": "user", "content": "first"},
++                        {"role": "assistant", "content": "second"}
++                    ],
++                    "agent_hint": {
++                        "session_id": "child-1",
++                        "cache_control": {"msg_offset": 2}
++                    }
++                })
++                .to_string(),
++            ))
++            .unwrap();
++        let response = app.oneshot(request).await.unwrap();
++        assert_eq!(response.status(), StatusCode::OK);
++        let bytes = response.into_body().collect().await.unwrap().to_bytes();
++        let payload: Value = serde_json::from_slice(&bytes).unwrap();
++        assert_eq!(payload["session_params"]["session_id"], "child-1");
++        assert_eq!(payload["agent_hint"]["cache_control"]["token_offset"], 130);
++        assert_eq!(payload["agent_hint"]["cache_control"]["block_offset"], 1);
++        assert_eq!(
++            payload["agent_hint"]["cache_control"]["intra_block_offset"],
++            2
++        );
++    }
++}
+diff --git a/src/tokenizer/chat_template.rs b/src/tokenizer/chat_template.rs
+index 8a9a0fe..1f3232b 100644
+--- a/src/tokenizer/chat_template.rs
++++ b/src/tokenizer/chat_template.rs
+@@ -4,7 +4,7 @@
+ //! similar to HuggingFace transformers' apply_chat_template method.
+ 
+ use anyhow::{anyhow, Result};
+-use minijinja::{context, Environment, Value};
++use minijinja::{Environment, Error, ErrorKind, Value};
+ use serde::{Deserialize, Serialize};
+ use serde_json;
+ 
+@@ -43,6 +43,10 @@ pub struct ChatTemplateProcessor {
+     eos_token: Option<String>,
+ }
+ 
++fn raise_exception(message: String) -> Result<String, Error> {
++    Err(Error::new(ErrorKind::InvalidOperation, message))
++}
++
+ impl ChatTemplateProcessor {
+     /// Create a new chat template processor
+     pub fn new(template: String, bos_token: Option<String>, eos_token: Option<String>) -> Self {
+@@ -61,8 +65,38 @@ impl ChatTemplateProcessor {
+         &self,
+         messages: &[ChatMessage],
+         add_generation_prompt: bool,
++    ) -> Result<String> {
++        let messages: Vec<serde_json::Value> = messages
++            .iter()
++            .map(|message| serde_json::to_value(message).expect("ChatMessage is serializable"))
++            .collect();
++        self.apply_chat_template_values(&messages, None, add_generation_prompt)
++    }
++
++    /// Apply the template to the original OpenAI-compatible JSON values.
++    ///
++    /// Keeping the complete values is important for templates that inspect
++    /// structured content, tool calls, or the top-level `tools` collection.
++    pub fn apply_chat_template_values(
++        &self,
++        messages: &[serde_json::Value],
++        tools: Option<&[serde_json::Value]>,
++        add_generation_prompt: bool,
++    ) -> Result<String> {
++        self.apply_chat_template_values_with_kwargs(messages, tools, add_generation_prompt, None)
++    }
++
++    /// Apply the template with request-provided chat-template variables.
++    pub fn apply_chat_template_values_with_kwargs(
++        &self,
++        messages: &[serde_json::Value],
++        tools: Option<&[serde_json::Value]>,
++        add_generation_prompt: bool,
++        template_kwargs: Option<&serde_json::Map<String, serde_json::Value>>,
+     ) -> Result<String> {
+         let mut env = Environment::new();
++        env.set_unknown_method_callback(minijinja_contrib::pycompat::unknown_method_callback);
++        env.add_function("raise_exception", raise_exception);
+ 
+         // Register the template
+         env.add_template("chat", &self.template)
+@@ -73,25 +107,33 @@ impl ChatTemplateProcessor {
+             .get_template("chat")
+             .map_err(|e| anyhow!("Failed to get template: {}", e))?;
+ 
+-        // Convert messages to a format Jinja can work with
+-        let messages_value: Vec<Value> = messages
+-            .iter()
+-            .map(|msg| {
+-                context! {
+-                    role => msg.role.clone(),
+-                    content => msg.content.clone()
+-                }
+-            })
+-            .collect();
++        let mut render_context = template_kwargs.cloned().unwrap_or_default();
++        render_context.insert(
++            "messages".to_string(),
++            serde_json::Value::Array(messages.to_vec()),
++        );
++        if let Some(tools) = tools {
++            render_context.insert(
++                "tools".to_string(),
++                serde_json::Value::Array(tools.to_vec()),
++            );
++        }
++        render_context.insert(
++            "add_generation_prompt".to_string(),
++            serde_json::Value::Bool(add_generation_prompt),
++        );
++        render_context.insert(
++            "bos_token".to_string(),
++            serde_json::Value::String(self.bos_token.clone().unwrap_or_default()),
++        );
++        render_context.insert(
++            "eos_token".to_string(),
++            serde_json::Value::String(self.eos_token.clone().unwrap_or_default()),
++        );
+ 
+         // Render the template
+         let rendered = tmpl
+-            .render(context! {
+-                messages => messages_value,
+-                add_generation_prompt => add_generation_prompt,
+-                bos_token => self.bos_token.clone().unwrap_or_default(),
+-                eos_token => self.eos_token.clone().unwrap_or_default()
+-            })
++            .render(Value::from_serialize(&render_context))
+             .map_err(|e| anyhow!("Failed to render template: {}", e))?;
+ 
+         Ok(rendered)
+@@ -179,4 +221,65 @@ assistant:
+         assert!(result.contains("<s>"));
+         assert!(result.contains("</s>"));
+     }
++
++    #[test]
++    fn test_structured_messages_tools_and_kwargs_are_preserved() {
++        let template = concat!(
++            "{{ tools[0].function.name }}|",
++            "{{ messages[0].tool_calls[0].function.name }}|",
++            "{{ enable_thinking }}|{{ add_generation_prompt }}"
++        );
++        let processor = ChatTemplateProcessor::new(template.to_string(), None, None);
++        let messages = vec![serde_json::json!({
++            "role": "assistant",
++            "content": null,
++            "tool_calls": [{
++                "type": "function",
++                "function": {"name": "lookup", "arguments": "{}"}
++            }]
++        })];
++        let tools = vec![serde_json::json!({
++            "type": "function",
++            "function": {"name": "lookup", "parameters": {"type": "object"}}
++        })];
++        let kwargs = serde_json::Map::from_iter([(
++            "enable_thinking".to_string(),
++            serde_json::Value::Bool(false),
++        )]);
++
++        let rendered = processor
++            .apply_chat_template_values_with_kwargs(&messages, Some(&tools), true, Some(&kwargs))
++            .unwrap();
++        assert_eq!(rendered, "lookup|lookup|false|true");
++    }
++
++    #[test]
++    fn test_python_string_methods_are_supported() {
++        let template = concat!(
++            "{% for message in messages %}",
++            "{% if message.content.startswith('hello') %}",
++            "{{ message.content.upper() }}",
++            "{% endif %}",
++            "{% endfor %}",
++        );
++        let processor = ChatTemplateProcessor::new(template.to_string(), None, None);
++        let messages = vec![ChatMessage::user("hello world")];
++
++        let rendered = processor.apply_chat_template(&messages, false).unwrap();
++
++        assert_eq!(rendered, "HELLO WORLD");
++    }
++
++    #[test]
++    fn test_raise_exception_reports_template_message() {
++        let processor = ChatTemplateProcessor::new(
++            "{{ raise_exception('No messages provided.') }}".to_string(),
++            None,
++            None,
++        );
++
++        let error = processor.apply_chat_template(&[], false).unwrap_err();
++
++        assert!(error.to_string().contains("No messages provided."));
++    }
+ }
+diff --git a/src/tokenizer/huggingface.rs b/src/tokenizer/huggingface.rs
+index 02dce5a..d0aeb8d 100644
+--- a/src/tokenizer/huggingface.rs
++++ b/src/tokenizer/huggingface.rs
+@@ -34,7 +34,7 @@ impl HuggingFaceTokenizer {
+         let special_tokens = Self::extract_special_tokens(&tokenizer);
+ 
+         // Build vocab mappings
+-        let vocab = tokenizer.get_vocab(false);
++        let vocab = tokenizer.get_vocab(true);
+         let reverse_vocab: HashMap<TokenIdType, String> = vocab
+             .iter()
+             .map(|(token, &id)| (id, token.clone()))
+@@ -61,7 +61,7 @@ impl HuggingFaceTokenizer {
+     /// Create from an existing HuggingFace tokenizer
+     pub fn from_tokenizer(tokenizer: HfTokenizer) -> Self {
+         let special_tokens = Self::extract_special_tokens(&tokenizer);
+-        let vocab = tokenizer.get_vocab(false);
++        let vocab = tokenizer.get_vocab(true);
+         let reverse_vocab: HashMap<TokenIdType, String> = vocab
+             .iter()
+             .map(|(token, &id)| (id, token.clone()))
+@@ -138,6 +138,10 @@ impl HuggingFaceTokenizer {
+         self.chat_template = Some(template);
+     }
+ 
++    pub fn has_chat_template(&self) -> bool {
++        self.chat_template.is_some()
++    }
++
+     /// Apply chat template if available
+     pub fn apply_chat_template(
+         &self,
+@@ -163,6 +167,41 @@ impl HuggingFaceTokenizer {
+             Ok(result)
+         }
+     }
++
++    /// Apply the configured template without narrowing the original request
++    /// values to string-only messages.
++    pub fn apply_chat_template_values(
++        &self,
++        messages: &[serde_json::Value],
++        tools: Option<&[serde_json::Value]>,
++        add_generation_prompt: bool,
++    ) -> Result<String> {
++        self.apply_chat_template_values_with_kwargs(messages, tools, add_generation_prompt, None)
++    }
++
++    pub fn apply_chat_template_values_with_kwargs(
++        &self,
++        messages: &[serde_json::Value],
++        tools: Option<&[serde_json::Value]>,
++        add_generation_prompt: bool,
++        template_kwargs: Option<&serde_json::Map<String, serde_json::Value>>,
++    ) -> Result<String> {
++        let template = self
++            .chat_template
++            .as_ref()
++            .ok_or_else(|| Error::msg("No chat template configured for tokenizer"))?;
++        let processor = ChatTemplateProcessor::new(
++            template.clone(),
++            self.special_tokens.bos_token.clone(),
++            self.special_tokens.eos_token.clone(),
++        );
++        processor.apply_chat_template_values_with_kwargs(
++            messages,
++            tools,
++            add_generation_prompt,
++            template_kwargs,
++        )
++    }
+ }
+ 
+ impl Encoder for HuggingFaceTokenizer {
+@@ -214,7 +253,12 @@ impl TokenizerTrait for HuggingFaceTokenizer {
+ 
+ #[cfg(test)]
+ mod tests {
+-    use super::ChatMessage;
++    use std::fs;
++
++    use tempfile::TempDir;
++
++    use super::{ChatMessage, HuggingFaceTokenizer};
++    use crate::tokenizer::traits::Tokenizer;
+ 
+     #[test]
+     fn test_chat_message_creation() {
+@@ -229,6 +273,41 @@ mod tests {
+         assert_eq!(assistant_msg.role, "assistant");
+     }
+ 
+-    // Note: Actual tokenizer tests would require a real tokenizer file
+-    // These would be integration tests rather than unit tests
++    #[test]
++    fn test_added_special_token_is_available_by_name() {
++        let temp_dir = TempDir::new().unwrap();
++        let tokenizer_path = temp_dir.path().join("tokenizer.json");
++        fs::write(
++            &tokenizer_path,
++            r#"{
++                "version":"1.0",
++                "truncation":null,
++                "padding":null,
++                "added_tokens":[{
++                    "id":3,
++                    "content":"<|im_start|>",
++                    "single_word":false,
++                    "lstrip":false,
++                    "rstrip":false,
++                    "normalized":false,
++                    "special":true
++                }],
++                "normalizer":null,
++                "pre_tokenizer":{"type":"Whitespace"},
++                "post_processor":null,
++                "decoder":null,
++                "model":{
++                    "type":"WordLevel",
++                    "vocab":{"hello":0,"world":1,"[UNK]":2},
++                    "unk_token":"[UNK]"
++                }
++            }"#,
++        )
++        .unwrap();
++
++        let tokenizer = HuggingFaceTokenizer::from_file(tokenizer_path.to_str().unwrap()).unwrap();
++
++        assert_eq!(tokenizer.token_to_id("<|im_start|>"), Some(3));
++        assert_eq!(tokenizer.id_to_token(3).as_deref(), Some("<|im_start|>"));
++    }
+ }
+diff --git a/tests/test_agent_hint_routing.rs b/tests/test_agent_hint_routing.rs
+new file mode 100644
+index 0000000..eb3a617
+--- /dev/null
++++ b/tests/test_agent_hint_routing.rs
+@@ -0,0 +1,233 @@
++//! Agent-hint middleware → `session_params.session_id` → existing routing policies.
++
++use std::sync::Arc;
++
++use vllm_router_rs::core::{BasicWorker, DPAwareWorker, Worker, WorkerType};
++use vllm_router_rs::middleware::{
++    inject_agent_hint_into_session_params, session_id_from_agent_hint_body,
++};
++use vllm_router_rs::policies::{
++    CacheAwareConfig, CacheAwarePolicy, ConsistentHashPolicy, LoadBalancingPolicy,
++};
++use vllm_router_rs::protocols::spec::ChatCompletionRequest;
++
++fn create_test_workers() -> Vec<Arc<dyn Worker>> {
++    vec![
++        Arc::new(BasicWorker::new(
++            "http://worker1:8000".to_string(),
++            WorkerType::Regular,
++        )),
++        Arc::new(BasicWorker::new(
++            "http://worker2:8000".to_string(),
++            WorkerType::Regular,
++        )),
++        Arc::new(BasicWorker::new(
++            "http://worker3:8000".to_string(),
++            WorkerType::Regular,
++        )),
++    ]
++}
++
++fn create_dp_workers(base_url: &str, dp_size: usize) -> Vec<Arc<dyn Worker>> {
++    (0..dp_size)
++        .map(|rank| {
++            Arc::new(DPAwareWorker::new(
++                base_url.to_string(),
++                rank,
++                dp_size,
++                WorkerType::Regular,
++            )) as Arc<dyn Worker>
++        })
++        .collect()
++}
++
++fn agent_hint_body(session_id: &str, parent_session_id: &str) -> Vec<u8> {
++    serde_json::to_vec(&serde_json::json!({
++        "model": "test-model",
++        "messages": [{"role": "user", "content": format!("hello from {session_id}")}],
++        "agent_hint": {
++            "session_id": session_id,
++            "parent_session_id": parent_session_id,
++            "cache_control": {"type": "ephemeral"}
++        }
++    }))
++    .expect("serialize agent_hint body")
++}
++
++#[test]
++fn test_middleware_copies_own_session_id_not_parent() {
++    let body = agent_hint_body("child-a", "root-1");
++    assert_eq!(
++        session_id_from_agent_hint_body(&body).as_deref(),
++        Some("child-a")
++    );
++
++    let rewritten = inject_agent_hint_into_session_params(&body).expect("rewrite");
++    let req: ChatCompletionRequest = serde_json::from_slice(&rewritten).unwrap();
++    assert_eq!(
++        req.extract_session_id_for_routing().as_deref(),
++        Some("child-a")
++    );
++    assert_eq!(
++        req.agent_hint.as_ref().map(|h| h.session_id.as_str()),
++        Some("child-a")
++    );
++}
++
++#[test]
++fn test_same_session_id_selects_same_worker_across_turns() {
++    let policy = ConsistentHashPolicy::new();
++    let workers = create_test_workers();
++
++    let body = agent_hint_body("child-a", "root-1");
++    let rewritten = inject_agent_hint_into_session_params(&body).expect("rewrite");
++    let rewritten_str = std::str::from_utf8(&rewritten).unwrap();
++
++    let first = policy
++        .select_worker(&workers, Some(rewritten_str))
++        .expect("first turn");
++
++    for turn in 0..5 {
++        let turn_body = serde_json::to_vec(&serde_json::json!({
++            "messages": [{"role": "user", "content": format!("turn-{turn}")}],
++            "agent_hint": {
++                "session_id": "child-a",
++                "parent_session_id": "root-1"
++            }
++        }))
++        .unwrap();
++        let turn_rewritten =
++            inject_agent_hint_into_session_params(&turn_body).expect("rewrite turn");
++        let idx = policy
++            .select_worker(
++                &workers,
++                Some(std::str::from_utf8(&turn_rewritten).unwrap()),
++            )
++            .expect("turn select");
++        assert_eq!(idx, first, "turn {turn} drifted for same session_id");
++    }
++}
++
++#[test]
++fn test_cache_aware_agent_hint_sticks_to_dp_rank_across_turns() {
++    let policy = CacheAwarePolicy::with_config(CacheAwareConfig {
++        cache_threshold: 0.5,
++        balance_abs_threshold: 10_000,
++        balance_rel_threshold: 100.0,
++        eviction_interval_secs: 0,
++        max_tree_size: 10_000,
++    });
++    let workers = create_dp_workers("http://worker:8000", 4);
++    policy.init_workers(&workers);
++
++    let histories = [
++        serde_json::json!([{"role": "user", "content": "turn zero"}]),
++        serde_json::json!([{"role": "user", "content": "unrelated turn one"}]),
++        serde_json::json!([
++            {"role": "system", "content": "a new system prompt"},
++            {"role": "user", "content": "a third, different history"}
++        ]),
++    ];
++
++    let mut selected_rank = None;
++    for (turn, messages) in histories.into_iter().enumerate() {
++        let body = serde_json::to_vec(&serde_json::json!({
++            "model": "test-model",
++            "messages": messages,
++            "agent_hint": {
++                "session_id": "child-sticky",
++                "parent_session_id": "root-1"
++            }
++        }))
++        .unwrap();
++        let rewritten = inject_agent_hint_into_session_params(&body).expect("middleware rewrite");
++        let request: ChatCompletionRequest = serde_json::from_slice(&rewritten).unwrap();
++        let session_key = request
++            .extract_session_id_key_for_routing()
++            .expect("middleware-injected session routing key");
++        let full_history = request.extract_full_history_routing_text();
++
++        let selection = policy
++            .select_worker_with_fallback_headers_with_decision(
++                &workers,
++                Some(&session_key),
++                Some(&full_history),
++                None,
++            )
++            .expect("cache-aware DP selection");
++        let worker = &workers[selection.index];
++        let rank = worker.dp_rank().expect("DP-aware worker rank");
++
++        if let Some(expected_rank) = selected_rank {
++            assert_eq!(rank, expected_rank, "turn {turn} drifted to another rank");
++            assert_eq!(
++                selection.decision,
++                Some("session_id_match"),
++                "turn {turn} should use the warmed session key"
++            );
++        } else {
++            selected_rank = Some(rank);
++        }
++
++        assert!(worker.is_dp_aware());
++        assert_eq!(worker.dp_size(), Some(4));
++        assert_eq!(
++            worker.endpoint_url("/v1/chat/completions"),
++            "http://worker:8000/v1/chat/completions"
++        );
++    }
++}
++
++#[test]
++fn test_existing_session_params_not_overwritten() {
++    let body = serde_json::to_vec(&serde_json::json!({
++        "messages": [{"role": "user", "content": "hi"}],
++        "session_params": {"session_id": "already-set"},
++        "agent_hint": {
++            "session_id": "child-a",
++            "parent_session_id": "root-1"
++        }
++    }))
++    .unwrap();
++
++    assert!(inject_agent_hint_into_session_params(&body).is_none());
++    let req: ChatCompletionRequest = serde_json::from_slice(&body).unwrap();
++    assert_eq!(
++        req.extract_session_id_for_routing().as_deref(),
++        Some("already-set")
++    );
++}
++
++#[test]
++fn test_different_session_ids_can_select_different_workers() {
++    let policy = ConsistentHashPolicy::new();
++    let workers = create_test_workers();
++
++    let mut saw_different = false;
++    for i in 0..40 {
++        let a = inject_agent_hint_into_session_params(&agent_hint_body(
++            &format!("session-a-{i}"),
++            "root",
++        ))
++        .unwrap();
++        let b = inject_agent_hint_into_session_params(&agent_hint_body(
++            &format!("session-b-{i}"),
++            "root",
++        ))
++        .unwrap();
++        let idx_a = policy
++            .select_worker(&workers, Some(std::str::from_utf8(&a).unwrap()))
++            .unwrap();
++        let idx_b = policy
++            .select_worker(&workers, Some(std::str::from_utf8(&b).unwrap()))
++            .unwrap();
++        if idx_a != idx_b {
++            saw_different = true;
++            break;
++        }
++    }
++    assert!(
++        saw_different,
++        "different session_ids should be able to land on different workers"
++    );
++}
+diff --git a/tests/test_extra_args_chat.rs b/tests/test_extra_args_chat.rs
+index 5599df2..1d0aa4f 100644
+--- a/tests/test_extra_args_chat.rs
++++ b/tests/test_extra_args_chat.rs
+@@ -1,4 +1,5 @@
+ //! Tests that unknown/extra fields in ChatCompletionRequest are preserved through serde roundtrip.
++use vllm_router_rs::middleware::inject_agent_hint_into_session_params;
+ use vllm_router_rs::protocols::spec::ChatCompletionRequest;
+ 
+ #[test]
+@@ -71,3 +72,64 @@ fn test_no_other_fields_gives_empty_map() {
+     let req: ChatCompletionRequest = serde_json::from_str(json).unwrap();
+     assert!(req.other.is_empty());
+ }
++
++#[test]
++fn test_agentic_context_survives_agent_hint_middleware_and_typed_roundtrip() {
++    let agentic_context = r#"{"program_id":"child-1","task_id":"root-1","agent_id":"child-1"}"#;
++    let body = serde_json::to_vec(&serde_json::json!({
++        "model": "test-model",
++        "messages": [{"role": "user", "content": "Hello"}],
++        "agent_hint": {
++            "session_id": "child-1",
++            "parent_session_id": "root-1"
++        },
++        "vllm_xargs": {
++            "agentic_context": agentic_context
++        }
++    }))
++    .unwrap();
++
++    let rewritten = inject_agent_hint_into_session_params(&body).expect("middleware rewrite");
++    let request: ChatCompletionRequest = serde_json::from_slice(&rewritten).unwrap();
++    let forwarded = serde_json::to_value(&request).unwrap();
++
++    assert_eq!(forwarded["session_params"]["session_id"], "child-1");
++    assert_eq!(forwarded["vllm_xargs"]["agentic_context"], agentic_context);
++    assert_eq!(forwarded["agent_hint"]["session_id"], "child-1");
++    assert_eq!(forwarded["agent_hint"]["parent_session_id"], "root-1");
++}
++
++#[test]
++fn test_agent_hint_cache_offsets_survive_typed_roundtrip() {
++    let request: ChatCompletionRequest = serde_json::from_value(serde_json::json!({
++        "model": "test-model",
++        "messages": [{"role": "user", "content": "Hello"}],
++        "agent_hint": {
++            "session_id": "session-1",
++            "cache_control": {
++                "type": "ephemeral",
++                "ttl": 300,
++                "msg_offset": 1,
++                "token_offset": 130,
++                "block_offset": 1,
++                "intra_block_offset": 2,
++                "extension": true
++            },
++            "agent_extension": "preserved"
++        }
++    }))
++    .unwrap();
++
++    let forwarded = serde_json::to_value(request).unwrap();
++    assert_eq!(
++        forwarded["agent_hint"]["cache_control"]["token_offset"],
++        130
++    );
++    assert_eq!(forwarded["agent_hint"]["cache_control"]["block_offset"], 1);
++    assert_eq!(
++        forwarded["agent_hint"]["cache_control"]["intra_block_offset"],
++        2
++    );
++    assert_eq!(forwarded["agent_hint"]["cache_control"]["extension"], true);
++    assert_eq!(forwarded["agent_hint"]["agent_extension"], "preserved");
++}
