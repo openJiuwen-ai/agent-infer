@@ -191,6 +191,19 @@ def test_benchmark_launcher_policy_is_supported_by_destination_factory() -> None
     launcher = Path(__file__).resolve().parents[2] / "agentbench" / "run-scheduler-e2e-compare.sh"
     match = re.search(r"additional_config=\$\(printf '([^']+)'", launcher.read_text())
     assert match is not None, "benchmark launcher must construct its candidate configuration"
-    settings = json.loads(match.group(1) % ("vllm-local", "/tmp/benchmark-config-test.sock", 5))["agentcache"]
+    launcher_values = (
+        "vllm-local",
+        "/tmp/benchmark-config-test.sock",
+        5,
+        85000,
+        0.0,
+        0.0,
+        0.001,
+        1.0,
+        0.03,
+        0.0,
+        5.2631579e-8,
+    )
+    settings = json.loads(match.group(1) % launcher_values)["agentcache"]
     controller = build_progress_ttl_controller(backend(), settings)
     assert controller is not None
