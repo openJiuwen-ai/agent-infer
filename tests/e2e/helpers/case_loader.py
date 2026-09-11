@@ -10,7 +10,6 @@ import re
 import shlex
 import shutil
 import stat
-import subprocess
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -574,7 +573,13 @@ def ensure_directory(
     run_as_user: str | None,
     effective_uid: int | None = None,
 ) -> None:
-    """Create a directory tree with ownership suitable for sudo-wrapped bench/prepare."""
+    """Create a directory tree with ownership suitable for sudo-wrapped bench/prepare.
+
+    When pytest is root and the bench runs as ``run_as_user``, create the path as
+    the invoking root user. The checkout is usually owned by another account, so
+    ``sudo -u <run_as_user> mkdir`` would fail with Permission denied. After the
+    directory exists, chown the leaf so the wrapped process can write results.
+    """
 
     target = path.resolve()
     if not _running_as_root_for_user(run_as_user=run_as_user, effective_uid=effective_uid):
@@ -582,19 +587,8 @@ def ensure_directory(
         return
 
     assert run_as_user is not None
-    if target.exists():
-        _chown_for_user(target, run_as_user)
-        return
-
-    completed = subprocess.run(
-        ["sudo", "-u", run_as_user, "mkdir", "-p", str(target)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if completed.returncode != 0:
-        message = completed.stderr.strip() or completed.stdout.strip() or "mkdir failed"
-        raise RuntimeError(f"failed to create {target} as {run_as_user}: {message}")
+    target.mkdir(parents=True, exist_ok=True)
+    _chown_for_user(target, run_as_user)
 
 
 def resolve_benchmark_run_as_user(*, agent_profile: str, benchmark_run_as_user: str | None) -> str | None:
