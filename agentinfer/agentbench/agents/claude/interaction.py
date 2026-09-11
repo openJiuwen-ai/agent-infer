@@ -15,8 +15,12 @@ class InteractionState:
     startup_dismissed: bool = False
     yes_confirmation_visible: bool = False
     plan_approval_visible: bool = False
+    generic_selection_visible: bool = False
     auto_yes_confirmations: int = 0
     auto_plan_approvals: int = 0
+    auto_generic_selections: int = 0
+    generic_selection_attempts: int = 0
+    generic_selection_sent_at: float | None = None
 
 
 @dataclass
@@ -103,6 +107,21 @@ def _approve_plan(ctx: InteractionContext) -> InteractionAction:
 
 _YES_CONFIRMATION_RE = re.compile(r"(?:❯|>|➤|▶)\s*(?:\d+\.\s*)?Yes\b")
 
+_SELECTION_FOOTER_MARKERS = (
+    "enter to select",
+    "↑/↓ to navigate",
+    "↑ ↓ to move",
+    "esc to cancel",
+    "space to select",
+)
+
+_NUMBERED_SELECTION_RE = re.compile(r"^\s*(?:[❯➤▶]\s*)?\d+\.\s+")
+_HIGHLIGHTED_NUMBERED_SELECTION_RE = re.compile(r"^\s*[❯➤▶]\s*\d+\.\s+")
+
+_PROMPT_WINDOW_LINES = 20
+_GENERIC_SELECTION_RETRY_SECONDS = 5.0
+_GENERIC_SELECTION_MAX_ATTEMPTS = 2
+
 
 def _yes_confirmation_visible(terminal: str) -> bool:
     """Return whether a selectable Yes option is visible near the prompt."""
@@ -122,6 +141,60 @@ class YesConfirmationHandler:
     def act(self, ctx: InteractionContext) -> InteractionAction:
         ctx.state.yes_confirmation_visible = True
         ctx.state.auto_yes_confirmations += 1
+        return InteractionAction(kind="send_keys", keys="Enter")
+
+
+def _generic_selection_visible(terminal: str) -> bool:
+    """Return whether an unclaimed numbered multi-choice prompt is visible."""
+
+    low = terminal.lower()
+    if not any(marker in low for marker in _SELECTION_FOOTER_MARKERS):
+        return False
+    lines = terminal.splitlines()[-_PROMPT_WINDOW_LINES:]
+    return sum(bool(_NUMBERED_SELECTION_RE.match(line)) for line in lines) >= 2 and any(
+        _HIGHLIGHTED_NUMBERED_SELECTION_RE.match(line) for line in lines
+    )
+
+
+class GenericSelectionHandler:
+    """Select the highlighted option of any numbered multi-choice prompt once per appearance.
+
+    Defensive fallback for prompts no specific handler claims, such as
+    AskUserQuestion whose first option does not begin with Yes:
+
+        ❯ 1. Properties should inherit docstrings
+          2. Test needs to be fixed
+          3. I need to see more examples
+
+        Enter to select • ↑/↓ to navigate • Esc to cancel
+
+    Selecting the highlighted option is the only non-blocking choice available:
+    an autonomous run has no user to ask, and Claude lists its own best guess
+    first. A wrong pick surfaces as a failing patch, which the benchmark already
+    scores, whereas waiting stalls the run indefinitely -- astropy__astropy-7166
+    blocked 78 minutes this way before this handler existed.
+    """
+
+    def recognize(self, ctx: InteractionContext) -> bool:
+        state = ctx.state
+        if state.plan_approval_visible or state.yes_confirmation_visible:
+            return False
+        if not _generic_selection_visible(ctx.terminal):
+            return False
+        if not state.generic_selection_visible:
+            return True
+        return (
+            state.generic_selection_attempts < _GENERIC_SELECTION_MAX_ATTEMPTS
+            and state.generic_selection_sent_at is not None
+            and ctx.elapsed_seconds - state.generic_selection_sent_at >= _GENERIC_SELECTION_RETRY_SECONDS
+        )
+
+    def act(self, ctx: InteractionContext) -> InteractionAction:
+        state = ctx.state
+        state.generic_selection_visible = True
+        state.generic_selection_attempts += 1
+        state.generic_selection_sent_at = ctx.elapsed_seconds
+        state.auto_generic_selections += 1
         return InteractionAction(kind="send_keys", keys="Enter")
 
 
@@ -179,6 +252,10 @@ class InteractionController:
             ctx.state.yes_confirmation_visible = False
         if ctx.state.plan_approval_visible and not _plan_approval_visible(ctx.terminal):
             ctx.state.plan_approval_visible = False
+        if ctx.state.generic_selection_visible and not _generic_selection_visible(ctx.terminal):
+            ctx.state.generic_selection_visible = False
+            ctx.state.generic_selection_attempts = 0
+            ctx.state.generic_selection_sent_at = None
         for handler in self._handlers:
             if handler.recognize(ctx):
                 return handler.act(ctx)
@@ -189,7 +266,7 @@ def handler_types_for_profile(interaction_profile: str) -> tuple[type[Interactio
     """Return terminal handlers selected by a Claude interaction profile."""
 
     if interaction_profile == "single":
-        return (StartupDialogHandler, YesConfirmationHandler)
+        return (StartupDialogHandler, YesConfirmationHandler, GenericSelectionHandler)
     if interaction_profile == "plan-subagent":
-        return (StartupDialogHandler, PlanApprovalHandler, YesConfirmationHandler)
+        return (StartupDialogHandler, PlanApprovalHandler, YesConfirmationHandler, GenericSelectionHandler)
     raise ValueError(f"Unsupported Claude interaction profile: {interaction_profile!r}")

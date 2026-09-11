@@ -4,8 +4,6 @@
 """Functional orchestration for benchmark runs and task lifecycles."""
 
 import asyncio
-import shutil
-import subprocess
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -16,25 +14,25 @@ from typing import TypeVar
 import httpx
 from tqdm import tqdm
 
-from ..agents import AgentRunRequest, AgentRunResult, run_agent
-from ..agents.outcomes import AgentRunOutcome, TerminationReason
+from ..agents import AgentRunRequest, AgentRunResult, check_agent_preflight, run_agent
+from ..agents.contracts import AgentRunOutcome, TerminationReason
 from ..request_proxy import create_request_proxy_lifecycle, load_request_facts
-from .artifacts import build_run_manifest, build_run_summary, build_task_result, finalize_run_manifest
+from .artifacts import (
+    FinalizationContext,
+    RunFinalizer,
+    build_run_manifest,
+    build_task_result,
+)
 from .collectors.correctness import load_correctness_artifact
 from .collectors.environment import collect_environment
-from .collectors.router import capture_router_snapshot
 from .collectors.source_control import collect_source_control
 from .collectors.vllm import capture_vllm_metrics
 from .common import atomic_write_json, utc_now, write_text
 from .config import AgentBenchConfig
 from .dataset import Task, load_tasks
-from .metrics.request import aggregate_request_metrics, derive_session_topology
-from .metrics.router import aggregate_router_window
+from .metrics.request import derive_session_topology
 from .metrics.schema import EvidenceCapture
-from .metrics.source_health import evaluate_captures
-from .metrics.task import aggregate_task_results
-from .metrics.vllm import aggregate_vllm_metrics
-from .session_registration import cleanup_session, register_session
+from .session_analysis import write_analysis_artifacts
 from .workspace import WorkspaceProcessOwner, ensure_repo_cache, prepare_workspace
 
 T = TypeVar("T")
@@ -57,8 +55,6 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
 
     results: list[AgentRunResult] = []
     captures: list[EvidenceCapture] = []
-    router_start: list[dict[str, object]] | None = None
-    router_end: list[dict[str, object]] | None = None
     vllm_start: str | None = None
     vllm_end: str | None = None
     close_result = None
@@ -72,12 +68,12 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
     context = RunContext(config, output_dir, output_dir / "requests.jsonl", ())
 
     async def execute() -> None:
-        nonlocal context, lifecycle, preflight_succeeded, router_start, vllm_start
+        nonlocal context, lifecycle, preflight_succeeded, vllm_start
         await check_preflight(config)
         preflight_succeeded = True
         tasks = tuple(load_tasks(config.dataset.index_path, config.dataset.selection_path, config.experiment.task_num))
         context = RunContext(config, output_dir, output_dir / "requests.jsonl", tasks)
-        start_capture = await capture_vllm_metrics(config.backend.base_url)
+        start_capture = await capture_vllm_metrics(config.backend.effective_metrics_url)
         start_capture = _capture_with_path(
             _named_capture(start_capture, "vllm_start"),
             output_dir / "evidence" / "vllm_metrics_start.prom",
@@ -86,23 +82,13 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
         vllm_start = _capture_text(start_capture)
         if vllm_start is not None:
             write_text(start_capture.path, vllm_start)
-        if config.router.enabled:
-            assert config.router.base_url is not None
-            router_capture = await capture_router_snapshot(config.router.base_url)
-            router_capture = _capture_with_path(
-                _named_capture(router_capture, "router_start"),
-                output_dir / "evidence" / "router_start.json",
-            )
-            captures.append(router_capture)
-            router_start = _router_events(router_capture) if router_capture.available else None
-            if router_capture.available:
-                atomic_write_json(router_capture.path, router_capture.metadata["raw"])
-        else:
-            captures.append(EvidenceCapture("router", None, False, None, {}, applicable=False))
-
-        upstream = config.router.base_url if config.router.enabled else config.backend.base_url
-        assert upstream is not None
-        lifecycle = create_request_proxy_lifecycle(config.request_proxy, upstream, run_id, output_dir)
+        lifecycle = create_request_proxy_lifecycle(
+            config.request_proxy,
+            config.backend.base_url,
+            run_id,
+            output_dir,
+            config.backend.endpoint,
+        )
         handle = await lifecycle.start()
         await lifecycle.wait_ready(config.request_proxy.startup_timeout_seconds)
         await _run_tasks(context, handle.base_url, results, setup_owner)
@@ -143,7 +129,9 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
                 )
 
         if preflight_succeeded:
-            end_capture = await finalize_async("vllm_end", lambda: capture_vllm_metrics(config.backend.base_url))
+            end_capture = await finalize_async(
+                "vllm_end", lambda: capture_vllm_metrics(config.backend.effective_metrics_url)
+            )
             if end_capture is not None:
                 end_capture = _capture_with_path(
                     _named_capture(end_capture, "vllm_end"),
@@ -153,23 +141,6 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
                 vllm_end = _capture_text(end_capture)
                 if vllm_end is not None:
                     finalize_sync("vllm_end_write", lambda: write_text(end_capture.path, vllm_end))
-
-            if config.router.enabled and config.router.base_url:
-                router_capture = await finalize_async(
-                    "router_end", lambda: capture_router_snapshot(config.router.base_url)
-                )
-                if router_capture is not None:
-                    router_capture = _capture_with_path(
-                        _named_capture(router_capture, "router_end"),
-                        output_dir / "evidence" / "router_end.json",
-                    )
-                    captures.append(router_capture)
-                    router_end = _router_events(router_capture) if router_capture.available else None
-                    if router_capture.available:
-                        finalize_sync(
-                            "router_end_write",
-                            lambda: atomic_write_json(router_capture.path, router_capture.metadata["raw"]),
-                        )
 
         environment_capture = finalize_sync("environment", collect_environment)
         if environment_capture is not None:
@@ -201,54 +172,37 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
         finished_at = utc_now()
         run_wall_time_seconds = (finished_at - manifest.created_at).total_seconds()
         facts = finalize_sync("request_facts", lambda: load_request_facts(context.trace_path))
-        vllm_metrics = finalize_sync("vllm_aggregation", lambda: aggregate_vllm_metrics(vllm_start, vllm_end))
-        summary = None
-        if facts is not None and vllm_metrics is not None:
-            lifecycle_payload = {
-                "status": "failed" if run_exception or finalization_errors else "completed",
-                "error": _exception_text(run_exception),
-                "finalization_errors": list(finalization_errors),
-                "proxy_close": asdict(close_result) if close_result else None,
-            }
-            summary = finalize_sync(
-                "summary_build",
-                lambda: build_run_summary(
-                    run_id,
-                    aggregate_task_results(results),
-                    aggregate_request_metrics(facts),
-                    (
-                        aggregate_router_window(router_start, router_end)
-                        if config.router.enabled and router_start is not None and router_end is not None
-                        else None
-                    ),
-                    vllm_metrics,
-                    {
-                        "available": correctness_capture.available if correctness_capture else False,
-                        "reason": correctness_capture.reason if correctness_capture else "collection failed",
-                        "metadata": {},
-                    },
-                    evaluate_captures(captures),
-                    lifecycle_payload,
-                    run_wall_time_seconds,
-                ).to_dict(),
-            )
-        if summary is not None:
-            if cli_metadata:
-                summary["cli"] = cli_metadata
-            finalize_sync("summary_write", lambda: atomic_write_json(output_dir / "summary.json", summary))
-
-        status = "failed" if run_exception or finalization_errors else "completed"
-        for attempt in range(2):
+        if facts is not None:
             try:
-                evidence = tuple(_capture_dict(capture) for capture in captures)
-                finalized_manifest = finalize_run_manifest(manifest, evidence, status=status, finished_at=finished_at)
-                atomic_write_json(output_dir / "manifest.json", finalized_manifest.to_dict())
-            except BaseException as exc:
-                _record_finalization_error(finalization_errors, captures, "manifest_finalize", exc)
-                status = "failed"
-                if attempt == 0:
-                    continue
-            break
+                analysis_artifacts = write_analysis_artifacts([output_dir], output_dir, plots=False)
+            except Exception as exc:
+                captures.append(
+                    EvidenceCapture("session_agent_analysis", None, False, f"{type(exc).__name__}: {exc}", {})
+                )
+            else:
+                captures.extend(
+                    EvidenceCapture(source, path, True, None, {}) for source, path in analysis_artifacts.items()
+                )
+        finalization = RunFinalizer(
+            FinalizationContext(
+                run_id=run_id,
+                output_dir=output_dir,
+                manifest=manifest,
+                results=results,
+                facts=facts,
+                vllm_start=vllm_start,
+                vllm_end=vllm_end,
+                captures=captures,
+                correctness=correctness_capture,
+                close_result=close_result,
+                run_exception=run_exception,
+                prior_finalization_errors=finalization_errors,
+                run_wall_time_seconds=run_wall_time_seconds,
+                finished_at=finished_at,
+                cli_metadata=cli_metadata,
+            )
+        ).finalize()
+        finalization_errors.extend(finalization.finalization_errors)
 
     if run_exception is not None:
         if finalization_errors:
@@ -274,15 +228,23 @@ async def _run_tasks(
 
     progress = tqdm(total=len(context.tasks), desc="benchmark", unit="task")
 
-    async def bounded(task: Task) -> None:
+    async def bounded(task: Task, task_position: int) -> None:
         async with semaphore:
             try:
-                await _run_single_task(context, task, api_base_url, cache, results, owner)
+                await _run_single_task(
+                    context,
+                    task,
+                    api_base_url,
+                    cache,
+                    task_position,
+                    results,
+                    owner,
+                )
             finally:
                 progress.update(1)
                 progress.set_postfix(last=task.instance_id)
 
-    tasks = [asyncio.create_task(bounded(task)) for task in context.tasks]
+    tasks = [asyncio.create_task(bounded(task, position)) for position, task in enumerate(context.tasks)]
     try:
         await asyncio.gather(*tasks)
     except BaseException:
@@ -301,6 +263,7 @@ async def _run_single_task(
     task: Task,
     api_base_url: str,
     cache: Path,
+    task_position: int,
     results: list[AgentRunResult] | None = None,
     owner: WorkspaceProcessOwner | None = None,
 ) -> AgentRunResult:
@@ -310,23 +273,15 @@ async def _run_single_task(
     workspace = _task_path(context.output_dir / "workspaces", task.instance_id)
     output_dir.mkdir(parents=True, exist_ok=True)
     session_id = str(uuid.uuid4())
-    registration = None
-    cleanup = None
-    registered = False
     started = time.monotonic()
-    result = _failed_result(task, session_id, config.agent.type, config.agent.profile, TerminationReason.HARNESS_ERROR)
+    started_at = utc_now().isoformat()
+    result = _failed_result(
+        task, session_id, config.agent.type, config.agent.profile, TerminationReason.HARNESS_ERROR, started_at
+    )
     pending_error: BaseException | None = None
     error: dict[str, str] | None = None
     try:
         await asyncio.to_thread(prepare_workspace, task, cache, workspace, owner)
-        if config.router.enabled:
-            assert config.router.base_url is not None
-            registration = await register_session(
-                config.router.base_url, session_id, config.router.control_timeout_seconds
-            )
-            if not registration.success:
-                raise RuntimeError(f"Router session registration failed: {registration.error}")
-            registered = True
         result = await run_agent(
             AgentRunRequest(
                 config.agent.type,
@@ -346,36 +301,26 @@ async def _run_single_task(
             )
         )
     except asyncio.CancelledError as exc:
-        result = _failed_result(task, session_id, config.agent.type, config.agent.profile, TerminationReason.CANCELLED)
+        result = _failed_result(
+            task, session_id, config.agent.type, config.agent.profile, TerminationReason.CANCELLED, started_at
+        )
         pending_error = exc
     except Exception as exc:
         result = _failed_result(
-            task, session_id, config.agent.type, config.agent.profile, TerminationReason.HARNESS_ERROR
+            task, session_id, config.agent.type, config.agent.profile, TerminationReason.HARNESS_ERROR, started_at
         )
         pending_error = RuntimeError(f"Task {task.instance_id} failed in benchmark harness")
         error = _exception_evidence(exc)
     finally:
         result.duration_seconds = result.duration_seconds or time.monotonic() - started
-        if registered:
-            assert config.router.base_url is not None
-            try:
-                cleanup = await cleanup_session(
-                    config.router.base_url, session_id, config.router.control_timeout_seconds
-                )
-            except Exception as exc:
-                from .session_registration import SessionRegistrationResult
-
-                cleanup = SessionRegistrationResult(
-                    "cleanup", session_id, False, None, time.monotonic() - started, f"{type(exc).__name__}: {exc}"
-                )
-            if not cleanup.success:
-                cleanup_error = RuntimeError(cleanup.error or "Router session cleanup failed")
-                error = _exception_evidence(cleanup_error)
-                if pending_error is None:
-                    pending_error = RuntimeError(f"Task {task.instance_id} Router cleanup failed")
+        if not result.finished_at:
+            result.finished_at = utc_now().isoformat()
+        if not result.started_at:
+            result.started_at = started_at
         topology = derive_session_topology(load_request_facts(context.trace_path, session_id=session_id), session_id)
         atomic_write_json(
-            output_dir / "result.json", build_task_result(result, registration, cleanup, topology, error).to_dict()
+            output_dir / "result.json",
+            build_task_result(result, topology, error, task_position=task_position).to_dict(),
         )
         if results is not None:
             results.append(result)
@@ -397,7 +342,12 @@ def _task_path(root: Path, instance_id: str) -> Path:
 
 
 def _failed_result(
-    task: Task, session_id: str, agent_type: str, profile: str, reason: TerminationReason
+    task: Task,
+    session_id: str,
+    agent_type: str,
+    profile: str,
+    reason: TerminationReason,
+    started_at: str = "",
 ) -> AgentRunResult:
     return AgentRunResult(
         outcome=AgentRunOutcome.FAILED,
@@ -406,6 +356,7 @@ def _failed_result(
         instance_id=task.instance_id,
         agent_type=agent_type,
         profile_name=profile,
+        started_at=started_at,
     )
 
 
@@ -414,10 +365,6 @@ def _exception_evidence(exc: BaseException) -> dict[str, str]:
     if len(message) > 1000:
         message = message[:982] + "...<truncated>"
     return {"type": type(exc).__name__, "message": message}
-
-
-def _exception_text(exc: BaseException | None) -> str | None:
-    return f"{type(exc).__name__}: {exc}" if exc is not None else None
 
 
 def _record_finalization_error(
@@ -450,17 +397,6 @@ def _capture_text(capture: EvidenceCapture) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _router_events(capture: EvidenceCapture) -> list[dict[str, object]]:
-    payload = capture.metadata.get("raw")
-    if isinstance(payload, list):
-        return [event for event in payload if isinstance(event, dict)]
-    if isinstance(payload, dict):
-        events = payload.get("events")
-        if isinstance(events, list):
-            return [event for event in events if isinstance(event, dict)]
-    return []
-
-
 def _trace_capture(path: Path, close_result) -> EvidenceCapture:
     if close_result is None or close_result.trace_health is None:
         return EvidenceCapture("request_trace", path if path.exists() else None, False, "trace health unavailable", {})
@@ -470,46 +406,9 @@ def _trace_capture(path: Path, close_result) -> EvidenceCapture:
     return EvidenceCapture("request_trace", path if path.exists() else None, available, reason, health)
 
 
-def _capture_dict(capture: EvidenceCapture) -> dict:
-    return {
-        "source": capture.source,
-        "path": str(capture.path) if capture.path is not None else None,
-        "available": capture.available,
-        "reason": capture.reason,
-        "metadata": {},
-        "applicable": capture.applicable,
-    }
-
-
-async def _check_executable_version(executable: str, version_flag: str, *, label: str) -> None:
-    resolved = shutil.which(executable)
-    if resolved is None:
-        raise RuntimeError(f"{label} executable is not available: {executable}")
-    try:
-        version = await asyncio.to_thread(
-            subprocess.run,
-            [resolved, version_flag],
-            capture_output=True,
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError(f"{label} executable version check failed: {executable}") from exc
-    if version.returncode != 0:
-        detail = version.stderr.decode(errors="replace").strip() or version.stdout.decode(errors="replace").strip()
-        message = f"{label} executable version check failed: {executable}"
-        raise RuntimeError(f"{message}\n{detail}" if detail else message)
-
-
 async def check_preflight(config: AgentBenchConfig) -> None:
-    await _check_executable_version("tmux", "-V", label="tmux")
-    await _check_executable_version(str(config.agent.executable), "--version", label="Agent")
+    await check_agent_preflight(config.agent.type, config.agent.executable)
     async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
         response = await client.get(f"{config.backend.base_url.rstrip('/')}/v1/models")
         if response.status_code != 200:
             raise RuntimeError(f"Backend {config.backend.base_url} is not healthy")
-        if config.router.enabled:
-            assert config.router.base_url is not None
-            response = await client.get(f"{config.router.base_url.rstrip('/')}/health")
-            if response.status_code != 200:
-                raise RuntimeError(f"Router {config.router.base_url} is not healthy")

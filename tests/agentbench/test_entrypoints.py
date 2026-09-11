@@ -22,8 +22,10 @@ def test_only_explicit_agentinfer_benchmark_is_intercepted() -> None:
 def test_delegated_argv_normalizes_implicit_and_explicit_commands() -> None:
     implicit, metadata = _normalize_delegated_argv(["vllm", "bench", "serve", "--agentinfer", "--config", "c"])
     explicit, _ = _normalize_delegated_argv(["vllm", "bench", "serve", "--agentinfer", "compare"])
+    replay, _ = _normalize_delegated_argv(["vllm", "bench", "serve", "--agentinfer", "replay", "--config", "r"])
     assert implicit == ["run", "--config", "c"]
     assert explicit == ["compare"]
+    assert replay == ["replay", "--config", "r"]
     assert metadata["entrypoint"] == "vllm bench serve --agentinfer"
 
 

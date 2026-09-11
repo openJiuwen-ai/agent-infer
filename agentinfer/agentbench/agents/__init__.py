@@ -7,14 +7,21 @@ Provider dispatch and execution remain in their runtime packages; callers use
 these exports to exchange requests, results, and terminal outcome values.
 """
 
-from .contracts import AgentRunRequest, AgentRunResult
+from .contracts import AgentRunOutcome, AgentRunRequest, AgentRunResult, TerminationReason
 from .dispatch import run_agent
-from .outcomes import AgentRunOutcome, TerminationReason
+from .preflight import check_agent_preflight
+from .registry import RUNTIMES, get_runtime
+from .runtime import AgentProfile, AgentRuntime
 
 __all__ = [
+    "AgentProfile",
     "AgentRunOutcome",
     "AgentRunRequest",
     "AgentRunResult",
+    "AgentRuntime",
+    "RUNTIMES",
     "TerminationReason",
+    "check_agent_preflight",
+    "get_runtime",
     "run_agent",
 ]

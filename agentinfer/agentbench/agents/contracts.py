@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 
-"""Define shared requests and results exchanged with agent runtimes.
+"""Define shared requests, results, and outcome enums for agent runtimes.
 
 The runner and runtime boundary starts with ``AgentRunRequest`` and returns
 ``AgentRunResult``. Runtime dispatch and provider-specific execution are owned
@@ -9,10 +9,33 @@ by later modules rather than this contract layer.
 """
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 from ..benchkit.dataset import Task
-from .outcomes import AgentRunOutcome, TerminationReason
+
+
+class AgentRunOutcome(str, Enum):
+    """Classify execution for coarse task-level aggregation."""
+
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class TerminationReason(str, Enum):
+    """Diagnose why execution ended without normal completion."""
+
+    AGENT_STARTUP_FAILED = "agent_startup_failed"
+    AGENT_STARTUP_TIMEOUT = "agent_startup_timeout"
+    TIMEOUT = "timeout"
+    PLAN_EXIT_LOOP = "plan_exit_loop"
+    VALIDATION_ERROR_LOOP = "validation_error_loop"
+    CONFIRMATION_HANG = "confirmation_hang"
+    IDLE_AFTER_PATCH = "idle_after_patch"
+    PROMPT_SUBMISSION_FAILED = "prompt_submission_failed"
+    INTERRUPTED = "interrupted"
+    HARNESS_ERROR = "harness_error"
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)
@@ -44,6 +67,8 @@ class AgentRunResult:
     reason it stopped. Correctness is evaluated separately from this result.
     """
 
+    agent_type: str
+    profile_name: str
     outcome: AgentRunOutcome = AgentRunOutcome.FAILED
     termination_reason: TerminationReason | None = None
     started_at: str = ""
@@ -54,10 +79,9 @@ class AgentRunResult:
     transcript: str | None = None
     auto_plan_approvals: int = 0
     auto_yes_confirmations: int = 0
+    auto_generic_selections: int = 0
     prompt_submission_retries: int = 0
     instance_id: str = ""
-    agent_type: str = "claude"
-    profile_name: str = "single"
     patch_bytes: int = 0
     has_patch: bool = False
 
