@@ -7,6 +7,7 @@ a versioned section.
 
 ### Added
 
+- Added the AgentRouter native middleware patch for `agent_hint_affinity` / `agent_hint_token_offsets` under `agentinfer/agentrouter/patches` (apply onto upstream Router; do not vendor the full router tree).
 - Added mirrored Chinese and English documentation organized with the Diátaxis framework.
 
 ### Changed
