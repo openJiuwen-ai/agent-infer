@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 
+
 class FakeResponse:
     def __init__(self, *, payload=None, text: str = "") -> None:
         self._payload = payload

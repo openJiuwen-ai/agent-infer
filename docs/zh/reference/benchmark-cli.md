@@ -19,7 +19,7 @@ vllm bench serve --agentinfer prepare swebench --output-dir PATH
 | 参数 | 必需 | 说明 |
 | --- | --- | --- |
 | `dataset` | 是 | 数据集类型；当前仅支持 `swebench`。 |
-| `--output-dir PATH` | 是 | 写入索引、任务列表和清单的目录。相对路径以当前工作目录为基准。 |
+| `--output-dir PATH` | 否 | 写入索引、任务列表和清单的目录。相对路径以当前工作目录为基准。 |
 
 ## `run`
 
@@ -31,7 +31,7 @@ vllm bench serve --agentinfer run --config PATH [OVERRIDES]
 
 | 参数 | 类型或取值 | 映射字段 |
 | --- | --- | --- |
-| `--config PATH` | 文件路径，必需 | 配置文件 |
+| `--config PATH` | 文件路径，可选 | 配置文件 |
 | `--task-num INT` | `>= 1` | `experiment.task_num` |
 | `--result-dir PATH` | 目录路径 | `experiment.result_dir` |
 | `--max-concurrency INT` | `>= 1` | `experiment.max_concurrency` |
@@ -39,30 +39,28 @@ vllm bench serve --agentinfer run --config PATH [OVERRIDES]
 | `--dataset-name swebench_verified` | 固定值 | `dataset.name` |
 | `--index-path PATH` | 文件路径 | `dataset.index_path` |
 | `--selection-path PATH` | 文件路径 | `dataset.selection_path` |
-| `--agent-type claude` | 固定值 | `agent.type` |
-| `--agent-profile {single,plan-subagent}` | 枚举 | `agent.profile` |
+| `--agent-type {claude,jiuwenswarm,dsh}` | 枚举 | `agent.type` |
+| `--agent-profile PROFILE` | 枚举 | `agent.profile` |
 | `--agent-executable PATH` | 路径或命令名 | `agent.executable` |
 | `--base-url URL` | HTTP URL | `backend.base_url` |
 | `--model NAME` | 字符串 | `backend.model` |
-| `--endpoint /v1/messages` | 固定值 | `backend.endpoint` |
-| `--enabled` / `--no-enabled` | 布尔值 | `router.enabled` |
-| `--router-url URL` | HTTP URL | `router.base_url` |
+| `--endpoint PATH` | API 路径 | `backend.endpoint` |
 
 配置优先级为内置默认值、YAML、显式 CLI 覆盖。YAML 中的相对路径以 YAML 文件目录为基准；CLI 路径以当前
-工作目录为基准。未知 YAML 字段会被拒绝。启用 Router 时必须同时传入 `--enabled` 和 `--router-url`。
+工作目录为基准。未知 YAML 字段会被拒绝。Router 使用 `--base-url` 指向透明转发端点，`--metrics-url` 指向 vLLM 指标端点。
 
 ## `summarize`
 
 将一个或多个已完成运行的 `summary.json` 合并为 CSV。
 
 ```text
-vllm bench serve --agentinfer summarize RUN_DIR [RUN_DIR ...] [--output CSV]
+vllm bench serve --agentinfer summarize RUN_DIR [RUN_DIR ...] [--output-csv CSV]
 ```
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `RUN_DIR` | 无，至少一个 | 已完成的结果目录。 |
-| `--output CSV` | `combined-summary.csv` | 输出 CSV 路径。 |
+| `--output-csv CSV` | `combined-summary.csv` | 输出 CSV 路径。 |
 
 ## `compare`
 
@@ -80,3 +78,15 @@ vllm bench serve --agentinfer compare --baseline DIR [DIR ...] --candidate DIR [
 | `--json` | `false` | 输出机器可读 JSON，而非文本报告。 |
 
 运行步骤见[运行基准测试](../how-to/run-benchmark.md)，配置字段见[基准配置参考](benchmark-config.md)。
+
+## 其他参数与 Replay
+
+`run` 可省略 `--config`，此时使用模型默认值。`prepare --output-dir` 默认是 `data/swebench`。
+`run --metrics-url URL` 指定完整的 vLLM 指标端点。`summarize --output-figs-dir PATH` 输出分布图。
+
+```bash
+vllm bench serve --agentinfer replay --config agentinfer/agentbench/configs/replay_benchmark.yaml
+vllm bench serve --agentinfer replay --help
+```
+
+Replay 要求 `--config`，支持从配置模型派生的覆盖参数，详见[回放指南](../how-to/run-trace-replay.md)。

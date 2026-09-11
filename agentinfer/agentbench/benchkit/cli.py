@@ -13,6 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import UnionType
 
+from pydantic import BaseModel
+
+from ..replay.config import ReplayBenchConfig, load_replay_config
 from .config import AgentBenchConfig, load_config
 
 logger = logging.getLogger(__name__)
@@ -56,13 +59,15 @@ def _resolve_type(annotation: object) -> tuple[type, tuple[object, ...] | None]:
     raise ValueError(f"unsupported CLI override type: {annotation}")
 
 
-def _discover_overrides() -> tuple[_Override, ...]:
+def _discover_overrides(
+    schema: type[BaseModel] = AgentBenchConfig,
+) -> tuple[_Override, ...]:
     """Discover supported CLI overrides from the configuration schema."""
 
     overrides = []
     flags: set[str] = set()
     destinations: set[str] = set()
-    for section_name, section_info in AgentBenchConfig.model_fields.items():
+    for section_name, section_info in schema.model_fields.items():
         section_type = section_info.annotation
         if not isinstance(section_type, type) or not hasattr(section_type, "model_fields"):
             continue
@@ -94,6 +99,7 @@ def _discover_overrides() -> tuple[_Override, ...]:
 
 
 _OVERRIDES = _discover_overrides()
+_REPLAY_OVERRIDES = _discover_overrides(ReplayBenchConfig)
 
 
 def _resolve_cli_path(path: Path, *, allow_bare: bool = False) -> Path:
@@ -105,10 +111,13 @@ def _resolve_cli_path(path: Path, *, allow_bare: bool = False) -> Path:
     return expanded.resolve()
 
 
-def _register_run_args(parser: argparse.ArgumentParser) -> None:
-    """Register schema-derived overrides on the run parser."""
+def _register_schema_args(
+    parser: argparse.ArgumentParser,
+    overrides: tuple[_Override, ...],
+) -> None:
+    """Register schema-derived overrides on one command parser."""
 
-    for override in _OVERRIDES:
+    for override in overrides:
         kwargs: dict[str, object] = {"default": None, "help": override.help}
         if override.value_type is bool:
             kwargs["action"] = argparse.BooleanOptionalAction
@@ -119,11 +128,22 @@ def _register_run_args(parser: argparse.ArgumentParser) -> None:
         parser.add_argument(override.flag, dest=override.dest, **kwargs)
 
 
-def _apply_cli_overrides(args: argparse.Namespace, config: AgentBenchConfig) -> AgentBenchConfig:
-    """Apply explicit CLI values and revalidate the complete configuration."""
+def _register_run_args(parser: argparse.ArgumentParser) -> None:
+    """Register schema-derived overrides on the run parser."""
+
+    _register_schema_args(parser, _OVERRIDES)
+
+
+def _apply_schema_overrides(
+    args: argparse.Namespace,
+    config: BaseModel,
+    schema: type[BaseModel],
+    overrides: tuple[_Override, ...],
+) -> BaseModel:
+    """Apply explicit CLI values and revalidate one complete schema."""
 
     payload = config.model_dump(mode="python")
-    for override in _OVERRIDES:
+    for override in overrides:
         value = getattr(args, override.dest, None)
         if value is None:
             continue
@@ -133,14 +153,48 @@ def _apply_cli_overrides(args: argparse.Namespace, config: AgentBenchConfig) -> 
                 allow_bare=override.section == "agent" and override.field == "executable",
             )
         payload[override.section][override.field] = value
-    return AgentBenchConfig.model_validate(payload)
+    return schema.model_validate(payload)
 
 
-def _explicit_overrides(args: argparse.Namespace) -> dict[str, object]:
+def _apply_cli_overrides(args: argparse.Namespace, config: AgentBenchConfig) -> AgentBenchConfig:
+    """Apply explicit CLI values and revalidate the complete configuration."""
+
+    return typing.cast(
+        AgentBenchConfig,
+        _apply_schema_overrides(
+            args,
+            config,
+            AgentBenchConfig,
+            _OVERRIDES,
+        ),
+    )
+
+
+def _apply_replay_cli_overrides(
+    args: argparse.Namespace,
+    config: ReplayBenchConfig,
+) -> ReplayBenchConfig:
+    """Apply Replay CLI values and revalidate the complete configuration."""
+
+    return typing.cast(
+        ReplayBenchConfig,
+        _apply_schema_overrides(
+            args,
+            config,
+            ReplayBenchConfig,
+            _REPLAY_OVERRIDES,
+        ),
+    )
+
+
+def _explicit_schema_overrides(
+    args: argparse.Namespace,
+    overrides: tuple[_Override, ...],
+) -> dict[str, object]:
     """Serialize explicitly supplied overrides for run metadata."""
 
     values = {}
-    for override in _OVERRIDES:
+    for override in overrides:
         value = getattr(args, override.dest, None)
         if value is not None:
             values[override.dest] = str(value) if isinstance(value, Path) else value
@@ -155,15 +209,23 @@ def _parser() -> argparse.ArgumentParser:
 
     prepare = commands.add_parser("prepare", help="Prepare benchmark dataset inputs")
     prepare.add_argument("dataset", choices=["swebench"])
-    prepare.add_argument("--output-dir", type=Path, required=True)
+    prepare.add_argument("--output-dir", type=Path, default=Path("data/swebench"))
 
     run = commands.add_parser("run", help="Run one benchmark")
-    run.add_argument("--config", type=Path, required=True)
+    run.add_argument("--config", type=Path, default=None)
     _register_run_args(run)
+
+    replay = commands.add_parser(
+        "replay",
+        help="Execute a deterministic Trace Replay workload",
+    )
+    replay.add_argument("--config", type=Path, required=True)
+    _register_schema_args(replay, _REPLAY_OVERRIDES)
 
     summarize = commands.add_parser("summarize", help="Combine existing run summaries")
     summarize.add_argument("run_dirs", type=Path, nargs="+")
-    summarize.add_argument("--output", type=Path, default=Path("combined-summary.csv"))
+    summarize.add_argument("--output-csv", type=Path, default=Path("combined-summary.csv"))
+    summarize.add_argument("--output-figs-dir", type=Path)
 
     compare = commands.add_parser("compare", help="Compare finalized benchmark runs")
     compare.add_argument("--baseline", type=Path, nargs="+", required=True)
@@ -179,10 +241,17 @@ def main(argv: list[str] | None = None, *, cli_metadata: dict[str, object] | Non
     _configure_logging()
     args = _parser().parse_args(argv)
     metadata = dict(cli_metadata or {"entrypoint": "agentinfer-bench", "argv": argv or sys.argv[1:]})
-    if args.command == "run":
-        metadata["config_path"] = str(args.config)
-        metadata["overrides"] = _explicit_overrides(args)
-        asyncio.run(_run(args, metadata))
+    if args.command in {"replay", "run"}:
+        if args.config is not None:
+            metadata["config_path"] = str(args.config)
+        metadata["overrides"] = _explicit_schema_overrides(
+            args,
+            _REPLAY_OVERRIDES if args.command == "replay" else _OVERRIDES,
+        )
+        if args.command == "replay":
+            _replay(args, metadata)
+        else:
+            asyncio.run(_run(args, metadata))
     elif args.command == "summarize":
         _summarize(args)
     elif args.command == "compare":
@@ -202,14 +271,34 @@ async def _run(args: argparse.Namespace, cli_metadata: dict[str, object]) -> Non
     logger.info("Results: %s", run_dir)
 
 
+def _replay(args: argparse.Namespace, cli_metadata: dict[str, object]) -> None:
+    """Build and execute a Trace Replay workload."""
+
+    from ..replay.runner import run_replay
+
+    config = _apply_replay_cli_overrides(
+        args,
+        load_replay_config(args.config),
+    )
+    run_dir = run_replay(config, cli_metadata=cli_metadata)
+    logger.info("Replay result: %s", run_dir)
+
+
 def _summarize(args: argparse.Namespace) -> None:
     """Combine existing run summaries into one CSV export."""
 
     from .summarize import combine_summaries
 
-    output = args.output.resolve()
-    combine_summaries([run_dir.resolve() for run_dir in args.run_dirs], output=output)
+    output = args.output_csv.resolve()
+    figures_dir = args.output_figs_dir.resolve() if args.output_figs_dir is not None else None
+    combine_summaries(
+        [run_dir.resolve() for run_dir in args.run_dirs],
+        output=output,
+        figures_dir=figures_dir,
+    )
     logger.info("Combined summaries written to %s", output)
+    if figures_dir is not None:
+        logger.info("Distribution figures written to %s", figures_dir)
 
 
 def _compare(args: argparse.Namespace) -> None:

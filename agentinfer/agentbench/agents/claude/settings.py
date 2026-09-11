@@ -6,6 +6,7 @@
 import json
 import logging
 import os
+import shlex
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -28,10 +29,23 @@ def bootstrap_claude_state(config_dir: Path) -> None:
     )
 
 
-def build_claude_settings(api_base_url: str, model: str) -> dict[str, object]:
-    """Build the non-secret Claude settings.json payload for a benchmark run."""
+def build_claude_settings(
+    api_base_url: str,
+    model: str,
+    *,
+    workspace: str,
+) -> dict[str, object]:
+    """Build the non-secret Claude settings.json payload for a benchmark run.
 
-    return {
+    The returned payload wires Claude's native bubblewrap Bash sandbox
+    (hard-failing if unavailable) and a PreToolUse fence hook that confines
+    Write/Edit/MultiEdit/NotebookEdit to ``workspace``. PoC-verified: together
+    these block the relative/absolute/symlink Bash and file-write escape paths
+    under both ``acceptEdits`` and ``bypassPermissions`` profiles, and
+    ``bypassPermissions`` does not disable hooks.
+    """
+
+    settings: dict[str, object] = {
         "env": {
             "ANTHROPIC_BASE_URL": api_base_url,
             "CLAUDE_CODE_SUBAGENT_MODEL": model,
@@ -47,6 +61,28 @@ def build_claude_settings(api_base_url: str, model: str) -> dict[str, object]:
             "deny": ["WebSearch", "WebFetch"],
         },
     }
+    if not workspace:
+        raise ValueError("workspace is required for Claude isolation")
+    fence_path = Path(__file__).resolve().parent / "fence.py"
+    settings["sandbox"] = {
+        "enabled": True,
+        "failIfUnavailable": True,
+        "allowUnsandboxedCommands": False,
+    }
+    settings["hooks"] = {
+        "PreToolUse": [
+            {
+                "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": (f"ALLOWED_ROOT={shlex.quote(workspace)} python3 {shlex.quote(str(fence_path))}"),
+                    }
+                ],
+            }
+        ]
+    }
+    return settings
 
 
 def build_claude_env(

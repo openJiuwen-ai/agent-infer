@@ -12,7 +12,6 @@ import pytest
 from agentinfer.agentbench.benchkit.artifacts import build_run_manifest, build_run_summary, finalize_run_manifest
 from agentinfer.agentbench.benchkit.compare import compare, load_summary
 from agentinfer.agentbench.benchkit.metrics.request import LatencyStats, RequestMetrics
-from agentinfer.agentbench.benchkit.metrics.router import RouterMetrics
 from agentinfer.agentbench.benchkit.metrics.schema import SourceHealth
 from agentinfer.agentbench.benchkit.metrics.task import TaskMetrics
 from agentinfer.agentbench.benchkit.metrics.vllm import VllmMetrics
@@ -59,20 +58,23 @@ def write_run(
         None,
         None,
     )
-    router = RouterMetrics(router_events) if router_events is not None else None
-    health = SourceHealth(1, 0, 1 if router is None else 0, (), {})
+    health = SourceHealth(1, 0, 1, (), {})
     summary = build_run_summary(
         run_dir.name,
         task_metrics,
         request_metrics,
-        router,
         vllm,
         {"available": False, "reason": "artifact missing", "metadata": {}},
         health,
         {"status": "completed", "error": None, "proxy_close": None},
         duration,
     )
-    (run_dir / "summary.json").write_text(json.dumps(summary.to_dict()), encoding="utf-8")
+    summary_data = summary.to_dict()
+    if router_events is not None:
+        # Compare continues to accept historical artifacts with Router metrics,
+        # even though new AgentBench runs no longer produce them.
+        summary_data["router"] = {"applicable": True, "events": router_events}
+    (run_dir / "summary.json").write_text(json.dumps(summary_data), encoding="utf-8")
     manifest = build_run_manifest(run_dir.name, {})
     manifest = finalize_run_manifest(
         manifest,
@@ -122,6 +124,7 @@ def test_compare_falls_back_for_legacy_summary_metrics(tmp_path: Path) -> None:
     write_run(run_dir, duration=8, requests=2)
     summary_path = run_dir / "summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary.pop("execution")
     for field in (
         "run_wall_time_seconds",
         "request_throughput_per_second",
@@ -136,6 +139,7 @@ def test_compare_falls_back_for_legacy_summary_metrics(tmp_path: Path) -> None:
 
     assert loaded["run_wall_time_seconds"] == 8
     assert loaded["request_throughput_per_second"] == pytest.approx(2 / 8)
+    assert loaded["execution"] is None
 
 
 def test_compare_excludes_null_cache_creation_samples(tmp_path: Path) -> None:
@@ -236,6 +240,30 @@ def test_compare_includes_vllm_only_when_available(tmp_path: Path) -> None:
     write_run(tmp_path / "candidate", vllm_available=True)
     result = json.loads(compare(tmp_path / "baseline", tmp_path / "candidate", as_json=True))
     assert result["metrics"]["vllm_queue_time_mean_seconds"]["baseline"] == 0.4
+
+
+def test_compare_excludes_metrics_when_execution_is_unavailable(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    write_run(baseline)
+    write_run(candidate)
+    summary_path = baseline / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["execution"] = {
+        "available": False,
+        "reason": "planner_only",
+        "metadata": {},
+    }
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    result = json.loads(compare(baseline, candidate, as_json=True))
+
+    assert result["metrics"]["completed_tasks"]["baseline"] is None
+    assert result["metrics"]["completed_tasks"]["n_baseline"] == 0
+    assert result["metrics"]["completed_tasks"]["candidate"] == 1
+    assert result["metrics"]["run_wall_time_seconds"]["baseline"] == 10
+    assert result["metadata"]["baseline_execution"]["available"] is False
+    assert any("baseline execution metrics unavailable" in warning for warning in result["warnings"])
 
 
 def test_compare_treats_malformed_cold_evidence_as_unconfirmed(tmp_path: Path) -> None:
