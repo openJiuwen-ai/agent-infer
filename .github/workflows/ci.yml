@@ -12,6 +12,7 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   pre-commit:
@@ -29,6 +30,36 @@ jobs:
       - uses: pre-commit/action@v3.0.1
         with:
           extra_args: --all-files --hook-stage manual
+
+  agent-hint-middleware-patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for middleware patch changes
+        id: changed
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            patch:
+              - 'agentinfer/agentrouter/**'
+
+      - name: Verify patch applies on upstream Router pin
+        if: steps.changed.outputs.patch == 'true'
+        run: |
+          set -euo pipefail
+          PIN=d60711dc72ab8f073e33f9a3d93ee81b97274c26
+          PATCH="$GITHUB_WORKSPACE/agentinfer/agentrouter/patches/0001-agent-hint-native-middleware.patch"
+          test -s "$PATCH"
+          rg -q 'agent_hint_affinity' "$PATCH"
+          rg -q 'agent_hint_token_offsets' "$PATCH"
+          curl -fsSL "https://github.com/vllm-project/router/archive/${PIN}.tar.gz" | tar -xz -C /tmp
+          cd "/tmp/router-${PIN}"
+          git apply --check "$PATCH"
+          git apply "$PATCH"
+          test -f src/agent_hint_token_offsets.rs
+          test -f tests/test_agent_hint_routing.rs
+          rg -q 'agent_hint_affinity' src/middleware.rs
 
   dco:
     runs-on: ubuntu-latest

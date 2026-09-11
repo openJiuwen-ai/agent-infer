@@ -11,12 +11,13 @@ AgentInfer manages caches and schedules agent workflow requests in or in front o
 - Retains, pauses, and resumes agent programs with the embedded Progress-TTL controller.
 - Supports deployment as an in-engine scheduler or as a request router in front of serving engines.
 - Includes AgentBench for running and comparing reproducible agent workloads against vLLM deployments.
+- Provides a Router **native middleware patch** (not a vendored router tree) for `agent_hint_affinity` / `agent_hint_token_offsets`; see [`agentinfer/agentrouter`](agentinfer/agentrouter/README.md).
 
 ## Related Documentation
 
 [Documentation](docs/README.md) · [Quick start](docs/en/tutorial/01-quick-start.md) ·
 [vLLM integration](docs/en/how-to/integrate-vllm.md) · [Benchmark guide](docs/en/how-to/run-benchmark.md) ·
-[Changelog](CHANGELOG.md)
+[AgentRouter middleware patch](agentinfer/agentrouter/README.md) · [Changelog](CHANGELOG.md)
 
 ## Requirements
 
