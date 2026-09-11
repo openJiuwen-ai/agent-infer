@@ -228,7 +228,7 @@ def test_final_evidence_stops_claude_before_patch_flush(tmp_path: Path, monkeypa
     asyncio.run(
         runner._collect_final_evidence(
             request,
-            runner.AgentRunResult(),
+            runner.AgentRunResult(agent_type="claude", profile_name="single"),
             runner.TmuxTarget("agentinfer-task"),
             runner.TranscriptLoader(),
             tmp_path,

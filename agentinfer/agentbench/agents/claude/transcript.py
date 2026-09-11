@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, TypeAlias, cast
 
-from ..outcomes import TerminationReason
+from ..contracts import TerminationReason
 
 # JSON-compatible values accepted at the transcript file boundary.
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]

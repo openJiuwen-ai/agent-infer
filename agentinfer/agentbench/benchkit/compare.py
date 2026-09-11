@@ -49,6 +49,14 @@ _METRIC_SPECS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("ttft_p99_seconds", ("requests", "ttft_seconds", "p99")),
 )
 _VLLM_COMPONENTS = ("queue_time", "prefill_time", "decode_time", "inference_time")
+_EXECUTION_METRIC_ROOTS = {
+    "tasks",
+    "requests",
+    "vllm",
+    "request_throughput_per_second",
+    "input_token_throughput_per_second",
+    "output_token_throughput_per_second",
+}
 _SUMMARY_ADAPTER = TypeAdapter(RunSummary)
 _MANIFEST_ADAPTER = TypeAdapter(RunManifest)
 
@@ -109,6 +117,9 @@ def _as_dirs(runs: Path | str | list[Path] | list[str]) -> list[Path]:
 
 
 def _extract(summary: dict, keys: tuple[str, ...]) -> float | None:
+    execution = summary.get("execution")
+    if keys[0] in _EXECUTION_METRIC_ROOTS and isinstance(execution, dict) and execution.get("available") is False:
+        return None
     current: Any = summary
     for key in keys:
         if not isinstance(current, dict):
@@ -212,6 +223,17 @@ def compare(
         missing = [str(path) for path in directories if not cold_confirmed[path]]
         if missing:
             warnings.append(f"{label} cold start could not be confirmed for: {', '.join(missing)}")
+    for label, directories, summaries in (
+        ("baseline", base_dirs, base_summaries),
+        ("candidate", candidate_dirs, candidate_summaries),
+    ):
+        unavailable = [
+            str(path)
+            for path, summary in zip(directories, summaries, strict=True)
+            if isinstance(summary.get("execution"), dict) and summary["execution"].get("available") is False
+        ]
+        if unavailable:
+            warnings.append(f"{label} execution metrics unavailable for: {', '.join(unavailable)}")
     report = {
         "baseline": [str(path) for path in base_dirs],
         "candidate": [str(path) for path in candidate_dirs],
@@ -220,6 +242,8 @@ def compare(
         "metadata": {
             "baseline_router": base_summaries[0]["router"],
             "candidate_router": candidate_summaries[0]["router"],
+            "baseline_execution": base_summaries[0]["execution"],
+            "candidate_execution": candidate_summaries[0]["execution"],
             "confidence": confidence,
             "n_baseline": len(base_summaries),
             "n_candidate": len(candidate_summaries),

@@ -10,7 +10,8 @@ changes response bytes, buffers a streaming response, or imports scheduling poli
 ``AgentCacheIdentityMiddleware`` resolves framework metadata through the shared identity parser and serializes only
 the canonical result into vLLM's existing scalar ``vllm_xargs`` transport. OpenAI Chat accepts that field directly;
 Anthropic Messages carries it through its existing ``metadata`` field until a narrow conversion hook copies it into
-the internal Chat request. The Adapter does not own framework field semantics.
+the internal Chat request. Replay sampling metadata is also carried to the internal Chat request.
+The Adapter does not own framework field semantics.
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ _MAX_REQUEST_BODY_BYTES = 8 * 1024 * 1024
 _MAX_NON_STREAM_RESPONSE_BYTES = 8 * 1024 * 1024
 _MAX_STREAM_EVENT_BYTES = 1024 * 1024
 _ANTHROPIC_IDENTITY_METADATA_KEY = "_agentinfer_agentic_context"
+_ANTHROPIC_REPLAY_SAMPLING_METADATA_KEY = "_agentinfer_replay_sampling"
 _ANTHROPIC_BRIDGE_MARKER = "_agentinfer_anthropic_identity_bridge"
 
 AsgiMessage: TypeAlias = dict[str, object]
@@ -61,6 +63,34 @@ class _AnthropicBridgeResult(Protocol):
     """Internal vLLM Chat request surface produced by Anthropic conversion."""
 
     vllm_xargs: dict[str, object] | None
+    seed: int | None
+    min_tokens: int
+    ignore_eos: bool
+
+
+def _parse_anthropic_replay_sampling(metadata: object) -> tuple[int, int, bool] | None:
+    """Validate Replay-only sampling metadata before it overrides vLLM defaults."""
+
+    if not isinstance(metadata, Mapping) or _ANTHROPIC_REPLAY_SAMPLING_METADATA_KEY not in metadata:
+        return None
+    sampling = metadata[_ANTHROPIC_REPLAY_SAMPLING_METADATA_KEY]
+    if not isinstance(sampling, Mapping):
+        raise ValueError(f"{_ANTHROPIC_REPLAY_SAMPLING_METADATA_KEY} must be an object")
+
+    missing = {"seed", "min_tokens", "ignore_eos"} - sampling.keys()
+    if missing:
+        raise ValueError(f"{_ANTHROPIC_REPLAY_SAMPLING_METADATA_KEY} is missing fields: {', '.join(sorted(missing))}")
+
+    seed = sampling["seed"]
+    min_tokens = sampling["min_tokens"]
+    ignore_eos = sampling["ignore_eos"]
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ValueError(f"{_ANTHROPIC_REPLAY_SAMPLING_METADATA_KEY}.seed must be a non-negative integer")
+    if isinstance(min_tokens, bool) or not isinstance(min_tokens, int) or min_tokens < 0:
+        raise ValueError(f"{_ANTHROPIC_REPLAY_SAMPLING_METADATA_KEY}.min_tokens must be a non-negative integer")
+    if not isinstance(ignore_eos, bool):
+        raise ValueError(f"{_ANTHROPIC_REPLAY_SAMPLING_METADATA_KEY}.ignore_eos must be a boolean")
+    return seed, min_tokens, ignore_eos
 
 
 class ApiEndpoint(str, Enum):
@@ -245,6 +275,9 @@ def _install_anthropic_identity_bridge() -> None:
             xargs = dict(request.vllm_xargs or {})
             xargs["agentic_context"] = encoded_identity
             request.vllm_xargs = xargs
+        replay_sampling = _parse_anthropic_replay_sampling(metadata)
+        if replay_sampling is not None:
+            request.seed, request.min_tokens, request.ignore_eos = replay_sampling
         return request
 
     setattr(build_base_request, _ANTHROPIC_BRIDGE_MARKER, True)

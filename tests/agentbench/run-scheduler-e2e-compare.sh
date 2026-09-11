@@ -1,18 +1,16 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
-
 # Cold upstream async scheduler -> cold AgentInfer scheduler bridge -> compare.
 set -euo pipefail
 
 REPO=${REPO:?set REPO to the AgentInfer checkout}
 VENV=${VENV:?set VENV to the benchmark virtualenv}
 MODEL=${MODEL:?set MODEL to the model path}
-CLAUDE_BIN=${CLAUDE_BIN:-claude}
+AGENT_BIN=${AGENT_BIN:-${CLAUDE_BIN:-claude}}
 TASK_NUM=${TASK_NUM:-1}
 CONCURRENCY=${CONCURRENCY:-1}
 TENSOR_PARALLEL_SIZE=${TENSOR_PARALLEL_SIZE:-2}
 VLLM_EXTRA_ARGS=${VLLM_EXTRA_ARGS:-}
+VLLM_ENV_SCRIPT=${VLLM_ENV_SCRIPT:-}
 VLLM_PORT=${VLLM_PORT:-8000}
 VLLM_TMUX=${VLLM_TMUX:-agentinfer-scheduler-e2e-vllm}
 LOG_DIR=${LOG_DIR:-$REPO/benchkit-logs}
@@ -24,18 +22,23 @@ BASELINE_LOG=$LOG_DIR/scheduler-baseline-$TIMESTAMP.log
 CANDIDATE_LOG=$LOG_DIR/scheduler-candidate-$TIMESTAMP.log
 UPSTREAM_SCHEDULER=vllm.v1.core.sched.async_scheduler.AsyncScheduler
 AGENTCACHE_SCHEDULER=agentinfer.agentcache.core.scheduler.AgentCacheAsyncSchedulerBridge
-AGENTCACHE_MIDDLEWARE=agentinfer.agentcache.core.api_adapter.AgentCacheLifecycleMiddleware
+AGENTCACHE_IDENTITY_MIDDLEWARE=agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware
+AGENTCACHE_LIFECYCLE_MIDDLEWARE=agentinfer.agentcache.core.api_adapter.AgentCacheLifecycleMiddleware
 LIFECYCLE_SOCKET=${LIFECYCLE_SOCKET:-/tmp/agentinfer-vllm-lifecycle-$TIMESTAMP.sock}
 BACKEND_ID=${BACKEND_ID:-vllm-local}
 SCHEDULE_INTERVAL_SECONDS=${SCHEDULE_INTERVAL_SECONDS:-5}
 SESSION_STARTED=false
+VLLM_ENV_PREFIX=
+if [[ -n $VLLM_ENV_SCRIPT ]]; then
+  VLLM_ENV_PREFIX="source '$VLLM_ENV_SCRIPT' && "
+fi
 
 mkdir -p "$LOG_DIR"
 # shellcheck disable=SC1091
 source "$VENV/bin/activate"
 
 python - <<'PY'
-from agentinfer.agentcache.core.api_adapter import AgentCacheLifecycleMiddleware
+from agentinfer.agentcache.core.api_adapter import AgentCacheIdentityMiddleware, AgentCacheLifecycleMiddleware
 from agentinfer.agentcache.core.scheduler import AgentCacheAsyncSchedulerBridge
 PY
 
@@ -43,8 +46,8 @@ if tmux has-session -t "$VLLM_TMUX" 2>/dev/null; then
   printf 'BLOCKED: tmux session already exists: %s\n' "$VLLM_TMUX" >&2
   exit 2
 fi
-if [[ -e $LIFECYCLE_SOCKET ]]; then
-  printf 'BLOCKED: lifecycle socket path already exists: %s\n' "$LIFECYCLE_SOCKET" >&2
+if [[ -e $LIFECYCLE_SOCKET || -e ${LIFECYCLE_SOCKET}.dp0 ]]; then
+  printf 'BLOCKED: lifecycle socket path already exists: %s[.dp0]\n' "$LIFECYCLE_SOCKET" >&2
   exit 2
 fi
 
@@ -56,7 +59,7 @@ stop_vllm() {
 }
 cleanup() {
   stop_vllm
-  rm -f "$LIFECYCLE_SOCKET"
+  rm -f "$LIFECYCLE_SOCKET" "${LIFECYCLE_SOCKET}.dp0"
 }
 trap cleanup EXIT
 
@@ -72,7 +75,7 @@ wait_http() {
 
 start_baseline() {
   tmux new-session -d -s "$VLLM_TMUX" \
-    "source '$VENV/bin/activate' && vllm serve '$MODEL' --tensor-parallel-size '$TENSOR_PARALLEL_SIZE' --async-scheduling --scheduler-cls '$UPSTREAM_SCHEDULER' --enable-prefix-caching --enable-prompt-tokens-details --port '$VLLM_PORT' $VLLM_EXTRA_ARGS 2>&1 | tee '$BASELINE_LOG'"
+    "${VLLM_ENV_PREFIX}source '$VENV/bin/activate' && vllm serve '$MODEL' --tensor-parallel-size '$TENSOR_PARALLEL_SIZE' --async-scheduling --scheduler-cls '$UPSTREAM_SCHEDULER' --enable-prefix-caching --enable-prompt-tokens-details --port '$VLLM_PORT' $VLLM_EXTRA_ARGS 2>&1 | tee '$BASELINE_LOG'"
   SESSION_STARTED=true
   wait_http "http://127.0.0.1:$VLLM_PORT/v1/models" 180
 }
@@ -81,11 +84,11 @@ start_candidate() {
   local additional_config
   additional_config=$(printf '{"agentcache":{"backend_id":"%s","lifecycle_socket_path":"%s","controller_factory":"agentinfer.agentcache.core.factory.build_progress_ttl_controller","schedule_interval_seconds":%s,"progress_ttl":{"target_min_segment_rounds":9,"target_max_segment_rounds":14,"resume_capacity_ratio":0.9,"pause_capacity_ratio":0.95,"pause_capacity_lookahead_rounds":2,"privileged_lookahead_rounds":14,"privileged_max_context_tokens":262144,"paused_program_ttl_seconds":1800}}}' "$BACKEND_ID" "$LIFECYCLE_SOCKET" "$SCHEDULE_INTERVAL_SECONDS")
   tmux new-session -d -s "$VLLM_TMUX" \
-    "source '$VENV/bin/activate' && export AGENTCACHE_VLLM_LIFECYCLE_SOCKET='$LIFECYCLE_SOCKET' && vllm serve '$MODEL' --tensor-parallel-size '$TENSOR_PARALLEL_SIZE' --async-scheduling --scheduler-cls '$AGENTCACHE_SCHEDULER' --middleware '$AGENTCACHE_MIDDLEWARE' --additional-config '$additional_config' --enable-prefix-caching --enable-prompt-tokens-details --port '$VLLM_PORT' $VLLM_EXTRA_ARGS 2>&1 | tee '$CANDIDATE_LOG'"
+    "${VLLM_ENV_PREFIX}source '$VENV/bin/activate' && export AGENTCACHE_VLLM_LIFECYCLE_SOCKET='$LIFECYCLE_SOCKET' && vllm serve '$MODEL' --tensor-parallel-size '$TENSOR_PARALLEL_SIZE' --async-scheduling --scheduler-cls '$AGENTCACHE_SCHEDULER' --middleware '$AGENTCACHE_IDENTITY_MIDDLEWARE' --middleware '$AGENTCACHE_LIFECYCLE_MIDDLEWARE' --additional-config '$additional_config' --enable-prefix-caching --enable-prompt-tokens-details --port '$VLLM_PORT' $VLLM_EXTRA_ARGS 2>&1 | tee '$CANDIDATE_LOG'"
   SESSION_STARTED=true
   wait_http "http://127.0.0.1:$VLLM_PORT/v1/models" 180
-  [[ -S $LIFECYCLE_SOCKET ]] || {
-    printf 'BLOCKED: lifecycle socket was not created: %s\n' "$LIFECYCLE_SOCKET" >&2
+  [[ -S $LIFECYCLE_SOCKET || -S ${LIFECYCLE_SOCKET}.dp0 ]] || {
+    printf 'BLOCKED: lifecycle socket was not created: %s[.dp0]\n' "$LIFECYCLE_SOCKET" >&2
     exit 2
   }
 }
@@ -95,7 +98,7 @@ run_arm() {
   vllm bench serve --agentinfer run \
     --config "$CONFIG" \
     --base-url "http://127.0.0.1:$VLLM_PORT" \
-    --agent-executable "$CLAUDE_BIN" \
+    --agent-executable "$AGENT_BIN" \
     --task-num "$TASK_NUM" \
     --max-concurrency "$CONCURRENCY" \
     --result-dir "$result_dir"

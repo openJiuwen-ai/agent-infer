@@ -10,7 +10,6 @@ from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
 from ..metrics.request import RequestMetrics
-from ..metrics.router import RouterMetrics
 from ..metrics.schema import SourceHealth
 from ..metrics.task import TaskMetrics
 from ..metrics.vllm import VllmMetrics
@@ -38,6 +37,15 @@ class RouterSummary:
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class ExecutionSummary:
+    """Describe execution-metric availability, its reason, and supporting metadata."""
+
+    available: bool
+    reason: str | None
+    metadata: dict[str, object]
+
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class RunSummary:
     schema_version: Literal["1"]
     run_id: str
@@ -52,35 +60,55 @@ class RunSummary:
     request_throughput_per_second: float
     input_token_throughput_per_second: float
     output_token_throughput_per_second: float
+    execution: ExecutionSummary | None = None
     cli: dict[str, object] | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
 
 
+def _coerce_execution(
+    execution: ExecutionSummary | dict[str, object] | None,
+) -> ExecutionSummary:
+    """Normalize an execution summary and provide the default state."""
+
+    if execution is None:
+        return ExecutionSummary(
+            available=True,
+            reason=None,
+            metadata={},
+        )
+    if isinstance(execution, ExecutionSummary):
+        return execution
+    return ExecutionSummary(**execution)
+
+
 def build_run_summary(
     run_id: str,
     tasks: TaskMetrics,
     requests: RequestMetrics,
-    router: RouterMetrics | None,
     vllm: VllmMetrics,
     correctness: CorrectnessSummary | dict[str, object],
     health: SourceHealth,
     lifecycle: LifecycleSummary | dict[str, object],
     run_wall_time_seconds: float,
+    execution: ExecutionSummary | dict[str, object] | None = None,
 ) -> RunSummary:
     return RunSummary(
-        "1",
-        run_id,
-        tasks,
-        requests,
-        RouterSummary(router is not None, dict(router.events) if router else {}),
-        vllm,
-        correctness if isinstance(correctness, CorrectnessSummary) else CorrectnessSummary(**correctness),
-        health,
-        lifecycle if isinstance(lifecycle, LifecycleSummary) else LifecycleSummary(**lifecycle),
-        run_wall_time_seconds,
-        requests.requests / run_wall_time_seconds,
-        requests.input_tokens / run_wall_time_seconds,
-        requests.output_tokens / run_wall_time_seconds,
+        schema_version="1",
+        run_id=run_id,
+        tasks=tasks,
+        requests=requests,
+        # Retain the field for historical artifact and compare compatibility.
+        # Transparent Router use has no AgentBench-side metric collection.
+        router=RouterSummary(False, {}),
+        vllm=vllm,
+        correctness=(correctness if isinstance(correctness, CorrectnessSummary) else CorrectnessSummary(**correctness)),
+        source_health=health,
+        lifecycle=lifecycle if isinstance(lifecycle, LifecycleSummary) else LifecycleSummary(**lifecycle),
+        run_wall_time_seconds=run_wall_time_seconds,
+        request_throughput_per_second=requests.requests / run_wall_time_seconds,
+        input_token_throughput_per_second=requests.input_tokens / run_wall_time_seconds,
+        output_token_throughput_per_second=requests.output_tokens / run_wall_time_seconds,
+        execution=_coerce_execution(execution),
     )

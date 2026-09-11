@@ -6,13 +6,21 @@ build-backend = "setuptools.build_meta"
 name = "agentinfer"
 version = "0.1.0"
 requires-python = ">=3.10"
-dependencies = ["datasets", "fastapi", "httpx", "numpy", "prometheus-client", "PyYAML", "pydantic", "tqdm", "uvicorn"]
+dependencies = ["datasets", "fastapi", "httpx", "matplotlib", "numpy", "prometheus-client", "PyYAML", "pydantic>=2", "tqdm", "uvicorn", "websockets", "zstandard"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pytest-timeout>=2.3"]
+
+[tool.pytest.ini_options]
+addopts = ["--import-mode=importlib"]
+testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.setuptools.packages.find]
 include = ["agentinfer*"]
 
 [tool.setuptools.package-data]
-agentinfer = ["agentbench/configs/swebench_vllm.yaml"]
+agentinfer = ["agentbench/configs/*.yaml"]
 
 [project.scripts]
 vllm = "agentinfer.agentcache.entrypoints.cli.main:main"

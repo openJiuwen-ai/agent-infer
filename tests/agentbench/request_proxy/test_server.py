@@ -15,9 +15,11 @@ from agentinfer.agentbench.request_proxy.request_trace import RequestTraceWriter
 from agentinfer.agentbench.request_proxy.server import (
     RequestProxyLaunchConfig,
     RequestProxyServer,
+    _request_fact_identity,
     _serve_request_proxy,
 )
 from agentinfer.scheduling.headers import CLAUDE_AGENT_HEADER, CLAUDE_SESSION_HEADER
+from agentinfer.scheduling.identity import AgentIdentity, encode_agent_identity
 
 
 def _runner_fakes(
@@ -67,15 +69,26 @@ def _runner_fakes(
         "token",
         tmp_path / "out",
         tmp_path / "err",
+        "/v1/messages",
     )
     return config, instances
+
+
+def _body_with_identity(identity: AgentIdentity, *, agent_hint: dict[str, str] | None = None) -> bytes:
+    payload: dict[str, object] = {
+        "messages": [],
+        "vllm_xargs": {"agentic_context": encode_agent_identity(identity)},
+    }
+    if agent_hint is not None:
+        payload["agent_hint"] = agent_hint
+    return json.dumps(payload, separators=(",", ":")).encode()
 
 
 def test_upstream_client_disables_keepalive_reuse(tmp_path: Path):
     writer = RequestTraceWriter(tmp_path / "requests.jsonl")
 
     with patch("agentinfer.agentbench.request_proxy.server.httpx.AsyncClient", wraps=httpx.AsyncClient) as client:
-        server = RequestProxyServer("http://router", "run", writer, 10, "token")
+        server = RequestProxyServer("http://router", "run", writer, 10, "token", "/v1/messages")
 
     limits = client.call_args.kwargs["limits"]
     assert limits.max_connections == 100
@@ -139,7 +152,7 @@ def test_transparent_nonstream_body_protocol_headers_status_and_response(tmp_pat
             )
 
         writer = RequestTraceWriter(tmp_path / "requests.jsonl")
-        server = RequestProxyServer("http://router", "run", writer, 10, "token")
+        server = RequestProxyServer("http://router", "run", writer, 10, "token", "/v1/messages")
         server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
         await writer.start()
         body = b'{"model":"m","messages":[{"role":"user","content":"hello"}]}'
@@ -182,6 +195,204 @@ def test_transparent_nonstream_body_protocol_headers_status_and_response(tmp_pat
     asyncio.run(run())
 
 
+def test_openai_endpoint_forwards_original_body_and_records_root_identity(tmp_path: Path):
+    async def run():
+        seen = {}
+
+        def upstream(request: httpx.Request):
+            seen["url"] = str(request.url)
+            seen["body"] = request.content
+            return httpx.Response(
+                200,
+                json={"usage": {"prompt_tokens": 8, "completion_tokens": 3}},
+            )
+
+        writer = RequestTraceWriter(tmp_path / "requests.jsonl")
+        server = RequestProxyServer(
+            "http://router",
+            "run",
+            writer,
+            10,
+            "token",
+            endpoint="/v1/chat/completions",
+        )
+        server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        await writer.start()
+        body = _body_with_identity(
+            AgentIdentity(
+                program_id="root-1",
+                task_id="root-1",
+                session_id="root-1",
+                agent_id="lead",
+                blocks_parent=False,
+                expected_resume=True,
+                agent_role="lead",
+            ),
+            agent_hint={"session_id": "root-1", "parent_session_id": "root-1"},
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=server.app),
+            base_url="http://proxy",
+        ) as client:
+            response = await client.post("/v1/chat/completions", content=body)
+        await server.close()
+
+        assert response.status_code == 200
+        assert seen == {"url": "http://router/v1/chat/completions", "body": body}
+        row = json.loads((tmp_path / "requests.jsonl").read_text())
+        assert (row["session_id"], row["actor_id"], row["actor_role"]) == ("root-1", "lead", "lead")
+        assert (row["input_tokens"], row["output_tokens"]) == (8, 3)
+
+    asyncio.run(run())
+
+
+def test_openai_stream_records_child_identity_ttft_and_usage(tmp_path: Path):
+    async def run():
+        chunks = [
+            b'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n',
+            b'data: {"choices":[{"delta":{"content":"x"}}]}\n\n',
+            b'data: {"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":2,'
+            b'"prompt_tokens_details":{"cached_tokens":4}}}\n\n',
+            b"data: [DONE]\n\n",
+        ]
+
+        class ChunkStream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                for chunk in chunks:
+                    yield chunk
+
+        writer = RequestTraceWriter(tmp_path / "requests.jsonl")
+        server = RequestProxyServer(
+            "http://router",
+            "run",
+            writer,
+            10,
+            "token",
+            endpoint="/v1/chat/completions",
+        )
+        server.client = httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    stream=ChunkStream(),
+                )
+            )
+        )
+        await writer.start()
+        body = _body_with_identity(
+            AgentIdentity(
+                program_id="child-1",
+                task_id="root-1",
+                session_id="child-1",
+                agent_id="child-1",
+                parent_program_id="root-1",
+                blocks_parent=True,
+                expected_resume=False,
+                agent_role="subagent",
+            ),
+            agent_hint={"session_id": "child-1", "parent_session_id": "root-1"},
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=server.app),
+            base_url="http://proxy",
+        ) as client:
+            response = await client.post("/v1/chat/completions", content=body)
+        await server.close()
+
+        assert response.content == b"".join(chunks)
+        row = json.loads((tmp_path / "requests.jsonl").read_text())
+        assert (row["session_id"], row["actor_id"], row["actor_role"]) == (
+            "root-1",
+            "child-1",
+            "subagent",
+        )
+        assert (row["input_tokens"], row["output_tokens"], row["cached_tokens"]) == (7, 2, 4)
+        assert row["ttft_seconds"] is not None
+
+    asyncio.run(run())
+
+
+def test_request_fact_identity_prefers_canonical_nested_identity() -> None:
+    body = _body_with_identity(
+        AgentIdentity(
+            program_id="grandchild-1",
+            task_id="root-1",
+            session_id="grandchild-1",
+            agent_id="grandchild-1",
+            parent_program_id="child-1",
+            blocks_parent=True,
+            expected_resume=False,
+            agent_role="subagent",
+        ),
+        agent_hint={"session_id": "misleading-root", "parent_session_id": "misleading-root"},
+    )
+
+    identity = _request_fact_identity({}, body)
+
+    assert (identity.session_id, identity.actor_id, identity.actor_role) == (
+        "root-1",
+        "grandchild-1",
+        "subagent",
+    )
+
+
+def test_request_fact_identity_preserves_claude_header_semantics() -> None:
+    identity = _request_fact_identity(
+        {
+            CLAUDE_SESSION_HEADER: "root-1",
+            CLAUDE_AGENT_HEADER: "child-1",
+        },
+        b"{}",
+    )
+
+    assert (identity.session_id, identity.actor_id, identity.actor_role) == (
+        "root-1",
+        "child-1",
+        "subagent",
+    )
+
+
+def test_request_fact_identity_preserves_claude_resolved_role() -> None:
+    # Claude headers already resolve to a concrete lead role; the proxy must
+    # return it as-is without stateful reclassification.
+    identity = _request_fact_identity(
+        {"X-Claude-Code-Session-Id": "claude-root"},
+        b"{}",
+    )
+
+    assert (identity.session_id, identity.actor_id, identity.actor_role) == (
+        "claude-root",
+        "lead",
+        "lead",
+    )
+
+
+def test_request_fact_identity_uses_dsh_session_fallback() -> None:
+    identity = _request_fact_identity(
+        {"X-DeepSeek-Harness-Session-Id": "dsh-child-session"},
+        b"{}",
+    )
+
+    assert (identity.session_id, identity.actor_id, identity.actor_role) == (
+        "dsh-child-session",
+        "lead",
+        "lead",
+    )
+
+
+def test_malformed_canonical_identity_falls_back_to_header_identity() -> None:
+    body = b'{"messages":[],"vllm_xargs":{"agentic_context":"not-json"}}'
+
+    identity = _request_fact_identity({CLAUDE_SESSION_HEADER: "header-root"}, body)
+
+    assert (identity.session_id, identity.actor_id, identity.actor_role) == (
+        "header-root",
+        "lead",
+        "lead",
+    )
+
+
 def test_nonstream_compressed_response_preserves_raw_body_and_observes_usage(tmp_path: Path):
     async def run():
         raw_response = gzip.compress(b'{"content":[],"usage":{"input_tokens":4}}')
@@ -198,7 +409,7 @@ def test_nonstream_compressed_response_preserves_raw_body_and_observes_usage(tmp
             )
 
         writer = RequestTraceWriter(tmp_path / "requests.jsonl")
-        server = RequestProxyServer("http://router", "run", writer, 10, "token")
+        server = RequestProxyServer("http://router", "run", writer, 10, "token", "/v1/messages")
         server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
         await writer.start()
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://proxy") as client:
@@ -223,7 +434,7 @@ def test_invalid_compressed_payload_remains_transparent(tmp_path: Path):
                 yield raw_response
 
         writer = RequestTraceWriter(tmp_path / "requests.jsonl")
-        server = RequestProxyServer("http://router", "run", writer, 10, "token")
+        server = RequestProxyServer("http://router", "run", writer, 10, "token", "/v1/messages")
         server.client = httpx.AsyncClient(
             transport=httpx.MockTransport(
                 lambda _request: httpx.Response(
@@ -264,7 +475,7 @@ def test_ttft_waits_for_content_delta(tmp_path: Path, monkeypatch: pytest.Monkey
                     yield chunk
 
         writer = RequestTraceWriter(tmp_path / "requests.jsonl")
-        server = RequestProxyServer("http://router", "run", writer, 10, "token")
+        server = RequestProxyServer("http://router", "run", writer, 10, "token", "/v1/messages")
         server.client = httpx.AsyncClient(
             transport=httpx.MockTransport(
                 lambda _request: httpx.Response(
@@ -286,7 +497,7 @@ def test_ttft_waits_for_content_delta(tmp_path: Path, monkeypatch: pytest.Monkey
 def test_usage_null_does_not_change_upstream_response(tmp_path: Path):
     async def run():
         writer = RequestTraceWriter(tmp_path / "requests.jsonl")
-        server = RequestProxyServer("http://router", "run", writer, 10, "token")
+        server = RequestProxyServer("http://router", "run", writer, 10, "token", "/v1/messages")
         server.client = httpx.AsyncClient(
             transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={"usage": None}))
         )
@@ -323,7 +534,7 @@ def test_streaming_bytes_headers_status_and_sse_usage_are_preserved(tmp_path: Pa
             )
 
         writer = RequestTraceWriter(tmp_path / "requests.jsonl")
-        server = RequestProxyServer("http://router", "run", writer, 10, "token")
+        server = RequestProxyServer("http://router", "run", writer, 10, "token", "/v1/messages")
         server.client = httpx.AsyncClient(transport=httpx.MockTransport(stream))
         await writer.start()
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://proxy") as client:
@@ -359,7 +570,7 @@ def test_compressed_sse_preserves_raw_bytes_and_observes_metrics(tmp_path: Path)
                 yield encoded[17:]
 
         writer = RequestTraceWriter(tmp_path / "requests.jsonl")
-        server = RequestProxyServer("http://router", "run", writer, 10, "token")
+        server = RequestProxyServer("http://router", "run", writer, 10, "token", "/v1/messages")
         server.client = httpx.AsyncClient(
             transport=httpx.MockTransport(
                 lambda _request: httpx.Response(
@@ -402,14 +613,14 @@ def test_response_start_disconnect_releases_stream(tmp_path: Path):
                 upstream_closed = True
 
         writer = RequestTraceWriter(tmp_path / "requests.jsonl")
-        server = RequestProxyServer("http://router", "run", writer, 10, "token")
+        server = RequestProxyServer("http://router", "run", writer, 10, "token", "/v1/messages")
         server.client = httpx.AsyncClient(
             transport=httpx.MockTransport(
                 lambda _request: httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=RawStream())
             )
         )
         await writer.start()
-        response = await server.handle_messages(FakeRequest())
+        response = await server.handle_model_request(FakeRequest())
 
         async def receive():
             return {"type": "http.disconnect"}
@@ -431,7 +642,7 @@ def test_response_start_disconnect_releases_stream(tmp_path: Path):
 def test_trace_writer_failure_does_not_change_upstream_response(tmp_path: Path):
     async def run():
         writer = RequestTraceWriter(tmp_path)
-        server = RequestProxyServer("http://router", "run", writer, 10, "token")
+        server = RequestProxyServer("http://router", "run", writer, 10, "token", "/v1/messages")
         server.client = httpx.AsyncClient(
             transport=httpx.MockTransport(lambda _request: httpx.Response(200, content=b"ok"))
         )
@@ -457,12 +668,12 @@ def test_cancelled_upstream_send_releases_admission(tmp_path: Path):
 
     async def run():
         writer = RequestTraceWriter(tmp_path / "requests.jsonl")
-        server = RequestProxyServer("http://router", "run", writer, 10, "token")
+        server = RequestProxyServer("http://router", "run", writer, 10, "token", "/v1/messages")
         await writer.start()
         server.client.send = AsyncMock(side_effect=asyncio.CancelledError())
 
         with pytest.raises(asyncio.CancelledError):
-            await server.handle_messages(FakeRequest())
+            await server.handle_model_request(FakeRequest())
 
         assert server._active_requests == 0
         await server.close()
@@ -476,7 +687,7 @@ def test_upstream_send_failure_records_request_fact(tmp_path: Path):
             raise httpx.ConnectError("connect failed")
 
         writer = RequestTraceWriter(tmp_path / "requests.jsonl")
-        server = RequestProxyServer("http://router", "run", writer, 10, "token")
+        server = RequestProxyServer("http://router", "run", writer, 10, "token", "/v1/messages")
         server.client = httpx.AsyncClient(transport=httpx.MockTransport(fail))
         await writer.start()
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://proxy") as client:
@@ -504,7 +715,9 @@ def test_authenticated_shutdown_waits_for_inflight_and_stops_admission(tmp_path:
             return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=BlockedStream())
 
         writer = RequestTraceWriter(tmp_path / "requests.jsonl")
-        server = RequestProxyServer("http://router", "run", writer, 10, "token", shutdown_timeout_seconds=1)
+        server = RequestProxyServer(
+            "http://router", "run", writer, 10, "token", "/v1/messages", shutdown_timeout_seconds=1
+        )
         server.client = httpx.AsyncClient(transport=httpx.MockTransport(stream))
         await writer.start()
         transport = httpx.ASGITransport(app=server.app)
@@ -543,7 +756,9 @@ def test_stream_read_failure_records_error_and_releases_shutdown(tmp_path: Path)
             return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=FailingStream())
 
         writer = RequestTraceWriter(tmp_path / "requests.jsonl")
-        server = RequestProxyServer("http://router", "run", writer, 10, "token", shutdown_timeout_seconds=1)
+        server = RequestProxyServer(
+            "http://router", "run", writer, 10, "token", "/v1/messages", shutdown_timeout_seconds=1
+        )
         server.client = httpx.AsyncClient(transport=httpx.MockTransport(stream))
         await writer.start()
         transport = httpx.ASGITransport(app=server.app)
