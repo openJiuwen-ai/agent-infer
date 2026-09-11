@@ -529,7 +529,7 @@ def _chown_tree_for_user(path: Path, run_as_user: str) -> None:
                 for entry in entries:
                     _apply(Path(entry.path))
 
-    if path.lexists():
+    if path.exists():
         _apply(path)
 
 
