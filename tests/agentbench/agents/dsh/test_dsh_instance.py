@@ -5,12 +5,23 @@
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from agentinfer.agentbench.agents.dsh.instance import DshInstance
+
+
+@pytest.fixture
+def node_executable() -> str:
+    """Resolve Node for bridge execution, leaving Python-only checks runnable."""
+    executable = shutil.which("node")
+    if executable is None:
+        pytest.skip("DSH bridge execution requires Node.js; install Node.js 20+ and add node to PATH")
+    return executable
 
 
 def _instance(tmp_path: Path) -> DshInstance:
@@ -101,7 +112,7 @@ def test_bridge_mounts_lineage_for_every_profile(tmp_path: Path) -> None:
         assert f"autoApprove: {str(enforce_plan_mode).lower()}" in patch
 
 
-def test_bridge_injects_concurrent_session_lineage(tmp_path: Path) -> None:
+def test_bridge_injects_concurrent_session_lineage(tmp_path: Path, node_executable: str) -> None:
     instance = DshInstance(
         artifact_dir=tmp_path / "artifacts",
         api_base_url="http://127.0.0.1:18180",
@@ -157,7 +168,7 @@ console.log(JSON.stringify(sent.map((body) => JSON.parse(body.vllm_xargs.agentic
     )
 
     result = subprocess.run(
-        ["node", str(harness), instance.bridge_path.as_uri()],
+        [node_executable, str(harness), instance.bridge_path.as_uri()],
         capture_output=True,
         check=True,
         text=True,
@@ -186,7 +197,7 @@ console.log(JSON.stringify(sent.map((body) => JSON.parse(body.vllm_xargs.agentic
     }
 
 
-def test_bridge_preserves_request_body_and_fetch_wrapper_stack(tmp_path: Path) -> None:
+def test_bridge_preserves_request_body_and_fetch_wrapper_stack(tmp_path: Path, node_executable: str) -> None:
     instance = DshInstance(
         artifact_dir=tmp_path / "artifacts",
         api_base_url="http://127.0.0.1:18180",
@@ -250,7 +261,7 @@ console.log(JSON.stringify({
     )
 
     result = subprocess.run(
-        ["node", str(harness), instance.bridge_path.as_uri()],
+        [node_executable, str(harness), instance.bridge_path.as_uri()],
         capture_output=True,
         check=True,
         text=True,
@@ -282,7 +293,7 @@ def test_environment_isolates_home_and_forces_autonomy(tmp_path: Path, monkeypat
     assert env["AGENTBENCH_ROOT_SESSION_ID"] == "root-session"
 
 
-def test_bridge_fails_closed_without_plan_enforcement_services(tmp_path: Path) -> None:
+def test_bridge_fails_closed_without_plan_enforcement_services(tmp_path: Path, node_executable: str) -> None:
     instance = DshInstance(
         artifact_dir=tmp_path / "artifacts",
         api_base_url="http://127.0.0.1:18180",
@@ -335,7 +346,7 @@ console.log(JSON.stringify(outcomes))
     )
 
     result = subprocess.run(
-        ["node", str(harness), instance.bridge_path.as_uri()],
+        [node_executable, str(harness), instance.bridge_path.as_uri()],
         capture_output=True,
         check=True,
         text=True,
@@ -354,7 +365,7 @@ console.log(JSON.stringify(outcomes))
     ]
 
 
-def test_bridge_skips_plan_enforcement_without_the_flag(tmp_path: Path) -> None:
+def test_bridge_skips_plan_enforcement_without_the_flag(tmp_path: Path, node_executable: str) -> None:
     instance = _instance(tmp_path)
     instance.bootstrap()
     harness = tmp_path / "harness.mjs"
@@ -379,7 +390,7 @@ console.log('ok')
     )
 
     result = subprocess.run(
-        ["node", str(harness), instance.bridge_path.as_uri()],
+        [node_executable, str(harness), instance.bridge_path.as_uri()],
         capture_output=True,
         check=True,
         text=True,

@@ -27,6 +27,12 @@ python -m pytest -q -m "not benchmark_smoke" tests/agentbench
 python -m pytest -q tests/agentbench/test_benchmark_smoke.py
 ```
 
+Four JavaScript bridge checks in `agents/dsh/test_dsh_instance.py` additionally
+require Node.js on `PATH` (Node.js 20+ recommended). If `node` is missing, only
+those checks are skipped with an explicit reason; the Python-only DSH checks
+still run. GitHub CPU CI installs Node.js 20 and executes the bridge assertions.
+Other CI environments should install Node.js before pytest for the same coverage.
+
 `run-baseline-smoke.sh` validates one externally started vLLM baseline.
 `run-scheduler-e2e-compare.sh` cold-compares the upstream async scheduler and
 AgentInfer scheduler bridge. `run-router-e2e-compare.sh` exercises the candidate
