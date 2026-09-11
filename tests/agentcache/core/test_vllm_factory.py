@@ -30,6 +30,7 @@ def test_factory_applies_nested_progress_ttl_settings() -> None:
         backend(),
         {
             "progress_ttl": {
+                "target_min_segment_rounds": 9,
                 "target_max_segment_rounds": 14,
                 "ttl_min_seconds": 5,
                 "ttl_max_cache_miss_impact_ratio": 0.75,
@@ -38,19 +39,17 @@ def test_factory_applies_nested_progress_ttl_settings() -> None:
                 "resume_capacity_ratio": 0.9,
                 "resume_reclaim_acting_programs": False,
                 "pause_capacity_ratio": 0.95,
+                "pause_capacity_lookahead_rounds": 2,
+                "privileged_lookahead_rounds": 14,
                 "privileged_max_context_tokens": 262144,
-                "privileged_ttl_seconds": 7,
                 "use_fixed_input_token_growth": True,
                 "fixed_input_token_growth_per_round": 768,
-                "enable_batch_gain_admission": True,
-                "decode_step_fixed_seconds": 0.02,
-                "decode_step_seconds_per_request": 0.001,
-                "decode_step_seconds_per_context_token": 3e-7,
                 "paused_program_ttl_seconds": 600,
             }
         },
     )
 
+    assert controller.strategy.config.target_min_segment_rounds == 9
     assert controller.strategy.config.target_max_segment_rounds == 14
     assert controller.strategy.config.ttl_min_seconds == 5
     assert controller.strategy.config.ttl_max_cache_miss_impact_ratio == 0.75
@@ -59,25 +58,23 @@ def test_factory_applies_nested_progress_ttl_settings() -> None:
     assert controller.strategy.config.resume_capacity_ratio == 0.9
     assert controller.strategy.config.resume_reclaim_acting_programs is False
     assert controller.strategy.config.pause_capacity_ratio == 0.95
+    assert controller.strategy.config.pause_capacity_lookahead_rounds == 2
+    assert controller.strategy.config.privileged_lookahead_rounds == 14
     assert controller.strategy.config.privileged_max_context_tokens == 262144
-    assert controller.strategy.config.privileged_ttl_seconds == 7
     assert controller.strategy.config.use_fixed_input_token_growth is True
     assert controller.strategy.config.fixed_input_token_growth_per_round == 768
-    assert controller.strategy.config.enable_batch_gain_admission is True
-    assert controller.strategy.config.decode_step_fixed_seconds == 0.02
-    assert controller.strategy.config.decode_step_seconds_per_request == 0.001
-    assert controller.strategy.config.decode_step_seconds_per_context_token == 3e-7
     assert controller.strategy.config.paused_program_ttl_seconds == 600
 
 
 def test_factory_uses_two_l20_reference_defaults_without_policy_overrides() -> None:
     controller = build_progress_ttl_controller(backend(), {})
 
+    assert controller.strategy.config.target_min_segment_rounds == 9
     assert controller.strategy.config.target_max_segment_rounds == 14
-    assert controller.strategy.config.ttl_min_seconds == 0.05
-    assert controller.strategy.config.ttl_max_seconds == 32.0
-    assert controller.strategy.config.resume_capacity_ratio == 1.0
+    assert controller.strategy.config.resume_capacity_ratio == 0.95
     assert controller.strategy.config.pause_capacity_ratio == 1.0
+    assert controller.strategy.config.pause_capacity_lookahead_rounds == 2
+    assert controller.strategy.config.privileged_lookahead_rounds == 14
     assert controller.strategy.config.mode is ProgressTTLMode.ON
     assert controller.strategy.config.ttl_max_cache_miss_impact_ratio == 1.0
     assert controller.strategy.config.auto_enable_utility_seconds == 20.0
@@ -134,28 +131,19 @@ def test_factory_rejects_non_boolean_switches(setting: str) -> None:
 
 @pytest.mark.parametrize(
     "setting",
-    ("decode_buffer_tokens",),
+    (
+        "resume_fairness_weight",
+        "resume_resource_penalty_weight",
+        "capacity_safety_margin_tokens",
+        "decode_buffer_tokens",
+    ),
 )
 def test_factory_rejects_fixed_policy_settings(setting: str) -> None:
     with pytest.raises(ValueError, match="fixed implementation values"):
         build_progress_ttl_controller(backend(), {"progress_ttl": {setting: 1}})
 
 
-@pytest.mark.parametrize(
-    "setting",
-    (
-        "ttl_impact_multiplier",
-        "uncached_ratio_default",
-        "target_min_segment_rounds",
-        "privileged_lookahead_rounds",
-        "resume_fairness_weight",
-        "resume_resource_penalty_weight",
-        "capacity_safety_margin_tokens",
-        "pause_capacity_lookahead_rounds",
-        "force_resume_timeout_seconds",
-        "ttl_prefill_seconds_per_1k_uncached_tokens",
-    ),
-)
+@pytest.mark.parametrize("setting", ("ttl_impact_multiplier", "uncached_ratio_default"))
 def test_factory_rejects_removed_policy_settings(setting: str) -> None:
     with pytest.raises(ValueError, match="were removed"):
         build_progress_ttl_controller(backend(), {"progress_ttl": {setting: 1}})
@@ -180,3 +168,17 @@ def test_factory_rejects_unknown_policy_settings(settings: dict[str, int], messa
 def test_factory_rejects_non_finite_numeric_settings(invalid_value: int | float) -> None:
     with pytest.raises(ValueError, match="must be finite"):
         build_progress_ttl_controller(backend(), {"progress_ttl": {"ttl_min_seconds": invalid_value}})
+
+
+def test_benchmark_launcher_policy_is_supported_by_destination_factory() -> None:
+    """The migrated benchmark launcher must start with the retained scheduler."""
+    import json
+    import re
+    from pathlib import Path
+
+    launcher = Path(__file__).resolve().parents[2] / "agentbench" / "run-scheduler-e2e-compare.sh"
+    match = re.search(r"additional_config=\$\(printf '([^']+)'", launcher.read_text())
+    assert match is not None, "benchmark launcher must construct its candidate configuration"
+    settings = json.loads(match.group(1) % ("vllm-local", "/tmp/benchmark-config-test.sock", 5))["agentcache"]
+    controller = build_progress_ttl_controller(backend(), settings)
+    assert controller is not None

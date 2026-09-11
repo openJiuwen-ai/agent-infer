@@ -25,9 +25,3 @@ historical decisions and do not replace instructions in each current `SKILL.md`.
 ## Maintenance Records
 
 - [CI and unit-test fixes](../../../design/ci-ut-fixes.md)
-
-## Scheduling and execution isolation
-
-- [Scheduling subsystem](../../../design/module/scheduling/index.md)
-- [Progress-TTL policy](../../../design/module/scheduling/progress-ttl-scheduling.md)
-- [Execution isolation](../../../design/module/benchmarking/execution-isolation.md)

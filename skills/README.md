@@ -16,9 +16,6 @@ directory as a `SKILL.md` file and is invoked by an AI agent via the Skill tool.
 All three producer skills (`ac-bootstrap`, `ac-benchmark`, `ac-integrate`) end
 by invoking `ac-review` as the final pre-merge validation step.
 
-- `agentbench-integrate-agent` — Integrate and validate coding-agent runtimes against common benchmark contracts.
-- `agentbench-investigate-regression` — Diagnose performance changes from finalized run artifacts.
-
 ## Conventions
 
 - Each skill directory contains a `SKILL.md` with `name` and `description`

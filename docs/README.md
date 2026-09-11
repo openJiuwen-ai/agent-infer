@@ -31,8 +31,3 @@ tasks.
 
 新增或修改功能时，请同步更新中文权威文档和对应英文文档。分类、命名和验证要求见
 [贡献指南](../CONTRIBUTING.md)。
-
-## 完整验证与调度配置 / Complete validation and scheduling
-
-- [完整基准验证](zh/how-to/run-e2e-benchmark.md) / [Complete benchmark validation](en/how-to/run-e2e-benchmark.md)
-- [Progress-TTL 配置](zh/reference/progress-ttl-config.md) / [Progress-TTL configuration](en/reference/progress-ttl-config.md)

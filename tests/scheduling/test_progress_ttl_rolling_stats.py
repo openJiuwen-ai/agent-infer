@@ -11,7 +11,7 @@ pytestmark = pytest.mark.cpu_test
 
 def test_config_rejects_invalid_segment_and_capacity_bounds() -> None:
     with pytest.raises(ValueError, match="target_max_segment_rounds"):
-        ProgressTTLConfig(target_max_segment_rounds=0)
+        ProgressTTLConfig(target_min_segment_rounds=8, target_max_segment_rounds=7)
     with pytest.raises(ValueError, match="resume_capacity_ratio"):
         ProgressTTLConfig(resume_capacity_ratio=0)
 
@@ -19,14 +19,15 @@ def test_config_rejects_invalid_segment_and_capacity_bounds() -> None:
 def test_config_defaults_match_the_two_l20_reference_policy() -> None:
     config = ProgressTTLConfig()
 
+    assert config.target_min_segment_rounds == 9
     assert config.target_max_segment_rounds == 14
-    assert config.resume_capacity_ratio == 1.0
+    assert config.resume_capacity_ratio == 0.95
     assert config.resume_reclaim_acting_programs is True
     assert config.pause_capacity_ratio == 1.0
-    assert config.privileged_ttl_seconds == 5
+    assert config.pause_capacity_lookahead_rounds == 2
+    assert config.privileged_lookahead_rounds == 14
     assert config.use_fixed_input_token_growth is False
     assert config.fixed_input_token_growth_per_round == 1024
-    assert config.force_resume_timeout_max_seconds == 300
 
 
 @pytest.mark.parametrize(
@@ -80,62 +81,6 @@ def test_global_factors_is_policy_owned_without_a_router_compatibility_base() ->
     assert ProgressTTLGlobalFactors.__bases__ == (object,)
 
 
-def test_request_throughput_uses_bounded_request_intervals() -> None:
-    stats = ProgressTTLGlobalFactors(request_window_size=3)
-
-    stats.observe_request_interval(started_at_monotonic_s=8, finished_at_monotonic_s=10)
-    stats.observe_request_interval(started_at_monotonic_s=10, finished_at_monotonic_s=12)
-    stats.observe_request_interval(started_at_monotonic_s=12, finished_at_monotonic_s=14)
-    assert stats.request_throughput_per_second == pytest.approx(0.5)
-
-    stats.observe_request_interval(started_at_monotonic_s=18, finished_at_monotonic_s=20)
-    assert stats.request_throughput_per_second == pytest.approx(0.5)
-
-
-def test_request_throughput_accepts_out_of_order_completions() -> None:
-    stats = ProgressTTLGlobalFactors(request_window_size=3)
-
-    stats.observe_request_interval(started_at_monotonic_s=8, finished_at_monotonic_s=12)
-    stats.observe_request_interval(started_at_monotonic_s=6, finished_at_monotonic_s=10)
-
-    assert stats.request_throughput_per_second == pytest.approx(2 / 6)
-
-
-def test_request_throughput_counts_overlapping_time_once() -> None:
-    stats = ProgressTTLGlobalFactors(request_window_size=3)
-
-    stats.observe_request_interval(started_at_monotonic_s=8, finished_at_monotonic_s=12)
-    stats.observe_request_interval(started_at_monotonic_s=10, finished_at_monotonic_s=14)
-    stats.observe_request_interval(started_at_monotonic_s=11, finished_at_monotonic_s=16)
-
-    assert stats.request_throughput_per_second == pytest.approx(3 / 8)
-
-
-def test_request_throughput_excludes_uncovered_idle_gaps() -> None:
-    stats = ProgressTTLGlobalFactors(request_window_size=4)
-
-    stats.observe_request_interval(started_at_monotonic_s=0, finished_at_monotonic_s=2)
-    stats.observe_request_interval(started_at_monotonic_s=1, finished_at_monotonic_s=3)
-    stats.observe_request_interval(started_at_monotonic_s=100, finished_at_monotonic_s=102)
-    stats.observe_request_interval(started_at_monotonic_s=101, finished_at_monotonic_s=103)
-
-    assert stats.request_throughput_per_second == pytest.approx(4 / 6)
-
-
-@pytest.mark.parametrize(
-    ("started_at", "finished_at"),
-    [(-1, 1), (2, 1), (float("nan"), 1), (0, float("inf"))],
-)
-def test_request_throughput_rejects_invalid_intervals(started_at: float, finished_at: float) -> None:
-    stats = ProgressTTLGlobalFactors()
-
-    with pytest.raises(ValueError, match="request interval"):
-        stats.observe_request_interval(
-            started_at_monotonic_s=started_at,
-            finished_at_monotonic_s=finished_at,
-        )
-
-
 def test_global_factors_reject_invalid_window_and_initial_numeric_values() -> None:
     with pytest.raises(ValueError, match="request_window_size"):
         ProgressTTLGlobalFactors(request_window_size=0)
@@ -167,26 +112,6 @@ def test_stats_wait_for_half_window_before_replacing_cold_start_values() -> None
     assert stats.avg_waiting_programs == 0
     assert stats.avg_input_token_growth_per_round == 100
     assert stats.avg_inter_request_gap_seconds == 0.5
-
-
-def test_stats_maintain_decode_horizon_and_scheduler_queue_time() -> None:
-    stats = ProgressTTLGlobalFactors(request_window_size=2, min_update_window_fraction=0.5)
-    stats.update_request(
-        prompt_tokens=2000,
-        cached_prefix_tokens=0,
-        completion_tokens=100,
-        total_tokens=2100,
-        request_latency_seconds=4,
-        decode_seconds=3,
-        active_programs=1,
-        waiting_programs=0,
-        input_token_growth=100,
-        inter_request_gap_seconds=1,
-        scheduler_queue_seconds=2,
-    )
-
-    assert stats.avg_decode_seconds == 3
-    assert stats.avg_scheduler_queue_seconds == 2
 
 
 def test_stats_exclude_large_growth_samples_from_capacity_estimate() -> None:
@@ -270,15 +195,15 @@ def test_stats_keep_bounded_cached_and_uncached_prompt_token_averages() -> None:
 def test_pause_window_is_bounded_and_uses_the_same_update_threshold() -> None:
     stats = ProgressTTLGlobalFactors()
     for _ in range(49):
-        stats.update_ttl_pause(served_rounds=9)
-    assert stats.avg_ttl_pause_segment_rounds == 1.0
+        stats.update_pause(served_rounds=9)
+    assert stats.avg_segment_served_rounds_on_pause == 1.0
 
-    stats.update_ttl_pause(served_rounds=9)
+    stats.update_pause(served_rounds=9)
 
-    assert stats.avg_ttl_pause_segment_rounds == 9
+    assert stats.avg_segment_served_rounds_on_pause == 9
     for _ in range(400):
-        stats.update_ttl_pause(served_rounds=14)
-    assert stats.ttl_pause_sample_count == stats.request_window_size
+        stats.update_pause(served_rounds=14)
+    assert len(stats._pause_served_rounds) == stats.request_window_size
 
 
 def test_continuity_mode_keeps_theoretical_samples_while_disabled() -> None:
@@ -360,12 +285,12 @@ def test_continuity_utility_rewards_only_intervals_that_return_before_ttl() -> N
     assert stats.continuity_utility_seconds == 7
 
 
-def test_continuity_ttl_is_zero_during_warmup_then_uses_lognormal_window() -> None:
+def test_continuity_ttl_uses_impact_during_warmup_then_lognormal_window() -> None:
     stats = ProgressTTLGlobalFactors(request_window_size=2)
 
-    assert stats.recommended_ttl_seconds(impact_seconds=7, minimum_seconds=1, maximum_seconds=10) == 0
-    stats.observe_continuity(interval_seconds=2, cache_miss_impact_seconds=7, assigned_ttl_seconds=0)
-    stats.observe_continuity(interval_seconds=4, cache_miss_impact_seconds=7, assigned_ttl_seconds=0)
+    assert stats.recommended_ttl_seconds(impact_seconds=7, minimum_seconds=1, maximum_seconds=10) == 7
+    stats.observe_continuity(interval_seconds=2, cache_miss_impact_seconds=7, assigned_ttl_seconds=7)
+    stats.observe_continuity(interval_seconds=4, cache_miss_impact_seconds=7, assigned_ttl_seconds=7)
 
     recommended = stats.recommended_ttl_seconds(impact_seconds=7, minimum_seconds=1, maximum_seconds=10)
     assert 1 <= recommended <= 10
@@ -384,12 +309,12 @@ def test_continuity_ttl_uses_a_non_minimum_value_when_the_lognormal_hit_curve_su
     assert recommended == pytest.approx(17.12317023578921)
 
 
-def test_continuity_rounds_use_ttl_pause_history_only_after_a_full_window() -> None:
+def test_protected_min_rounds_uses_ttl_pause_history_only_after_a_full_window() -> None:
     stats = ProgressTTLGlobalFactors(request_window_size=2)
 
     update(stats, rounds_since_ttl_pause=3)
-    assert stats.estimated_continuity_rounds() == 0
+    assert stats.protected_min_segment_rounds(9) == 9
     update(stats, rounds_since_ttl_pause=3)
 
     assert stats.avg_rounds_since_ttl_pause == 3
-    assert stats.estimated_continuity_rounds() == 6
+    assert stats.protected_min_segment_rounds(9) == 6

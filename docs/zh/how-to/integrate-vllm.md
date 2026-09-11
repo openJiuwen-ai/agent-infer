@@ -76,5 +76,3 @@ curl http://127.0.0.1:8000/v1/models
 [运行基准测试](run-benchmark.md)。
 
 [release-wheel]: https://gitcode.com/openJiuwen/agent-infer/releases/download/0.1.0/agentinfer-0.1.0-py3-none-any.whl
-
-当前调度策略字段、默认值和旧参数迁移说明见[Progress-TTL 配置](../reference/progress-ttl-config.md)。

@@ -44,7 +44,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["agentinfer", "tools"]
+known-first-party = ["agentinfer"]
 
 [tool.ruff.format]
 quote-style = "double"

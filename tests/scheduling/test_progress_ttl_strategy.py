@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -31,7 +30,6 @@ from agentinfer.scheduling.progress_ttl import (
     ProgressTTLGlobalFactors,
     ProgressTTLMode,
     ProgressTTLProgramFactors,
-    ProgressTTLResumeOrder,
     ProgressTTLStrategy,
 )
 
@@ -100,8 +98,7 @@ def test_shared_prefix_freshness_uses_configured_global_kv_pool_turnovers() -> N
         snapshot(candidate, running_one, running_two), factors, candidate
     )
 
-    assert factors.global_factors.avg_cache_churn_tokens_per_round == 600
-    assert freshness == pytest.approx(2 * 1000 * 4 / 2 / 600)
+    assert freshness == pytest.approx(2 * 1000 * 4 / 2 / 400)
 
 
 def view(
@@ -164,7 +161,7 @@ def controller(calls: list[TransitionRequest]) -> TransitionController:
 
 def test_progress_ttl_config_rejects_invalid_round_and_ttl_bounds() -> None:
     with pytest.raises(ValueError, match="target_max"):
-        ProgressTTLConfig(target_max_segment_rounds=0)
+        ProgressTTLConfig(target_min_segment_rounds=3, target_max_segment_rounds=2)
     with pytest.raises(ValueError, match="ttl_max"):
         ProgressTTLConfig(ttl_min_seconds=2, ttl_max_seconds=1)
     with pytest.raises(ValueError, match="resume_capacity_ratio"):
@@ -179,6 +176,7 @@ def test_admission_and_resume_reserve_the_same_minimum_segment_growth() -> None:
     components = build_progress_ttl_strategy(
         ProgressTTLConfig(
             decode_buffer_tokens=0,
+            target_min_segment_rounds=2,
             resume_capacity_ratio=1,
         )
     )
@@ -244,164 +242,10 @@ def test_admission_and_resume_reserve_the_same_minimum_segment_growth() -> None:
     assert [call.kind for call in fitting_resume_calls] == [TransitionKind.RESUME]
 
 
-def test_batch_gain_can_consume_growth_reserve_but_not_current_capacity() -> None:
-    components = build_progress_ttl_strategy(
-        ProgressTTLConfig(
-            decode_buffer_tokens=0,
-            resume_capacity_ratio=1,
-            enable_batch_gain_admission=True,
-        )
-    )
-    complete_growth_window(components.initial_factors, rounds=1)
-    components.initial_factors.global_factors.avg_input_token_growth_per_round = 10
-    components.initial_factors.global_factors.avg_decode_seconds = 1
-    active = view(
-        "active",
-        state=ProgramState.ACTIVE,
-        status=ProgramStatus.REASONING,
-        tokens=100,
-        backend_id="backend",
-    )
-    candidate = view("candidate", state=ProgramState.PAUSED, status=ProgramStatus.REASONING, tokens=100)
-    calls: list[TransitionRequest] = []
-
-    outcome = components.strategy.handle_admission(
-        snapshot(active, candidate, capacity=225),
-        components.initial_factors,
-        controller(calls),
-        candidate.ref,
-    )
-
-    assert outcome.disposition is AdmissionDisposition.ADMITTED
-    assert outcome.reason == "batch_gain_over_recovery_cost"
-    assert [call.kind for call in calls] == [TransitionKind.ADMIT]
-
-    no_capacity_calls: list[TransitionRequest] = []
-    no_capacity = components.strategy.handle_admission(
-        snapshot(active, candidate, capacity=175),
-        components.initial_factors,
-        controller(no_capacity_calls),
-        candidate.ref,
-    )
-
-    assert no_capacity.disposition is AdmissionDisposition.QUEUED
-    assert [call.kind for call in no_capacity_calls] == [TransitionKind.QUEUE]
-
-
-def test_batch_gain_decode_surface_counts_complete_context_for_each_program(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    components = build_progress_ttl_strategy(ProgressTTLConfig())
-    active = replace(
-        view(
-            "active-shared",
-            state=ProgramState.ACTIVE,
-            status=ProgramStatus.REASONING,
-            tokens=1000,
-            backend_id="backend",
-        ),
-        tokens=ProgramTokenObservation(estimated_context_tokens=1000, shared_prefix_tokens=800),
-    )
-    candidate = replace(
-        view("candidate-shared", state=ProgramState.PAUSED, status=ProgramStatus.REASONING, tokens=600),
-        tokens=ProgramTokenObservation(estimated_context_tokens=600, shared_prefix_tokens=500),
-    )
-    throughput_inputs: list[tuple[int, int]] = []
-
-    def decode_throughput(batch_size: int, total_context_tokens: int) -> float:
-        throughput_inputs.append((batch_size, total_context_tokens))
-        return float(batch_size)
-
-    monkeypatch.setattr(components.strategy, "_decode_throughput", decode_throughput)
-    monkeypatch.setattr(components.strategy, "_cache_recovery_impact_seconds", lambda *args: 0.0)
-    monkeypatch.setattr(components.strategy, "_continuity_loss_seconds", lambda *args: 0.0)
-
-    assert components.strategy._batch_gain_covers_recovery(
-        (active,),
-        components.initial_factors,
-        candidate,
-        remaining_tokens=1000,
-    )
-    assert throughput_inputs == [(1, 1000), (2, 1600)]
-
-
-def test_batch_gain_accounts_for_active_continuity_rounds_lost_to_candidate_growth() -> None:
-    components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0))
-    complete_growth_window(components.initial_factors, rounds=2)
-    components.initial_factors.global_factors.avg_input_token_growth_per_round = 100
-    active = view(
-        "active",
-        state=ProgramState.ACTIVE,
-        status=ProgramStatus.REASONING,
-        tokens=100,
-        backend_id="backend",
-    )
-    candidate = view("candidate", state=ProgramState.PAUSED, status=ProgramStatus.REASONING, tokens=100)
-
-    constrained = components.strategy._continuity_loss_seconds(
-        (active,),
-        components.initial_factors,
-        candidate,
-        remaining_tokens=600,
-    )
-    unconstrained = components.strategy._continuity_loss_seconds(
-        (active,),
-        components.initial_factors,
-        candidate,
-        remaining_tokens=1000,
-    )
-
-    assert constrained > 0
-    assert unconstrained == 0
-
-
-def test_continuity_loss_uses_post_admission_rounds_and_average_recovery_cost(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0))
-    complete_growth_window(components.initial_factors, rounds=2)
-    components.initial_factors.global_factors.avg_input_token_growth_per_round = 100
-    reasoning = view(
-        "reasoning",
-        state=ProgramState.ACTIVE,
-        status=ProgramStatus.REASONING,
-        tokens=100,
-        backend_id="backend",
-    )
-    acting = view(
-        "acting",
-        state=ProgramState.ACTIVE,
-        status=ProgramStatus.ACTING,
-        tokens=200,
-        backend_id="backend",
-    )
-    candidate = view("candidate", state=ProgramState.PAUSED, status=ProgramStatus.REASONING, tokens=100)
-    monkeypatch.setattr(
-        components.strategy,
-        "_cache_recovery_impact_seconds",
-        lambda state, context_tokens, shared_prefix_tokens: context_tokens / 50,
-    )
-
-    loss = components.strategy._continuity_loss_seconds(
-        (reasoning, acting),
-        components.initial_factors,
-        candidate,
-        remaining_tokens=700,
-    )
-    no_post_admission_rounds = components.strategy._continuity_loss_seconds(
-        (reasoning, acting),
-        components.initial_factors,
-        candidate,
-        remaining_tokens=500,
-    )
-
-    assert loss == pytest.approx((7 - 2) / 2 * ((2 + 4) / 2))
-    assert no_post_admission_rounds == math.inf
-
-
 def test_fixed_growth_overrides_rolling_growth_for_capacity_projection() -> None:
     components = build_progress_ttl_strategy(
         ProgressTTLConfig(
+            target_min_segment_rounds=2,
             use_fixed_input_token_growth=True,
             fixed_input_token_growth_per_round=25,
         )
@@ -443,6 +287,7 @@ def test_fixed_growth_overrides_rolling_growth_for_capacity_projection() -> None
 def test_capacity_diagnostic_reports_rolling_growth_but_projects_effective_fixed_growth() -> None:
     components = build_progress_ttl_strategy(
         ProgressTTLConfig(
+            target_min_segment_rounds=2,
             use_fixed_input_token_growth=True,
             fixed_input_token_growth_per_round=25,
         )
@@ -473,7 +318,7 @@ def test_capacity_diagnostic_reports_rolling_growth_but_projects_effective_fixed
 
 
 def test_cold_request_window_uses_zero_growth_lookahead_for_all_programs() -> None:
-    components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0))
+    components = build_progress_ttl_strategy(ProgressTTLConfig(target_min_segment_rounds=9, decode_buffer_tokens=0))
     components.initial_factors.global_factors.avg_input_token_growth_per_round = 100
     candidate = view("candidate", state=ProgramState.PAUSED, status=ProgramStatus.REASONING)
 
@@ -486,6 +331,7 @@ def test_cold_request_window_uses_zero_growth_lookahead_for_all_programs() -> No
         (),
         components.initial_factors,
         candidate=candidate,
+        candidate_privileged=True,
     )
 
     assert non_privileged_reserve == 0
@@ -507,322 +353,19 @@ def test_resume_ignores_paused_acting_program_without_a_pending_request() -> Non
     assert calls == []
 
 
-@pytest.mark.parametrize(("scale", "expected_timeout"), [(1, 12), (2, 24), (3, 36)])
-def test_force_resume_timeout_freezes_work_ahead_over_request_throughput(
-    scale: float,
-    expected_timeout: float,
-) -> None:
-    components = build_progress_ttl_strategy(
-        ProgressTTLConfig(
-            resume_order=ProgressTTLResumeOrder.FCFS,
-            force_resume_timeout_scale=scale,
-            force_resume_timeout_min_seconds=1,
-            force_resume_timeout_max_seconds=1000,
-        )
-    )
-    stats = components.initial_factors.global_factors
-    stats.request_window_size = 2
-    for started_at, finished_at in ((8.0, 10.0), (10.0, 12.0)):
-        stats.observe_request_interval(
-            started_at_monotonic_s=started_at,
-            finished_at_monotonic_s=finished_at,
-        )
-        stats.update_request(
-            prompt_tokens=100,
-            cached_prefix_tokens=0,
-            completion_tokens=10,
-            total_tokens=110,
-            request_latency_seconds=1,
-            active_programs=1,
-            waiting_programs=1,
-            input_token_growth=10,
-            inter_request_gap_seconds=1,
-            rounds_since_ttl_pause=2,
-        )
-    active = view("active", state=ProgramState.ACTIVE, status=ProgramStatus.REASONING, backend_id="backend")
-    ahead = view("ahead", state=ProgramState.PAUSED, status=ProgramStatus.REASONING)
-    candidate = view("candidate", state=ProgramState.PAUSED, status=ProgramStatus.REASONING)
-    components.initial_factors.set_program_factors(active.ref, ProgressTTLProgramFactors(segment_served_rounds=1))
-    components.initial_factors.set_program_factors(
-        ahead.ref,
-        ProgressTTLProgramFactors(segment_served_rounds=1, request_wait_started_at_monotonic_s=50),
-    )
-    calls: list[TransitionRequest] = []
-
-    outcome = components.strategy.handle_admission(
-        snapshot(active, ahead, candidate, waiting=(ahead.ref,)),
-        components.initial_factors,
-        controller(calls),
-        candidate.ref,
-    )
-
-    factors = dict(components.initial_factors.program_factors)[candidate.ref]
-    assert outcome.disposition is AdmissionDisposition.QUEUED
-    assert factors.force_resume_active_remaining_rounds == 3
-    assert factors.force_resume_pool_remaining_rounds == 3
-    assert factors.force_resume_request_throughput_per_second == pytest.approx(0.5)
-    assert factors.force_resume_timeout_seconds == pytest.approx(expected_timeout)
-    assert factors.force_resume_deadline_monotonic_s == pytest.approx(100 + expected_timeout)
-    diagnostics = components.strategy.event_diagnostics(
-        SchedulingEvent(
-            event_id="pending",
-            sequence=1,
-            kind=SchedulingEventKind.REQUEST_PENDING,
-            occurred_at_monotonic_s=100,
-            reason="waiting_queue_precedence",
-            program=candidate.ref,
-        ),
-        components.initial_factors,
-    )
-    diagnostic_fields = dict(diagnostics[0].fields)
-    assert diagnostics[0].name == "progress_ttl_force_resume_armed"
-    assert diagnostic_fields["active_remaining_rounds"] == 3
-    assert diagnostic_fields["pool_remaining_rounds"] == 3
-    assert diagnostic_fields["request_throughput_per_second"] == pytest.approx(0.5)
-
-
-@pytest.mark.parametrize("resume_order", [ProgressTTLResumeOrder.MRU, ProgressTTLResumeOrder.FCFS])
-def test_force_resume_work_ahead_counts_only_waiters_ordered_before_candidate(
-    resume_order: ProgressTTLResumeOrder,
-) -> None:
-    components = build_progress_ttl_strategy(
-        ProgressTTLConfig(
-            resume_order=resume_order,
-            force_resume_timeout_min_seconds=1,
-            force_resume_timeout_max_seconds=1000,
-        )
-    )
-    stats = components.initial_factors.global_factors
-    stats.request_window_size = 2
-    for started_at, finished_at in ((0.0, 1.0), (1.0, 2.0)):
-        stats.observe_request_interval(
-            started_at_monotonic_s=started_at,
-            finished_at_monotonic_s=finished_at,
-        )
-        stats.update_request(
-            prompt_tokens=100,
-            cached_prefix_tokens=0,
-            completion_tokens=10,
-            total_tokens=110,
-            request_latency_seconds=1,
-            active_programs=0,
-            waiting_programs=3,
-            input_token_growth=10,
-            inter_request_gap_seconds=1,
-            rounds_since_ttl_pause=2,
-        )
-    candidate = view("candidate", state=ProgramState.PAUSED, status=ProgramStatus.REASONING)
-    ahead = view("ahead", state=ProgramState.PAUSED, status=ProgramStatus.REASONING)
-    behind = view("behind", state=ProgramState.PAUSED, status=ProgramStatus.REASONING)
-    if resume_order is ProgressTTLResumeOrder.MRU:
-        ordering = {
-            candidate.ref: ProgressTTLProgramFactors(last_request_finished_at_monotonic_s=50),
-            ahead.ref: ProgressTTLProgramFactors(last_request_finished_at_monotonic_s=90, segment_served_rounds=1),
-            behind.ref: ProgressTTLProgramFactors(last_request_finished_at_monotonic_s=10, segment_served_rounds=1),
-        }
-    else:
-        ordering = {
-            candidate.ref: ProgressTTLProgramFactors(request_wait_started_at_monotonic_s=50),
-            ahead.ref: ProgressTTLProgramFactors(request_wait_started_at_monotonic_s=10, segment_served_rounds=1),
-            behind.ref: ProgressTTLProgramFactors(request_wait_started_at_monotonic_s=90, segment_served_rounds=1),
-        }
-    for ref, sidecar in ordering.items():
-        components.initial_factors.set_program_factors(ref, sidecar)
-
-    estimate = components.strategy._dynamic_force_resume_timeout(
-        snapshot(candidate, ahead, behind, waiting=(ahead.ref, behind.ref)),
-        components.initial_factors,
-        candidate,
-    )
-
-    assert estimate.pool_remaining_rounds == 3
-
-
-def test_force_resume_work_ahead_excludes_paused_acting_waiter() -> None:
-    components = build_progress_ttl_strategy(
-        ProgressTTLConfig(
-            resume_order=ProgressTTLResumeOrder.FCFS,
-            force_resume_timeout_min_seconds=1,
-            force_resume_timeout_max_seconds=1000,
-        )
-    )
-    stats = components.initial_factors.global_factors
-    stats.request_window_size = 1
-    stats.observe_request_interval(started_at_monotonic_s=0, finished_at_monotonic_s=1)
-    stats.update_request(
-        prompt_tokens=100,
-        cached_prefix_tokens=0,
-        completion_tokens=10,
-        total_tokens=110,
-        request_latency_seconds=1,
-        active_programs=0,
-        waiting_programs=1,
-        input_token_growth=10,
-        inter_request_gap_seconds=1,
-        rounds_since_ttl_pause=2,
-    )
-    candidate = view("candidate", state=ProgramState.PAUSED, status=ProgramStatus.REASONING)
-    acting = view("acting", state=ProgramState.PAUSED, status=ProgramStatus.ACTING)
-    components.initial_factors.set_program_factors(
-        candidate.ref,
-        ProgressTTLProgramFactors(request_wait_started_at_monotonic_s=50),
-    )
-    components.initial_factors.set_program_factors(
-        acting.ref,
-        ProgressTTLProgramFactors(request_wait_started_at_monotonic_s=10),
-    )
-
-    estimate = components.strategy._dynamic_force_resume_timeout(
-        snapshot(candidate, acting, waiting=(acting.ref,)),
-        components.initial_factors,
-        candidate,
-    )
-
-    assert estimate.pool_remaining_rounds == 0
-
-
-def test_force_resume_work_ahead_applies_reasoning_floor_and_acting_remainder() -> None:
-    components = build_progress_ttl_strategy(ProgressTTLConfig())
-    stats = components.initial_factors.global_factors
-    stats.request_window_size = 1
-    stats.observe_request_interval(started_at_monotonic_s=0, finished_at_monotonic_s=1)
-    stats.update_request(
-        prompt_tokens=100,
-        cached_prefix_tokens=0,
-        completion_tokens=10,
-        total_tokens=110,
-        request_latency_seconds=1,
-        active_programs=2,
-        waiting_programs=0,
-        input_token_growth=10,
-        inter_request_gap_seconds=1,
-        rounds_since_ttl_pause=2,
-    )
-    reasoning = view("reasoning", state=ProgramState.ACTIVE, status=ProgramStatus.REASONING, backend_id="backend")
-    acting = view("acting", state=ProgramState.ACTIVE, status=ProgramStatus.ACTING, backend_id="backend")
-    candidate = view("candidate", state=ProgramState.PAUSED, status=ProgramStatus.REASONING)
-    components.initial_factors.set_program_factors(
-        reasoning.ref,
-        ProgressTTLProgramFactors(segment_served_rounds=10),
-    )
-    components.initial_factors.set_program_factors(
-        acting.ref,
-        ProgressTTLProgramFactors(segment_served_rounds=1),
-    )
-
-    estimate = components.strategy._dynamic_force_resume_timeout(
-        snapshot(reasoning, acting, candidate),
-        components.initial_factors,
-        candidate,
-    )
-
-    assert estimate.active_remaining_rounds == 4
-
-
-def test_rejected_queue_transition_restores_frozen_force_resume_factors() -> None:
-    components = build_progress_ttl_strategy(ProgressTTLConfig())
-    candidate = view("candidate", state=ProgramState.PAUSED, status=ProgramStatus.REASONING, tokens=200)
-    previous = ProgressTTLProgramFactors(
-        wait_started_at_monotonic_s=10,
-        force_resume_timeout_seconds=91,
-        force_resume_deadline_monotonic_s=101,
-        force_resume_active_remaining_rounds=2,
-        force_resume_pool_remaining_rounds=3,
-        force_resume_request_throughput_per_second=4,
-    )
-    components.initial_factors.set_program_factors(candidate.ref, previous)
-
-    def reject(request: TransitionRequest) -> TransitionResult:
-        return TransitionResult(request.kind, request.program, False, "stale_snapshot")
-
-    with pytest.raises(RuntimeError, match="transition rejected"):
-        components.strategy.handle_admission(
-            snapshot(candidate, capacity=100),
-            components.initial_factors,
-            TransitionController(reject),
-            candidate.ref,
-        )
-
-    assert components.initial_factors.for_program(candidate.ref) == previous
-
-
-@pytest.mark.parametrize(
-    "kind",
-    [
-        SchedulingEventKind.REQUEST_ADMITTED,
-        SchedulingEventKind.PROGRAM_RESUMED,
-        SchedulingEventKind.PROGRAM_PAUSED,
-    ],
-)
-def test_program_transition_clears_frozen_force_resume_factors(kind: SchedulingEventKind) -> None:
-    components = build_progress_ttl_strategy(ProgressTTLConfig())
-    ref = ProgramRef("program", 0)
-    components.initial_factors.set_program_factors(
-        ref,
-        ProgressTTLProgramFactors(
-            request_wait_started_at_monotonic_s=10,
-            force_resume_timeout_seconds=20,
-            force_resume_deadline_monotonic_s=30,
-            force_resume_active_remaining_rounds=2,
-            force_resume_pool_remaining_rounds=3,
-            force_resume_request_throughput_per_second=4,
-        ),
-    )
-
-    components.strategy.handle_scheduling_event(
-        components.initial_factors,
-        SchedulingEvent(
-            event_id=kind.value,
-            sequence=1,
-            kind=kind,
-            occurred_at_monotonic_s=100,
-            reason="test_transition",
-            program=ref,
-        ),
-    )
-
-    sidecar = components.initial_factors.for_program(ref)
-    assert sidecar is not None
-    assert sidecar.request_wait_started_at_monotonic_s is None
-    assert sidecar.force_resume_timeout_seconds is None
-    assert sidecar.force_resume_deadline_monotonic_s is None
-    assert sidecar.force_resume_active_remaining_rounds == 0
-    assert sidecar.force_resume_pool_remaining_rounds == 0
-    assert sidecar.force_resume_request_throughput_per_second == 0
-
-
-def test_force_resume_timeout_uses_maximum_until_request_window_is_complete() -> None:
-    components = build_progress_ttl_strategy(
-        ProgressTTLConfig(
-            force_resume_timeout_min_seconds=30,
-            force_resume_timeout_max_seconds=1800,
-        )
-    )
-    candidate = view("candidate", state=ProgramState.PAUSED, status=ProgramStatus.REASONING)
-    calls: list[TransitionRequest] = []
-
-    components.strategy.handle_admission(
-        snapshot(candidate, capacity=100),
-        components.initial_factors,
-        controller(calls),
-        candidate.ref,
-    )
-
-    factors = dict(components.initial_factors.program_factors)[candidate.ref]
-    assert factors.force_resume_timeout_seconds == 1800
-    assert factors.force_resume_deadline_monotonic_s == 1900
-
-
 def test_force_resume_timeout_bypasses_capacity_projection() -> None:
-    components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0))
+    components = build_progress_ttl_strategy(
+        ProgressTTLConfig(
+            decode_buffer_tokens=0,
+            force_resume_timeout_seconds=30,
+        )
+    )
     waiting = view("waiting", state=ProgramState.PAUSED, status=ProgramStatus.REASONING, tokens=900)
     components.initial_factors.set_program_factors(
         waiting.ref,
         ProgressTTLProgramFactors(
             wait_started_at_monotonic_s=10,
             request_wait_started_at_monotonic_s=60,
-            force_resume_timeout_seconds=30,
-            force_resume_deadline_monotonic_s=90,
         ),
     )
     calls: list[TransitionRequest] = []
@@ -839,15 +382,18 @@ def test_force_resume_timeout_bypasses_capacity_projection() -> None:
 
 
 def test_force_resume_timeout_does_not_reactivate_idle_acting_program() -> None:
-    components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0))
+    components = build_progress_ttl_strategy(
+        ProgressTTLConfig(
+            decode_buffer_tokens=0,
+            force_resume_timeout_seconds=30,
+        )
+    )
     acting = view("acting", state=ProgramState.PAUSED, status=ProgramStatus.ACTING, tokens=900)
     components.initial_factors.set_program_factors(
         acting.ref,
         ProgressTTLProgramFactors(
             wait_started_at_monotonic_s=10,
             request_wait_started_at_monotonic_s=60,
-            force_resume_timeout_seconds=30,
-            force_resume_deadline_monotonic_s=90,
         ),
     )
     calls: list[TransitionRequest] = []
@@ -862,7 +408,7 @@ def test_force_resume_timeout_does_not_reactivate_idle_acting_program() -> None:
 
 
 def test_force_resume_timeout_does_not_prioritize_idle_acting_program() -> None:
-    components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0))
+    components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0, force_resume_timeout_seconds=30))
     reasoning = view("reasoning", state=ProgramState.PAUSED, status=ProgramStatus.REASONING)
     acting = view("acting", state=ProgramState.PAUSED, status=ProgramStatus.ACTING)
     components.initial_factors.set_program_factors(
@@ -870,8 +416,6 @@ def test_force_resume_timeout_does_not_prioritize_idle_acting_program() -> None:
         ProgressTTLProgramFactors(
             wait_started_at_monotonic_s=10,
             request_wait_started_at_monotonic_s=10,
-            force_resume_timeout_seconds=30,
-            force_resume_deadline_monotonic_s=40,
         ),
     )
 
@@ -913,7 +457,7 @@ def test_pending_request_keeps_pause_age_but_starts_its_own_force_resume_timer(w
 
 
 def test_admission_does_not_use_parent_relationship_as_a_capacity_handoff() -> None:
-    components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0))
+    components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0, target_min_segment_rounds=2))
     parent = view(
         "task:lead",
         state=ProgramState.ACTIVE,
@@ -947,6 +491,7 @@ def test_privileged_relationship_handoff_transfers_one_task_slot() -> None:
     components = build_progress_ttl_strategy(
         ProgressTTLConfig(
             decode_buffer_tokens=0,
+            privileged_lookahead_rounds=14,
         )
     )
     components.initial_factors.global_factors.avg_input_token_growth_per_round = 0
@@ -968,9 +513,6 @@ def test_privileged_relationship_handoff_transfers_one_task_slot() -> None:
 
     assert parent_outcome.disposition is AdmissionDisposition.ADMITTED
     assert components.initial_factors.for_program(parent_waiting.ref).is_privileged is True
-    assert components.initial_factors.for_program(parent_waiting.ref).privilege_deadline_monotonic_s == pytest.approx(
-        100.0 + components.strategy.config.privileged_ttl_seconds
-    )
 
     parent_active = replace(
         parent_waiting, state=ProgramState.ACTIVE, status=ProgramStatus.ACTING, backend_id="backend"
@@ -1015,6 +557,7 @@ def test_capacity_fit_prefers_fewer_programs_for_the_same_partial_relief() -> No
 def test_ttl_expiry_transfers_privilege_to_paused_same_task_reasoning() -> None:
     components = build_progress_ttl_strategy(
         ProgressTTLConfig(
+            privileged_lookahead_rounds=14,
             ttl_min_seconds=5,
             ttl_max_seconds=5,
         )
@@ -1053,6 +596,7 @@ def test_capacity_repair_protects_privilege_while_an_ordinary_victim_fits() -> N
     components = build_progress_ttl_strategy(
         ProgressTTLConfig(
             decode_buffer_tokens=0,
+            privileged_lookahead_rounds=14,
         )
     )
     components.initial_factors.global_factors.avg_input_token_growth_per_round = 0
@@ -1088,8 +632,14 @@ def test_capacity_repair_protects_privilege_while_an_ordinary_victim_fits() -> N
     assert components.initial_factors.for_program(privileged.ref).is_privileged is True
 
 
-def test_all_programs_use_the_workload_growth_target_in_shared_capacity_projection() -> None:
-    components = build_progress_ttl_strategy(ProgressTTLConfig())
+def test_privileged_program_uses_longer_growth_target_in_shared_capacity_projection() -> None:
+    components = build_progress_ttl_strategy(
+        ProgressTTLConfig(
+            capacity_safety_margin_tokens=25,
+            target_min_segment_rounds=2,
+            privileged_lookahead_rounds=4,
+        )
+    )
     complete_growth_window(components.initial_factors, rounds=2)
     components.initial_factors.global_factors.avg_input_token_growth_per_round = 100
     active = view(
@@ -1110,51 +660,18 @@ def test_all_programs_use_the_workload_growth_target_in_shared_capacity_projecti
         candidate=candidate,
     )
 
-    assert reserve == 700
+    assert reserve == 525
 
 
-def test_capacity_growth_target_is_bounded_by_max_segment_rounds() -> None:
+def test_request_completion_counts_round_and_arms_then_expires_ttl() -> None:
     components = build_progress_ttl_strategy(
         ProgressTTLConfig(
-            target_max_segment_rounds=3,
-            decode_buffer_tokens=0,
-        )
-    )
-    complete_growth_window(components.initial_factors, rounds=10)
-    components.initial_factors.global_factors.avg_input_token_growth_per_round = 100
-    active = view(
-        "active",
-        state=ProgramState.ACTIVE,
-        status=ProgramStatus.ACTING,
-        backend_id="backend",
-    )
-    candidate = view("candidate", state=ProgramState.PAUSED, status=ProgramStatus.REASONING)
-    components.initial_factors.set_program_factors(
-        active.ref,
-        ProgressTTLProgramFactors(segment_served_rounds=1),
-    )
-
-    reserve = components.strategy._continuous_growth_reserve_tokens(
-        (active,),
-        components.initial_factors,
-        candidate=candidate,
-    )
-
-    assert components.initial_factors.global_factors.estimated_continuity_rounds() == 20
-    assert components.strategy._protected_min_segment_rounds(components.initial_factors) == 3
-    assert reserve == 500
-
-
-def test_request_completion_counts_round_and_warmup_ttl_expires_immediately() -> None:
-    components = build_progress_ttl_strategy(
-        ProgressTTLConfig(
+            target_min_segment_rounds=1,
             target_max_segment_rounds=2,
             ttl_min_seconds=5,
             ttl_max_seconds=5,
             ttl_max_cache_miss_impact_ratio=1,
-            ttl_prefill_model_intercept_seconds=0,
-            ttl_prefill_model_linear_seconds_per_1k_tokens=6,
-            ttl_prefill_model_quadratic_seconds_per_1k_tokens_squared=0,
+            ttl_prefill_seconds_per_1k_uncached_tokens=6,
         )
     )
     program = view(
@@ -1180,46 +697,11 @@ def test_request_completion_counts_round_and_warmup_ttl_expires_immediately() ->
     assert sidecar is not None
     assert sidecar.segment_served_rounds == 1
     assert sidecar.is_evictable_after_min_rounds is True
-    assert sidecar.ttl_deadline_monotonic_s == 100.0
+    assert sidecar.ttl_deadline_monotonic_s == 105.0
     calls: list[TransitionRequest] = []
-    due = replace(snapshot(program), observed_at_monotonic_s=100.0)
+    due = replace(snapshot(program), observed_at_monotonic_s=105.0)
     components.strategy.handle_scheduled_check(due, components.initial_factors, controller(calls))
     assert [(call.kind, call.reason) for call in calls] == [(TransitionKind.PAUSE, "progress_ttl_expired")]
-
-
-def test_request_completion_counts_ref_zero_churn_only_on_first_segment_round() -> None:
-    components = build_progress_ttl_strategy(ProgressTTLConfig())
-    program = view(
-        "program",
-        state=ProgramState.ACTIVE,
-        status=ProgramStatus.ACTING,
-        backend_id="backend",
-    )
-
-    for sequence in (1, 2):
-        finished = SchedulingEvent(
-            event_id=f"finished-{sequence}",
-            sequence=sequence,
-            kind=SchedulingEventKind.REQUEST_FINISHED,
-            occurred_at_monotonic_s=100.0 + sequence,
-            reason="completed",
-            program=program.ref,
-            current_status=ProgramStatus.ACTING,
-            fields=(
-                ("total_tokens", 1100),
-                ("previous_context_tokens", 1000),
-                ("prompt_tokens", 1000),
-                ("completion_tokens", 100),
-                ("cached_prefix_tokens", 800),
-                ("hbm_cached_prefix_tokens", 800),
-                ("hbm_hit_ref_zero_tokens", 600),
-            ),
-        )
-        components.strategy.handle_scheduling_event(components.initial_factors, finished)
-
-    samples = tuple(components.initial_factors.global_factors._request_samples)
-    assert samples[0].cache_churn_tokens == 900
-    assert samples[1].cache_churn_tokens == 300
 
 
 def test_request_completion_exposes_armed_ttl_diagnostic() -> None:
@@ -1227,9 +709,7 @@ def test_request_completion_exposes_armed_ttl_diagnostic() -> None:
         ProgressTTLConfig(
             ttl_min_seconds=5,
             ttl_max_seconds=5,
-            ttl_prefill_model_intercept_seconds=0,
-            ttl_prefill_model_linear_seconds_per_1k_tokens=10,
-            ttl_prefill_model_quadratic_seconds_per_1k_tokens_squared=0,
+            ttl_prefill_seconds_per_1k_uncached_tokens=10,
             ttl_decode_throughput_alpha=1,
         )
     )
@@ -1260,8 +740,8 @@ def test_request_completion_exposes_armed_ttl_diagnostic() -> None:
     assert fields["generation"] == 0
     assert fields["total_tokens"] == 1000
     assert fields["acting_since"] == 100.0
-    assert fields["ttl_seconds"] == 0.0
-    assert fields["ttl_deadline"] == 100.0
+    assert fields["ttl_seconds"] == 5.0
+    assert fields["ttl_deadline"] == 105.0
     assert fields["is_privileged"] is False
 
 
@@ -1327,7 +807,7 @@ def test_paused_reasoning_program_is_not_released_after_retention_deadline() -> 
 
 
 def test_resume_uses_evictable_acting_capacity_without_ranking_by_candidate_size() -> None:
-    components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0))
+    components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0, target_min_segment_rounds=2))
     components.initial_factors.global_factors.avg_input_token_growth_per_round = 0
     active = view(
         "active",
@@ -1362,6 +842,7 @@ def test_resume_reclaim_switch_preserves_acting_program_and_keeps_waiter_paused(
     components = build_progress_ttl_strategy(
         ProgressTTLConfig(
             decode_buffer_tokens=0,
+            target_min_segment_rounds=2,
             resume_reclaim_acting_programs=False,
         )
     )
@@ -1393,6 +874,7 @@ def test_resume_reclaims_program_at_max_rounds_before_minimum_eligible_program()
     components = build_progress_ttl_strategy(
         ProgressTTLConfig(
             decode_buffer_tokens=0,
+            target_min_segment_rounds=2,
             target_max_segment_rounds=4,
         )
     )
@@ -1437,7 +919,9 @@ def test_resume_reclaims_program_at_max_rounds_before_minimum_eligible_program()
 
 
 def test_max_round_completion_pauses_for_uncovered_top_waiting_demand() -> None:
-    components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0, target_max_segment_rounds=3))
+    components = build_progress_ttl_strategy(
+        ProgressTTLConfig(decode_buffer_tokens=0, target_min_segment_rounds=2, target_max_segment_rounds=3)
+    )
     active = view(
         "active",
         state=ProgramState.ACTIVE,
@@ -1465,7 +949,9 @@ def test_max_round_completion_pauses_for_uncovered_top_waiting_demand() -> None:
 
 
 def test_max_round_completion_counts_future_pause_against_only_top_waiting_demand() -> None:
-    components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0, target_max_segment_rounds=3))
+    components = build_progress_ttl_strategy(
+        ProgressTTLConfig(decode_buffer_tokens=0, target_min_segment_rounds=2, target_max_segment_rounds=3)
+    )
     active = view(
         "active",
         state=ProgramState.ACTIVE,
@@ -1504,6 +990,7 @@ def test_capacity_repair_uses_segment_duration_before_program_status() -> None:
         ProgressTTLConfig(
             decode_buffer_tokens=0,
             pause_capacity_ratio=1,
+            pause_capacity_lookahead_rounds=0,
         )
     )
     acting = view(
@@ -1552,6 +1039,7 @@ def test_capacity_repair_scales_segment_duration_by_current_input_tokens() -> No
         ProgressTTLConfig(
             decode_buffer_tokens=0,
             pause_capacity_ratio=1,
+            pause_capacity_lookahead_rounds=0,
         )
     )
     components.initial_factors.global_factors.avg_prompt_tokens = 500
@@ -1685,7 +1173,12 @@ def test_program_segment_clock_spans_status_changes_and_resets_on_pause_resume()
 
 
 def test_pause_capacity_counts_marked_reasoning_as_future_relief() -> None:
-    components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0))
+    components = build_progress_ttl_strategy(
+        ProgressTTLConfig(
+            capacity_safety_margin_tokens=500,
+            decode_buffer_tokens=0,
+        )
+    )
     components.initial_factors.global_factors.avg_input_token_growth_per_round = 0
     marked = view(
         "marked",
@@ -1741,44 +1234,88 @@ def test_resume_capacity_does_not_count_future_paused_tokens() -> None:
     assert calls == []
 
 
+def test_capacity_watermarks_reserve_resume_and_pause_headroom() -> None:
+    components = build_progress_ttl_strategy(
+        ProgressTTLConfig(
+            decode_buffer_tokens=0,
+            resume_capacity_ratio=0.9,
+            pause_capacity_ratio=0.95,
+            pause_capacity_lookahead_rounds=2,
+        )
+    )
+    active = view(
+        "active",
+        state=ProgramState.ACTIVE,
+        status=ProgramStatus.ACTING,
+        tokens=940,
+        backend_id="backend",
+    )
+    waiting = view("waiting", state=ProgramState.PAUSED, status=ProgramStatus.REASONING, tokens=10)
+    admission_calls: list[TransitionRequest] = []
+
+    outcome = components.strategy.handle_admission(
+        snapshot(active, waiting, capacity=1000),
+        components.initial_factors,
+        controller(admission_calls),
+        waiting.ref,
+    )
+
+    assert outcome.disposition is AdmissionDisposition.QUEUED
+    repair_calls: list[TransitionRequest] = []
+    components.strategy.repair_capacity(
+        snapshot(active, capacity=1000),
+        components.initial_factors,
+        controller(repair_calls),
+    )
+    assert [call.kind for call in repair_calls] == [TransitionKind.PAUSE]
+
+
+def test_pause_lookahead_reserve_scales_with_active_program_count() -> None:
+    components = build_progress_ttl_strategy(
+        ProgressTTLConfig(
+            decode_buffer_tokens=0,
+            pause_capacity_lookahead_rounds=1,
+        )
+    )
+    components.initial_factors.global_factors.avg_input_token_growth_per_round = 150
+    first = view(
+        "first",
+        state=ProgramState.ACTIVE,
+        status=ProgramStatus.ACTING,
+        tokens=400,
+        backend_id="backend",
+    )
+    second = view(
+        "second",
+        state=ProgramState.ACTIVE,
+        status=ProgramStatus.ACTING,
+        tokens=400,
+        backend_id="backend",
+    )
+    one_active_calls: list[TransitionRequest] = []
+    components.strategy.repair_capacity(
+        snapshot(first, capacity=1000),
+        components.initial_factors,
+        controller(one_active_calls),
+    )
+    two_active_calls: list[TransitionRequest] = []
+    components.strategy.repair_capacity(
+        snapshot(first, second, capacity=1000),
+        components.initial_factors,
+        controller(two_active_calls),
+    )
+
+    assert one_active_calls == []
+    assert len(two_active_calls) == 1
+    assert two_active_calls[0].kind is TransitionKind.PAUSE
+
+
 def test_adaptive_cache_miss_impact_uses_uncached_prompt_tokens() -> None:
     components = build_progress_ttl_strategy(
         ProgressTTLConfig(
             ttl_min_seconds=0,
             ttl_max_seconds=100,
-            ttl_prefill_model_intercept_seconds=0,
-            ttl_prefill_model_linear_seconds_per_1k_tokens=1,
-            ttl_prefill_model_quadratic_seconds_per_1k_tokens_squared=0,
-            ttl_decode_throughput_alpha=1,
-        )
-    )
-    assert components.strategy._cache_miss_impact_seconds(1000, 0) == 1
-    assert components.strategy._cache_miss_impact_seconds(1000, 400) == 0.6
-
-
-def test_cold_prefill_cost_uses_quadratic_calibration() -> None:
-    components = build_progress_ttl_strategy(
-        ProgressTTLConfig(
-            ttl_prefill_model_intercept_seconds=1,
-            ttl_prefill_model_linear_seconds_per_1k_tokens=2,
-            ttl_prefill_model_quadratic_seconds_per_1k_tokens_squared=3,
-            ttl_decode_throughput_alpha=1,
-        )
-    )
-
-    assert components.strategy._cache_miss_impact_seconds(2000, 0) == 17
-    assert components.strategy._cache_miss_impact_seconds(2000, 2000) == 0
-
-
-def test_warmup_ttl_zero_overrides_configured_minimum() -> None:
-    components = build_progress_ttl_strategy(
-        ProgressTTLConfig(
-            ttl_min_seconds=10,
-            ttl_max_seconds=100,
-            ttl_max_cache_miss_impact_ratio=0.5,
-            ttl_prefill_model_intercept_seconds=0,
-            ttl_prefill_model_linear_seconds_per_1k_tokens=1,
-            ttl_prefill_model_quadratic_seconds_per_1k_tokens_squared=0,
+            ttl_prefill_seconds_per_1k_uncached_tokens=1,
             ttl_decode_throughput_alpha=1,
         )
     )
@@ -1803,7 +1340,41 @@ def test_warmup_ttl_zero_overrides_configured_minimum() -> None:
 
     sidecar = components.initial_factors.for_program(program.ref)
     assert sidecar is not None
-    assert sidecar.ttl_deadline_monotonic_s == 100
+    assert sidecar.ttl_deadline_monotonic_s == 101
+
+
+def test_ttl_impact_ratio_cap_overrides_configured_minimum() -> None:
+    components = build_progress_ttl_strategy(
+        ProgressTTLConfig(
+            ttl_min_seconds=10,
+            ttl_max_seconds=100,
+            ttl_max_cache_miss_impact_ratio=0.5,
+            ttl_prefill_seconds_per_1k_uncached_tokens=1,
+            ttl_decode_throughput_alpha=1,
+        )
+    )
+    program = view(
+        "program",
+        state=ProgramState.ACTIVE,
+        status=ProgramStatus.ACTING,
+        backend_id="backend",
+    )
+    event = SchedulingEvent(
+        event_id="finished",
+        sequence=1,
+        kind=SchedulingEventKind.REQUEST_FINISHED,
+        occurred_at_monotonic_s=100,
+        reason="completed",
+        program=program.ref,
+        current_status=ProgramStatus.ACTING,
+        fields=(("prompt_tokens", 1000), ("total_tokens", 1000), ("previous_context_tokens", 0)),
+    )
+
+    components.strategy.handle_scheduling_event(components.initial_factors, event)
+
+    sidecar = components.initial_factors.for_program(program.ref)
+    assert sidecar is not None
+    assert sidecar.ttl_deadline_monotonic_s == 100.5
 
 
 def test_off_mode_directly_admits_without_capacity_or_queueing() -> None:
@@ -1901,71 +1472,62 @@ def test_native_running_usage_is_combined_with_share_adjusted_acting_reservation
     assert components.strategy._remaining_tokens(observed, 1.0) == -150
 
 
-def test_resume_order_prefers_the_most_recent_request_completion() -> None:
-    components = build_progress_ttl_strategy(ProgressTTLConfig())
-    recent = view("recent", state=ProgramState.PAUSED, status=ProgramStatus.REASONING, tokens=100)
-    old = view("old", state=ProgramState.PAUSED, status=ProgramStatus.REASONING, tokens=100)
-    components.initial_factors.set_program_factors(
-        recent.ref,
-        ProgressTTLProgramFactors(
-            last_request_finished_at_monotonic_s=90,
-            last_inter_request_gap_seconds=1,
-        ),
+def test_resume_score_uses_rolling_latency_load_and_last_request_gap() -> None:
+    components = build_progress_ttl_strategy(
+        ProgressTTLConfig(
+            resume_fairness_weight=1,
+            resume_resource_penalty_weight=1,
+        )
     )
-    components.initial_factors.set_program_factors(
-        old.ref,
-        ProgressTTLProgramFactors(
-            last_request_finished_at_monotonic_s=10,
-            last_inter_request_gap_seconds=1000,
-        ),
-    )
-    ordered = sorted(
-        (old, recent),
-        key=lambda program: components.strategy._resume_key(program, components.initial_factors, 100),
-    )
-
-    assert ordered == [recent, old]
-
-
-def test_fcfs_resume_order_prefers_the_earliest_waiting_request() -> None:
-    components = build_progress_ttl_strategy(ProgressTTLConfig(resume_order=ProgressTTLResumeOrder.FCFS))
-    first = view("first", state=ProgramState.PAUSED, status=ProgramStatus.REASONING, tokens=100)
-    second = view("second", state=ProgramState.PAUSED, status=ProgramStatus.REASONING, tokens=100)
-    components.initial_factors.set_program_factors(
-        first.ref,
-        ProgressTTLProgramFactors(request_wait_started_at_monotonic_s=10, last_request_finished_at_monotonic_s=90),
-    )
-    components.initial_factors.set_program_factors(
-        second.ref,
-        ProgressTTLProgramFactors(request_wait_started_at_monotonic_s=20, last_request_finished_at_monotonic_s=10),
-    )
-    ordered = sorted(
-        (second, first),
-        key=lambda program: components.strategy._resume_key(program, components.initial_factors, 100),
-    )
-
-    assert ordered == [first, second]
-
-
-def test_privileged_resume_bypasses_unknown_capacity() -> None:
-    components = build_progress_ttl_strategy(ProgressTTLConfig())
-    program = view(
-        "privileged",
-        state=ProgramState.PAUSED,
-        status=ProgramStatus.REASONING,
-        tokens=1000,
-        task_id="task",
-    )
+    program = view("waiting", state=ProgramState.PAUSED, status=ProgramStatus.REASONING, tokens=100)
     components.initial_factors.set_program_factors(
         program.ref,
-        ProgressTTLProgramFactors(is_privileged=True),
+        ProgressTTLProgramFactors(
+            last_segment_served_rounds=1,
+            last_segment_prompt_tokens=100,
+            last_segment_completion_tokens=100,
+            wait_started_at_monotonic_s=90,
+            last_inter_request_gap_seconds=10,
+        ),
     )
-    calls: list[TransitionRequest] = []
-    unknown_capacity = replace(snapshot(program, waiting=(program.ref,)), total_kv_tokens=None)
+    stats = components.initial_factors.global_factors
+    stats.avg_prompt_tokens = 100
+    stats.avg_completion_tokens = 100
+    stats.avg_request_latency_seconds = 2
+    stats.avg_active_programs = 4
+    stats.avg_waiting_programs = 4
 
-    components.strategy.schedule_resume(unknown_capacity, components.initial_factors, controller(calls))
+    fast_latency_key = components.strategy._resume_key(program, components.initial_factors, 100)
+    stats.avg_request_latency_seconds = 4
+    slow_latency_key = components.strategy._resume_key(program, components.initial_factors, 100)
 
-    assert [(call.kind, call.reason) for call in calls] == [(TransitionKind.RESUME, "progress_ttl_privileged_resume")]
+    assert fast_latency_key[1] == -4
+    assert slow_latency_key[1] == -1.5
+    assert fast_latency_key < slow_latency_key
+
+
+def test_resume_score_treats_zero_as_a_valid_wait_start() -> None:
+    components = build_progress_ttl_strategy(ProgressTTLConfig())
+    program = view("waiting", state=ProgramState.PAUSED, status=ProgramStatus.REASONING, tokens=100)
+    components.initial_factors.set_program_factors(
+        program.ref,
+        ProgressTTLProgramFactors(
+            last_segment_served_rounds=1,
+            last_segment_prompt_tokens=100,
+            last_segment_completion_tokens=100,
+            wait_started_at_monotonic_s=0,
+        ),
+    )
+    stats = components.initial_factors.global_factors
+    stats.avg_prompt_tokens = 100
+    stats.avg_completion_tokens = 100
+    stats.avg_request_latency_seconds = 1
+    stats.avg_active_programs = 1
+    stats.avg_waiting_programs = 0
+
+    key = components.strategy._resume_key(program, components.initial_factors, 10)
+
+    assert key[1] == -9
 
 
 @pytest.mark.parametrize("invalid_value", [float("nan"), float("inf"), float("-inf")])

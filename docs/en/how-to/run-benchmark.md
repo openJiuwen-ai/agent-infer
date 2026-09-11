@@ -119,4 +119,9 @@ For Router runs use `swebench_agentinfer.yaml`, with `backend.base_url` pointing
 
 For captured traces, see [Trace Replay](run-trace-replay.md).
 
-For the local smoke and JSON-driven scenarios, see [complete benchmark validation](run-e2e-benchmark.md).
+## Local smoke validation
+
+Run `python -m pytest tests/agentbench/test_benchmark_smoke.py -q` without a model service to validate the
+production CLI, configuration, workspace, dispatch, request proxy, and finalization. The local test runtime and
+loopback backend do not establish model quality or performance. The scheduler comparison script uses fields
+supported by the destination controller factory.

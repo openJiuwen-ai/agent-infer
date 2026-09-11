@@ -22,12 +22,11 @@ reported as exact execution parity.
 
 ## Migration provenance
 
-The complete `agentinfer/` package and related tests are synchronized from
-JiusiServe/AgentInfer commit `abcaaba9b8e4960ba5e29add24c1a7b99d6c14ad`.
-This supersedes the initial AgentBench-only import from `af93e654606d5f5365a64aaacfc5cb63cb0fcfb7`.
-Destination integration preserves SPDX notices, Node 20-compatible bridge tests,
-YAML package data, and the bilingual documentation layout.
+AgentBench and its focused tests are synchronized from JiusiServe/AgentInfer commit
+`abcaaba9b8e4960ba5e29add24c1a7b99d6c14ad`. The initial import used
+`af93e654606d5f5365a64aaacfc5cb63cb0fcfb7`.
 
-The synchronized package includes Replay sampling conversion, internal-DP lifecycle delivery,
-and the Progress-TTL cost model used by the benchmark launchers. Related surfaces include
-`tests/e2e/`, `tools/calibration/`, and benchmark integration/investigation skills.
+Integration preserves the `agentinfer.agentbench` package path, destination SPDX notices,
+Node 20-compatible bridge tests, YAML package data, and bilingual user documentation.
+Adjacent changes are limited to Replay CLI delegation, DSH identity headers, and Anthropic Replay sampling conversion.
+The scheduler comparison launcher uses the destination controller's existing policy configuration.

@@ -115,4 +115,8 @@ DSH 对应参数为 `--agent-type dsh --agent-profile single --agent-executable 
 
 已有请求 trace 可使用[Trace Replay](run-trace-replay.md)。
 
-完整的本地烟雾测试和 JSON 场景验证见[运行完整基准验证](run-e2e-benchmark.md)。
+## 本地烟雾验证
+
+执行 `python -m pytest tests/agentbench/test_benchmark_smoke.py -q`，无需模型服务即可验证
+生产 CLI、配置、工作区、分派、请求代理及结果汇总。测试使用本地运行时和 loopback 后端，
+不提供真实模型质量或性能结论。调度对比脚本使用目标仓库现有 controller factory 支持的字段。
