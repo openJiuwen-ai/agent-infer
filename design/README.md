@@ -11,6 +11,12 @@ user documentation lives under [`docs/`](../docs/README.md).
 - [Request proxy and hints](module/benchmarking/request-proxy-and-hints.md)
 - [Artifacts and evaluation](module/benchmarking/artifacts-and-evaluation.md)
 
+## Scheduling Subsystem
+
+- [Program state machine](module/scheduling/program-state-machine.md)
+- [Progress-TTL scheduling](module/scheduling/progress-ttl-scheduling.md)
+- [vLLM runtime integration](module/scheduling/vllm-runtime-integration.md)
+
 ## AgentCache Skills
 
 - [Skills design](superpowers/specs/agentcache-skills-design.md)

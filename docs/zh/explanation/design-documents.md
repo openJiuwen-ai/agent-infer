@@ -14,6 +14,14 @@
 这些文档记录模块边界、验证路径和 `BENCH-INV-*` 开发不变量。其状态和 `last_reviewed` 元数据决定是否可用于
 当前实现评审。
 
+## 调度子系统
+
+- [Program 状态机](../../../design/module/scheduling/program-state-machine.md)
+- [Progress-TTL 调度](../../../design/module/scheduling/progress-ttl-scheduling.md)
+- [vLLM 运行时集成](../../../design/module/scheduling/vllm-runtime-integration.md)
+
+这些文档定义 Program 生命周期转换、Progress-TTL 的容量与连续性决策，以及 AgentInfer 准入控制和 vLLM 原生调度器之间的边界。
+
 ## AgentCache Skills
 
 - [Skills 设计](../../../design/superpowers/specs/agentcache-skills-design.md)

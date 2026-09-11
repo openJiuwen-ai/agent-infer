@@ -14,6 +14,15 @@ page makes those designs discoverable, but they are not user procedures or stabl
 These documents record module boundaries, validation paths, and `BENCH-INV-*` development invariants. Use their
 status and `last_reviewed` metadata to decide whether they apply to current implementation review.
 
+## Scheduling Subsystem
+
+- [Program state machine](../../../design/module/scheduling/program-state-machine.md)
+- [Progress-TTL scheduling](../../../design/module/scheduling/progress-ttl-scheduling.md)
+- [vLLM runtime integration](../../../design/module/scheduling/vllm-runtime-integration.md)
+
+These documents define Program lifecycle transitions, Progress-TTL capacity and continuity decisions, and the
+boundary between AgentInfer admission control and vLLM's native scheduler.
+
 ## AgentCache Skills
 
 - [Skills design](../../../design/superpowers/specs/agentcache-skills-design.md)
