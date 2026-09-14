@@ -17,9 +17,9 @@ experiment:
 
 dataset:
   name: swebench_verified
-  index_path: ../data/swebench/instances.jsonl
-  selection_path: ../data/swebench/task-lists/default.txt
-  cache_dir: repo-cache
+  index_path: data/swebench/instances.jsonl
+  selection_path: data/swebench/task-lists/default.txt
+  cache_dir: data/swebench/repo-cache
 
 agent:
   type: claude
@@ -40,11 +40,6 @@ request_proxy:
   request_timeout_seconds: 3600
   startup_timeout_seconds: 120.0
   shutdown_timeout_seconds: 30.0
-
-router:
-  enabled: false
-  base_url: null
-  control_timeout_seconds: 10.0
 ```
 
 ## `experiment`
@@ -64,16 +59,16 @@ router:
 | Field | Default | Constraint and meaning |
 | --- | --- | --- |
 | `name` | `swebench_verified` | The only currently supported dataset name. |
-| `index_path` | `../data/swebench/instances.jsonl` | SWE-bench metadata in JSONL format. |
-| `selection_path` | `../data/swebench/task-lists/default.txt` | Ordered task IDs, one per line. |
-| `cache_dir` | `repo-cache` | Shared Git repository cache for tasks. |
+| `index_path` | `data/swebench/instances.jsonl` | SWE-bench metadata in JSONL format. |
+| `selection_path` | `data/swebench/task-lists/default.txt` | Ordered task IDs, one per line. |
+| `cache_dir` | `data/swebench/repo-cache` | Shared Git repository cache for tasks. |
 
 ## `agent`
 
 | Field | Default | Constraint and meaning |
 | --- | --- | --- |
-| `type` | `claude` | The only currently supported agent runtime. |
-| `profile` | `single` | Either `single` or `plan-subagent`. |
+| `type` | `claude` | `claude`, `jiuwenswarm`, or `dsh`. |
+| `profile` | `single` | Claude/DSH: `single` or `plan-subagent`; JiuwenSwarm: `code.normal`. |
 | `executable` | `claude` | Claude Code command name or path. |
 | `tmux_startup_seconds` | `2.0` | tmux session startup wait; must be `>= 0`. |
 | `terminal_capture_interval_seconds` | `30` | Terminal evidence capture interval; must be `>= 1`. |
@@ -88,7 +83,7 @@ permission setup.
 | `type` | `vllm` | The only currently supported backend type. |
 | `base_url` | `http://127.0.0.1:8000` | vLLM API base URL. |
 | `model` | `Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8` | Model name sent in Claude Code requests. |
-| `endpoint` | `/v1/messages` | Only the Anthropic Messages endpoint is supported. |
+| `endpoint` | `/v1/messages` | Claude uses `/v1/messages`; JiuwenSwarm/DSH use `/v1/chat/completions`. |
 | `api_key_env` | `null` | Optional API-key environment variable name; never put the secret value in YAML. |
 
 ## `request_proxy`
@@ -100,19 +95,17 @@ permission setup.
 | `startup_timeout_seconds` | `120.0` | Proxy startup timeout; must be `>= 0`. |
 | `shutdown_timeout_seconds` | `30.0` | Bounded in-flight shutdown wait; must be `> 0`. |
 
-## `router`
-
-| Field | Default | Constraint and meaning |
-| --- | --- | --- |
-| `enabled` | `false` | Whether Router control is enabled. |
-| `base_url` | `null` | Router control API URL. |
-| `control_timeout_seconds` | `10.0` | Router registration and cleanup timeout; must be `> 0`. |
-
-`enabled` and `base_url` must be enabled or disabled together. Keep Router disabled for scheduler-only comparisons.
-
 ## Path Resolution
 
 YAML `result_dir`, dataset paths, and an `agent.executable` containing directories resolve relative to the YAML file.
 A bare executable name is found through `PATH`. Paths supplied as CLI overrides resolve from the invocation directory.
 
 See [Benchmark CLI](benchmark-cli.md) for override fields and flag names.
+
+## Transparent Router and Replay
+
+For Router runs, set `backend.base_url` to the Router URL and optional `backend.metrics_url` to the complete vLLM
+`/metrics` URL. By default, `/metrics` is appended to `base_url`. The legacy `router` section and session
+registration control protocol are no longer accepted.
+
+Replay uses separate `experiment`, `backend`, and `replay` sections; see [Trace Replay](../how-to/run-trace-replay.md).

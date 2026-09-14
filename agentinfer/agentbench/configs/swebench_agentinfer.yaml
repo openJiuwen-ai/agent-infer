@@ -1,4 +1,7 @@
 # SWE-bench Verified on the AgentInfer stack through Router.
+#
+# This config works for both Claude Code and JiuwenSwarm. Adjust the agent section
+# and pass --agent-executable / --agent-profile on the command line, or edit below.
 
 # === Experiment: per-run execution limits ===
 experiment:
@@ -17,18 +20,33 @@ dataset:
   selection_path: ../data/swebench/task-lists/default.txt  # ordered task IDs
   cache_dir: ../data/swebench/repo-cache  # shared git repository cache
 
-# === Agent: Claude Code subprocess ===
+# === Agent: Claude Code or JiuwenSwarm subprocess ===
 agent:
-  type: claude                         # agent runtime implementation; currently only claude
+  # For Claude Code:
+  type: claude                         # agent runtime implementation
   profile: plan-subagent               # single | plan-subagent
   executable: claude                   # PATH lookup when bare; relative paths resolve from this YAML
-  # tmux_startup_seconds: 2.0          # optional: wait for the tmux session to become ready
+
+  # For JiuwenSwarm (uncomment, comment out the Claude lines above,
+  # and set backend.endpoint to /v1/chat/completions):
+  # type: jiuwenswarm
+  # profile: code.normal
+  # executable: jiuwenswarm
+
+  # For DeepSeek Harness (uncomment, comment out the Claude lines above,
+  # and set backend.endpoint to /v1/chat/completions):
+  # type: dsh
+  # profile: plan-subagent              # single | plan-subagent
+  # executable: dsh
+
+  # tmux_startup_seconds: 2.0          # optional: wait for the tmux session to become ready (Claude only)
   # terminal_capture_interval_seconds: 30  # optional: capture the tmux pane every N seconds for debugging
 
 # === Backend: upstream LLM ===
 backend:
   type: vllm                           # backend type; currently only vllm
-  base_url: http://127.0.0.1:8000      # vLLM Anthropic-compatible API base URL
+  base_url: http://127.0.0.1:8400      # transparent Router request upstream
+  metrics_url: http://127.0.0.1:8000/metrics  # direct vLLM Prometheus endpoint
   model: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8  # model used by Claude Code requests
   endpoint: /v1/messages               # e.g., Anthropic Messages endpoint
   api_key_env: null                    # environment variable containing the API key; null = none
@@ -39,9 +57,3 @@ request_proxy:
   request_timeout_seconds: 3600        # timeout for a proxied request
   startup_timeout_seconds: 120         # wait for Request Proxy readiness
   shutdown_timeout_seconds: 30         # bounded graceful shutdown timeout
-
-# === Router: enabled for the AgentInfer candidate ===
-router:
-  enabled: true                        # candidate registers and cleans up each session
-  base_url: http://127.0.0.1:8400      # AgentInfer Router control and data-plane base URL
-  control_timeout_seconds: 10          # timeout for Router registration and cleanup requests

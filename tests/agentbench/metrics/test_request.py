@@ -7,6 +7,7 @@ from agentinfer.agentbench.benchkit.metrics.request import (
     LatencyStats,
     aggregate_request_metrics,
     derive_session_topology,
+    request_tpot,
 )
 from agentinfer.agentbench.request_proxy.request_trace import RequestFact
 
@@ -86,6 +87,15 @@ def test_aggregate_request_metrics_handles_empty_and_zero_input() -> None:
     assert zero.cache_creation_input_tokens == 0
     assert zero.cached_input_tokens == 0
     assert zero.prefix_cache_hit_rate is None
+
+
+def test_request_tpot_reports_value_and_unavailable_reasons() -> None:
+    assert request_tpot(_fact()) == (0.8 / 3, None)
+    assert request_tpot(_fact(status="error")) == (None, "request_failed")
+    assert request_tpot(_fact(ttft_seconds=None)) == (None, "missing_ttft")
+    assert request_tpot(_fact(output_tokens=None)) == (None, "missing_output_tokens")
+    assert request_tpot(_fact(output_tokens=1)) == (None, "output_tokens_le_1")
+    assert request_tpot(_fact(latency_seconds=0.1)) == (None, "latency_before_ttft")
 
 
 def test_aggregate_request_metrics_preserves_cache_telemetry_availability() -> None:

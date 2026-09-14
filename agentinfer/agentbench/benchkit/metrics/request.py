@@ -47,7 +47,9 @@ class ObservedTopology:
     agent_roles: dict[str, str]
 
 
-def _stats(values: list[float]) -> LatencyStats:
+def latency_stats(values: list[float]) -> LatencyStats:
+    """Summarize latency samples using the benchmark percentiles."""
+
     if not values:
         return LatencyStats(None, None, None, None)
     return LatencyStats(
@@ -56,6 +58,22 @@ def _stats(values: list[float]) -> LatencyStats:
         float(quantile(values, 0.95)),
         float(quantile(values, 0.99)),
     )
+
+
+def request_tpot(fact: RequestFact) -> tuple[float | None, str | None]:
+    """Return average post-first-token latency and an unavailable reason."""
+
+    if fact.status != "success":
+        return None, "request_failed"
+    if fact.ttft_seconds is None:
+        return None, "missing_ttft"
+    if fact.output_tokens is None:
+        return None, "missing_output_tokens"
+    if fact.output_tokens <= 1:
+        return None, "output_tokens_le_1"
+    if fact.latency_seconds < fact.ttft_seconds:
+        return None, "latency_before_ttft"
+    return (fact.latency_seconds - fact.ttft_seconds) / (fact.output_tokens - 1), None
 
 
 def aggregate_request_metrics(facts: Iterable[RequestFact]) -> RequestMetrics:
@@ -80,8 +98,8 @@ def aggregate_request_metrics(facts: Iterable[RequestFact]) -> RequestMetrics:
         cache_creation,
         cached,
         cached / eligible_input if cache_creation is not None and cached is not None and eligible_input else None,
-        _stats([row.latency_seconds for row in rows]),
-        _stats([row.ttft_seconds for row in rows if row.ttft_seconds is not None]),
+        latency_stats([row.latency_seconds for row in rows]),
+        latency_stats([row.ttft_seconds for row in rows if row.ttft_seconds is not None]),
     )
 
 

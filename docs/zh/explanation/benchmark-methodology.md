@@ -58,3 +58,10 @@ model.patch
 
 执行步骤见[运行基准测试](../how-to/run-benchmark.md)，证据文件见
 [运行产物参考](../reference/run-artifacts.md)。
+
+## 多 Agent 与回放边界
+
+BenchKit 支持 Claude Code、JiuwenSwarm 和 DSH，但一个配对实验必须保持运行时和 profile 一致。请求代理透明转发，身份优先来自规范化元数据；DSH 原生会话头仅提供降级识别，不能单独证明子
+Agent 角色。
+
+Trace Replay 复原请求负载与依赖，不能声称恢复原始工具语义或补丁正确性；比较时还需固定 trace、抽样种子和合成前缀预算。

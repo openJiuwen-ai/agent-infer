@@ -11,7 +11,9 @@ manage terminal interaction.
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from ...benchkit.dataset import Task
+from ...benchkit.dataset import IMPLEMENTATION_CONSTRAINTS, Task, task_context
+
+REQUIRED_ENDPOINT = "/v1/messages"
 
 
 @dataclass(frozen=True)
@@ -42,29 +44,12 @@ class ClaudeProfile:
     interaction_profile: str
 
 
-def _task_context(task: Task) -> str:
-    """Render task identity, problem, and test constraints shared by prompts."""
-
-    prompt = f"""Instance: {task.instance_id}
-Repository: {task.repo}
-Base commit: {task.base_commit}
-
-Problem statement:
-{task.problem_statement}
-"""
-    if task.fail_to_pass:
-        prompt += "FAIL_TO_PASS test cases (the fix should make these pass):\n" + "\n".join(task.fail_to_pass) + "\n"
-    if task.pass_to_pass:
-        prompt += "PASS_TO_PASS test cases (must not break these):\n" + "\n".join(task.pass_to_pass) + "\n"
-    return prompt
-
-
 def _plan_subagent_prompt(task: Task) -> str:
     """Build the prompt for lead-driven planning with focused subagents."""
 
     return f"""You are the lead of a coding team solving this SWE-bench task.
 
-{_task_context(task)}
+{task_context(task)}
 You must call EnterPlanMode before investigating or implementing the fix.
 While in plan mode:
 - Use at least one focused Explore subagent to trace the root cause and inspect relevant code.
@@ -76,13 +61,7 @@ While in plan mode:
 After exiting plan mode, write the final patch yourself. Do not create an Agent Team.
 Test the fix when practical and summarize the changes.
 
-Constraints:
-- Inspect the code first to understand the issue.
-- Make minimal changes to fix the problem.
-- Run the existing tests to ensure nothing is broken.
-- Implement the fix by editing files in the repository.
-- Do not only print or describe a patch; modify the files directly.
-- When you are done, stop and wait at the prompt.
+{IMPLEMENTATION_CONSTRAINTS}- When you are done, stop and wait at the prompt.
 """
 
 
@@ -91,16 +70,10 @@ def _single_prompt(task: Task) -> str:
 
     return f"""You are an AI coding agent. Solve this SWE-bench task.
 
-{_task_context(task)}
+{task_context(task)}
 Do not create subagents. Work directly in the repository to implement the fix.
 
-Constraints:
-- Inspect the code first to understand the issue.
-- Make minimal changes to fix the problem.
-- Run the existing tests to ensure nothing is broken.
-- Implement the fix by editing files in the repository.
-- Do not only print or describe a patch; modify the files directly.
-- When you are done, stop and wait at the prompt.
+{IMPLEMENTATION_CONSTRAINTS}- When you are done, stop and wait at the prompt.
 """
 
 

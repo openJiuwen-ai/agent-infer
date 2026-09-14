@@ -2,16 +2,13 @@
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 
 import asyncio
+import json
 from dataclasses import asdict
 from pathlib import Path
 
 import pytest
 
-from agentinfer.agentbench.request_proxy.request_trace import (
-    RequestFact,
-    RequestTraceWriter,
-    load_request_facts,
-)
+from agentinfer.agentbench.request_proxy.request_trace import RequestFact, RequestTraceWriter, load_request_facts
 
 
 def fact(request_id: str = "r1") -> RequestFact:
@@ -153,8 +150,6 @@ def test_writer_rejects_submissions_after_failure(tmp_path: Path, monkeypatch: p
 
 
 def test_load_request_facts_filters_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import json
-
     path = tmp_path / "requests.jsonl"
     other = RequestFact(**(asdict(fact("r2")) | {"session_id": "other"}))
     path.write_text(
@@ -168,8 +163,6 @@ def test_load_request_facts_filters_session(tmp_path: Path, monkeypatch: pytest.
 
 
 def test_load_request_facts_preserves_valid_prefix_before_incomplete_tail(tmp_path: Path) -> None:
-    import json
-
     path = tmp_path / "requests.jsonl"
     path.write_text(json.dumps(asdict(fact())) + '\n{"request_id":', encoding="utf-8")
 
@@ -177,8 +170,6 @@ def test_load_request_facts_preserves_valid_prefix_before_incomplete_tail(tmp_pa
 
 
 def test_load_request_facts_rejects_complete_malformed_record(tmp_path: Path) -> None:
-    import json
-
     path = tmp_path / "requests.jsonl"
     path.write_text(json.dumps(asdict(fact())) + "\nnot-json\n", encoding="utf-8")
 

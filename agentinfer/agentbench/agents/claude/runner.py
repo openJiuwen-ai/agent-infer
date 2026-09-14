@@ -12,8 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ...benchkit.workspace import export_patch, workspace_has_changes
-from ..contracts import AgentRunRequest, AgentRunResult
-from ..outcomes import AgentRunOutcome, TerminationReason
+from ..contracts import AgentRunOutcome, AgentRunRequest, AgentRunResult, TerminationReason
 from .interaction import InteractionContext, InteractionController, InteractionState, handler_types_for_profile
 from .profiles import get_profile
 from .settings import bootstrap_claude_state, build_claude_env, build_claude_settings
@@ -250,7 +249,11 @@ async def run_claude(request: AgentRunRequest) -> AgentRunResult:
     await asyncio.to_thread(bootstrap_claude_state, claude_state_dir)
 
     settings_path = artifact_dir / "claude-settings.json"
-    settings = build_claude_settings(request.api_base_url, request.model)
+    settings = build_claude_settings(
+        request.api_base_url,
+        request.model,
+        workspace=str(request.workspace),
+    )
     await _write_text_async(settings_path, json.dumps(settings, indent=2))
 
     assignments = build_claude_env(
@@ -436,6 +439,7 @@ async def run_claude(request: AgentRunRequest) -> AgentRunResult:
 
         result.auto_yes_confirmations = state.auto_yes_confirmations
         result.auto_plan_approvals = state.auto_plan_approvals
+        result.auto_generic_selections = state.auto_generic_selections
         try:
             await asyncio.wait_for(
                 _collect_final_evidence(

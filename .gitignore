@@ -207,6 +207,9 @@ tempCodeRunnerFile.py
 # Ruff stuff:
 .ruff_cache/
 
+# Local backend calibration artifacts
+tools/calibration/results/
+
 # PyPI configuration file
 .pypirc
 

@@ -75,6 +75,8 @@ The installed `vllm` command delegates ordinary commands to upstream vLLM. Expli
 
 This project is licensed under the [Apache License 2.0](LICENSE).
 
-This product serves solely as a workflow orchestration tool and does not embed any AI model capabilities. When users integrate AI models for specific business scenarios, they shall bear full responsibility for compliance obligations under the EU AI Act and other relevant regulatory frameworks.
+This product serves solely as a workflow orchestration tool and does not embed any AI model capabilities. When
+users integrate AI models for specific business scenarios, they shall bear full responsibility for compliance
+obligations under the EU AI Act and other relevant regulatory frameworks.
 
 [release-wheel]: https://github.com/openjiuwen-ai/agent-infer/releases/download/0.1.0/agentinfer-0.1.0-py3-none-any.whl

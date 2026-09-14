@@ -63,3 +63,12 @@ runs and retain service logs, raw metrics, and task artifacts for both arms.
 
 See [Run a benchmark](../how-to/run-benchmark.md) for the procedure and
 [Run artifacts](../reference/run-artifacts.md) for evidence files.
+
+## Multiple agents and replay boundaries
+
+BenchKit supports Claude Code, JiuwenSwarm, and DSH, but paired runs must use the same runtime and profile. The
+request proxy forwards transparently and prefers canonical identity metadata; the native DSH session header is a
+fallback and cannot establish subagent roles by itself.
+
+Trace Replay reconstructs request workloads and dependencies, not original tool semantics or patch correctness.
+Comparisons must also fix the trace, sample seed, and synthetic prefix budgets.
