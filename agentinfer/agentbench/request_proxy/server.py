@@ -23,15 +23,11 @@ from starlette.types import Receive, Scope, Send
 
 from agentinfer.scheduling.headers import (
     AgentRequestIdentity,
-    select_router_headers,
-)
-from agentinfer.scheduling.headers import (
     parse_agent_identity as parse_header_identity,
+    select_router_headers,
 )
 from agentinfer.scheduling.identity import (
     MetadataError,
-)
-from agentinfer.scheduling.identity import (
     parse_agent_identity as parse_canonical_identity,
 )
 
