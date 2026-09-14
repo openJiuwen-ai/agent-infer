@@ -2,16 +2,16 @@
 
 ## TRIGGER
 
-Applies when the diff changes cache behaviour (hit/miss path, eviction,
-keying) or anything under `benchmarks/`.
+Applies when the diff changes cache behavior, scheduling or admission decisions,
+request handling, or anything under `agentinfer/agentbench/` or
+`tests/agentbench/`.
 
 ## CRITERION P1: no unmeasured perf claim
 
 - **Severity:** blocker
 - **Check:** Any claim in the PR description that the change "improves" /
-  "does not regress" performance is backed by a
-  `benchmarks/results/*.json` run compared against
-  `benchmarks/baseline.json` (per `ac-benchmark`).
+  "does not regress" performance is backed by a benchmark run compared against
+  baseline (per `ac-benchmark`).
 - **Fix:** Run `ac-benchmark`, attach the result file, and report the
   measured deltas.
 
@@ -25,7 +25,7 @@ keying) or anything under `benchmarks/`.
 ## CRITERION P3: baseline only updated with a measured run
 
 - **Severity:** blocker
-- **Check:** If `benchmarks/baseline.json` is modified, the PR includes the
-  result file that justifies the new baseline.
+- **Check:** If the baseline is modified, the PR includes the result file that
+  justifies the new baseline.
 - **Fix:** Attach the measured run; if none justifies it, revert the
   baseline change.
