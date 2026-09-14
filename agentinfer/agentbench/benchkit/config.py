@@ -30,29 +30,48 @@ class DatasetConfig(StrictModel):
     name: Literal["swebench_verified"] = Field(
         "swebench_verified", json_schema_extra={"cli": {"flag": "--dataset-name"}}
     )
-    index_path: Path = Field(Path("../data/swebench/instances.jsonl"), json_schema_extra={"cli": True})
-    selection_path: Path = Field(Path("../data/swebench/task-lists/default.txt"), json_schema_extra={"cli": True})
-    cache_dir: Path = Path("repo-cache")
+    index_path: Path = Field(Path("data/swebench/instances.jsonl"), json_schema_extra={"cli": True})
+    selection_path: Path = Field(Path("data/swebench/task-lists/default.txt"), json_schema_extra={"cli": True})
+    cache_dir: Path = Path("data/swebench/repo-cache")
 
 
 class AgentConfig(StrictModel):
-    type: Literal["claude"] = Field("claude", json_schema_extra={"cli": {"flag": "--agent-type", "dest": "agent_type"}})
-    profile: Literal["single", "plan-subagent"] = Field(
-        "single", json_schema_extra={"cli": {"flag": "--agent-profile", "dest": "agent_profile"}}
+    type: Literal["claude", "jiuwenswarm", "dsh"] = Field(
+        "claude", json_schema_extra={"cli": {"flag": "--agent-type", "dest": "agent_type"}}
     )
+    profile: str = Field("single", json_schema_extra={"cli": {"flag": "--agent-profile", "dest": "agent_profile"}})
     executable: Path = Field(
         Path("claude"), json_schema_extra={"cli": {"flag": "--agent-executable", "dest": "agent_executable"}}
     )
     tmux_startup_seconds: float = Field(2.0, ge=0)
     terminal_capture_interval_seconds: int = Field(30, ge=1)
 
+    @model_validator(mode="after")
+    def validate_runtime_profile(self) -> "AgentConfig":
+        """Validate the profile against the selected runtime."""
+
+        from ..agents.registry import get_runtime
+
+        try:
+            get_runtime(self.type).get_profile(self.profile)
+        except ValueError as exc:
+            raise ValueError(f"agent.profile {self.profile!r} is invalid for agent.type {self.type!r}") from exc
+        return self
+
 
 class BackendConfig(StrictModel):
     type: Literal["vllm"] = "vllm"
     base_url: str = Field("http://127.0.0.1:8000", json_schema_extra={"cli": True})
+    metrics_url: str | None = Field(None, json_schema_extra={"cli": {"flag": "--metrics-url"}})
     model: str = Field("Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8", json_schema_extra={"cli": True})
-    endpoint: Literal["/v1/messages"] = Field("/v1/messages", json_schema_extra={"cli": True})
+    endpoint: str = Field("/v1/messages", json_schema_extra={"cli": True})
     api_key_env: str | None = None
+
+    @property
+    def effective_metrics_url(self) -> str:
+        """Return the complete Prometheus endpoint used for vLLM evidence."""
+
+        return self.metrics_url or f"{self.base_url.rstrip('/')}/metrics"
 
 
 class RequestProxyConfig(StrictModel):
@@ -89,27 +108,26 @@ class RequestProxyConfig(StrictModel):
         return urlparse(self.listen_url).port or 0
 
 
-class RouterConfig(StrictModel):
-    enabled: bool = Field(False, json_schema_extra={"cli": True})
-    base_url: str | None = Field(None, json_schema_extra={"cli": {"flag": "--router-url", "dest": "router_url"}})
-    control_timeout_seconds: float = Field(10.0, gt=0)
-
-    @model_validator(mode="after")
-    def validate_enabled_url(self) -> "RouterConfig":
-        """Require Router enablement and its base URL to be configured together."""
-
-        if self.enabled != bool(self.base_url):
-            raise ValueError("router.enabled requires router.base_url, and a base_url requires enabled=true")
-        return self
-
-
 class AgentBenchConfig(StrictModel):
     experiment: ExperimentConfig = Field(default_factory=ExperimentConfig)
     dataset: DatasetConfig = Field(default_factory=DatasetConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     backend: BackendConfig = Field(default_factory=BackendConfig)
     request_proxy: RequestProxyConfig = Field(default_factory=RequestProxyConfig)
-    router: RouterConfig = Field(default_factory=RouterConfig)
+
+    @model_validator(mode="after")
+    def validate_agent_endpoint(self) -> "AgentBenchConfig":
+        """Require the model protocol used by the selected runtime."""
+
+        from ..agents.registry import get_runtime
+
+        required_endpoint = get_runtime(self.agent.type).required_endpoint
+        if self.backend.endpoint != required_endpoint:
+            raise ValueError(
+                f"backend.endpoint {self.backend.endpoint!r} is invalid for "
+                f"agent.type {self.agent.type!r}; expected {required_endpoint!r}"
+            )
+        return self
 
 
 def resolve_config_paths(config: AgentBenchConfig, base_dir: Path) -> AgentBenchConfig:
@@ -130,8 +148,20 @@ def resolve_config_paths(config: AgentBenchConfig, base_dir: Path) -> AgentBench
     return config
 
 
-def load_config(path: Path) -> AgentBenchConfig:
-    """Load, validate, and resolve a benchmark YAML configuration."""
+def load_config(path: Path | None = None) -> AgentBenchConfig:
+    """Load, validate, and resolve a benchmark YAML configuration.
 
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    return resolve_config_paths(AgentBenchConfig.model_validate(raw), path.resolve().parent)
+    When ``path`` is ``None``, build the config from model defaults and resolve
+    relative paths against the current working directory. Passing a path keeps
+    the YAML-anchored resolution where relative paths resolve from the file's
+    directory.
+    """
+
+    if path is not None:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        config = AgentBenchConfig.model_validate(raw)
+        base_dir = path.resolve().parent
+    else:
+        config = AgentBenchConfig()
+        base_dir = Path.cwd()
+    return resolve_config_paths(config, base_dir)

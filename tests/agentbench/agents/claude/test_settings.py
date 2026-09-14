@@ -25,10 +25,10 @@ def test_bootstrap_writes_onboarding_and_trust_state(tmp_path: Path) -> None:
     assert state["projectTrustAccepted"] is True
 
 
-def test_settings_never_contain_auth_token(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_settings_never_contain_auth_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "unique-secret")
 
-    settings = build_claude_settings("http://proxy", "glm-5")
+    settings = build_claude_settings("http://proxy", "glm-5", workspace=str(tmp_path))
 
     assert settings["env"]["ANTHROPIC_BASE_URL"] == "http://proxy"
     assert settings["env"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "glm-5"

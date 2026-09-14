@@ -10,7 +10,6 @@ import pytest
 
 from agentinfer.agentbench.benchkit.cli import (
     _apply_cli_overrides,
-    _explicit_overrides,
     _parser,
     _prepare,
     _resolve_cli_path,
@@ -22,26 +21,23 @@ from agentinfer.agentbench.benchkit.config import AgentBenchConfig, load_config
 
 def _config(path: Path) -> None:
     path.write_text(
-        "experiment:\n  result_dir: relative-results\nrouter:\n  enabled: false\n  base_url: null\n",
+        "experiment:\n  result_dir: relative-results\n",
         encoding="utf-8",
     )
 
 
-def test_schema_overrides_revalidate_router_and_preserve_false_metadata(tmp_path: Path) -> None:
+def test_schema_overrides_metrics_url(tmp_path: Path) -> None:
     parser = _parser()
     config = AgentBenchConfig()
 
-    enabled = parser.parse_args(["run", "--config", "c.yaml", "--enabled", "--router-url", "http://router"])
-    assert _apply_cli_overrides(enabled, config).router.model_dump() == {
-        "enabled": True,
-        "base_url": "http://router",
-        "control_timeout_seconds": 10.0,
-    }
+    args = parser.parse_args(["run", "--config", "c.yaml", "--metrics-url", "http://vllm:8000/metrics"])
+    assert _apply_cli_overrides(args, config).backend.metrics_url == "http://vllm:8000/metrics"
 
-    disabled = parser.parse_args(["run", "--config", "c.yaml", "--no-enabled"])
-    assert _explicit_overrides(disabled)["enabled"] is False
-    with pytest.raises(ValueError, match="router.enabled"):
-        _apply_cli_overrides(parser.parse_args(["run", "--config", "c.yaml", "--router-url", "http://router"]), config)
+
+@pytest.mark.parametrize("flag", ["--enabled", "--no-enabled", "--router-url"])
+def test_removed_router_cli_flags_are_rejected(flag: str) -> None:
+    with pytest.raises(SystemExit):
+        _parser().parse_args(["run", flag, "http://router"] if flag == "--router-url" else ["run", flag])
 
 
 def test_cli_paths_are_cwd_relative_and_bare_executable_is_preserved(
@@ -73,12 +69,80 @@ def test_run_delegates_to_runner_with_metadata(tmp_path: Path, monkeypatch: pyte
     runner.run_benchmark = AsyncMock(return_value=tmp_path / "run")
     monkeypatch.setitem(sys.modules, runner.__name__, runner)
 
-    assert main(["run", "--config", str(config_path), "--task-num", "2", "--no-enabled"]) == 0
+    assert main(["run", "--config", str(config_path), "--task-num", "2"]) == 0
     call = runner.run_benchmark.await_args
     assert call.args[0].experiment.task_num == 2
     assert "config_path" not in call.kwargs
     assert call.kwargs["cli_metadata"]["config_path"] == str(config_path)
-    assert call.kwargs["cli_metadata"]["overrides"] == {"task_num": 2, "enabled": False}
+    assert call.kwargs["cli_metadata"]["overrides"] == {"task_num": 2}
+
+
+def test_run_without_config_uses_defaults_and_omits_config_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = types.ModuleType("agentinfer.agentbench.benchkit.runner")
+    runner.run_benchmark = AsyncMock(return_value=tmp_path / "run")
+    monkeypatch.setitem(sys.modules, runner.__name__, runner)
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["run", "--task-num", "2"]) == 0
+    call = runner.run_benchmark.await_args
+    assert call.args[0].experiment.task_num == 2
+    assert call.args[0].dataset.index_path == tmp_path / "data/swebench/instances.jsonl"
+    assert call.args[0].dataset.selection_path == tmp_path / "data/swebench/task-lists/default.txt"
+    assert call.args[0].dataset.cache_dir == tmp_path / "data/swebench/repo-cache"
+    assert "config_path" not in call.kwargs["cli_metadata"]
+    assert call.kwargs["cli_metadata"]["overrides"] == {"task_num": 2}
+
+
+def test_replay_delegates_to_planner_with_replay_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.jsonl"
+    source.write_text("", encoding="utf-8")
+    config_path = tmp_path / "replay.yaml"
+    config_path.write_text(
+        f"""
+experiment:
+  result_dir: result
+replay:
+  trace_path: {source.name}
+""",
+        encoding="utf-8",
+    )
+    calls = []
+    runner = types.ModuleType("agentinfer.agentbench.replay.runner")
+
+    def plan(config, *, cli_metadata):
+        calls.append((config, cli_metadata))
+        return tmp_path / "result"
+
+    runner.run_replay = plan
+    monkeypatch.setitem(sys.modules, runner.__name__, runner)
+
+    assert (
+        main(
+            [
+                "replay",
+                "--config",
+                str(config_path),
+                "--task-num",
+                "2",
+                "--trace-path",
+                str(source),
+            ]
+        )
+        == 0
+    )
+    config, metadata = calls[0]
+    assert config.experiment.task_num == 2
+    assert config.replay.trace_path == source
+    assert metadata["config_path"] == str(config_path)
+    assert metadata["overrides"] == {
+        "task_num": 2,
+        "trace_path": str(source),
+    }
 
 
 def test_compare_delegates_to_owned_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
@@ -100,8 +164,8 @@ def test_summarize_combines_positional_runs(tmp_path: Path, monkeypatch: pytest.
     summarize_module.combine_summaries = lambda runs, **outputs: calls.append((runs, outputs))
     monkeypatch.setitem(sys.modules, summarize_module.__name__, summarize_module)
 
-    assert main(["summarize", str(run1), str(run2), "--output", str(output)]) == 0
-    assert calls == [([run1.resolve(), run2.resolve()], {"output": output.resolve()})]
+    assert main(["summarize", str(run1), str(run2), "--output-csv", str(output)]) == 0
+    assert calls == [([run1.resolve(), run2.resolve()], {"output": output.resolve(), "figures_dir": None})]
 
 
 def test_summarize_accepts_one_run_and_uses_default_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -113,7 +177,25 @@ def test_summarize_accepts_one_run_and_uses_default_outputs(tmp_path: Path, monk
     monkeypatch.chdir(tmp_path)
 
     assert main(["summarize", str(run_dir)]) == 0
-    assert calls == [([run_dir.resolve()], {"output": tmp_path / "combined-summary.csv"})]
+    assert calls == [([run_dir.resolve()], {"output": tmp_path / "combined-summary.csv", "figures_dir": None})]
+
+
+def test_summarize_passes_figures_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run1 = tmp_path / "run1"
+    run2 = tmp_path / "run2"
+    figures = tmp_path / "figures"
+    summarize_module = types.ModuleType("agentinfer.agentbench.benchkit.summarize")
+    calls = []
+    summarize_module.combine_summaries = lambda runs, **outputs: calls.append((runs, outputs))
+    monkeypatch.setitem(sys.modules, summarize_module.__name__, summarize_module)
+
+    assert main(["summarize", str(run1), str(run2), "--output-figs-dir", str(figures)]) == 0
+    assert calls == [
+        (
+            [run1.resolve(), run2.resolve()],
+            {"output": (Path.cwd() / "combined-summary.csv").resolve(), "figures_dir": figures.resolve()},
+        )
+    ]
 
 
 def test_prepare_delegates_to_dataset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -121,6 +203,19 @@ def test_prepare_delegates_to_dataset(tmp_path: Path, monkeypatch: pytest.Monkey
     dataset.prepare_swebench = lambda output: types.SimpleNamespace(rows=1, index_path=output / "instances.jsonl")
     monkeypatch.setitem(sys.modules, dataset.__name__, dataset)
     assert main(["prepare", "swebench", "--output-dir", str(tmp_path / "data")]) == 0
+
+
+def test_prepare_defaults_output_dir_to_data_swebench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[Path] = []
+    dataset = types.ModuleType("agentinfer.agentbench.benchkit.dataset")
+    dataset.prepare_swebench = lambda output: (
+        captured.append(output) or types.SimpleNamespace(rows=1, index_path=output / "instances.jsonl")
+    )
+    monkeypatch.setitem(sys.modules, dataset.__name__, dataset)
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["prepare", "swebench"]) == 0
+    assert captured == [tmp_path / "data/swebench"]
 
 
 def test_unsupported_cli_override_type_fails_during_discovery() -> None:

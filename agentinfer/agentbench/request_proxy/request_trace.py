@@ -45,6 +45,7 @@ class RequestFact:
     cached_tokens: int | None
     upstream: str
     error: str | None
+    request_purpose: str | None = None
 
 
 _REQUEST_FACT_ADAPTER = TypeAdapter(RequestFact)

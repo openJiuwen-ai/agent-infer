@@ -31,6 +31,7 @@ def launch_config(tmp_path: Path) -> RequestProxyLaunchConfig:
         shutdown_token="secret",
         stdout_path=tmp_path / "proxy.out",
         stderr_path=tmp_path / "proxy.err",
+        endpoint="/v1/messages",
     )
 
 
@@ -177,7 +178,7 @@ def test_lifecycle_start_readiness_authenticated_shutdown_join_and_idempotent_cl
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def run():
-        lifecycle = RequestProxyLifecycle(RequestProxyConfig(), "http://upstream", "run", tmp_path)
+        lifecycle = RequestProxyLifecycle(RequestProxyConfig(), "http://upstream", "run", tmp_path, "/v1/messages")
         process = FakeProcess(tmp_path, [None])
         lifecycle.process = process
         handle = await lifecycle.start()
@@ -214,7 +215,7 @@ def test_lifecycle_start_readiness_authenticated_shutdown_join_and_idempotent_cl
 def test_lifecycle_formats_ipv6_auto_and_fixed_ports(tmp_path: Path) -> None:
     async def run():
         auto = RequestProxyLifecycle(
-            RequestProxyConfig(listen_url="http://[::1]:0"), "http://upstream", "run", tmp_path
+            RequestProxyConfig(listen_url="http://[::1]:0"), "http://upstream", "run", tmp_path, "/v1/messages"
         )
         auto.process = FakeProcess(tmp_path, [])
         auto_handle = await auto.start()
@@ -223,7 +224,7 @@ def test_lifecycle_formats_ipv6_auto_and_fixed_ports(tmp_path: Path) -> None:
         assert auto.launch_config.port > 0
 
         fixed = RequestProxyLifecycle(
-            RequestProxyConfig(listen_url="http://[::1]:8123"), "http://upstream", "run", tmp_path
+            RequestProxyConfig(listen_url="http://[::1]:8123"), "http://upstream", "run", tmp_path, "/v1/messages"
         )
         fixed.process = FakeProcess(tmp_path, [])
         fixed_handle = await fixed.start()
@@ -238,7 +239,7 @@ def test_lifecycle_formats_ipv6_auto_and_fixed_ports(tmp_path: Path) -> None:
 
 def test_lifecycle_cancellation_terminates_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     async def run():
-        lifecycle = RequestProxyLifecycle(RequestProxyConfig(), "http://upstream", "run", tmp_path)
+        lifecycle = RequestProxyLifecycle(RequestProxyConfig(), "http://upstream", "run", tmp_path, "/v1/messages")
         process = FakeProcess(tmp_path, [])
         lifecycle.process = process
         lifecycle.handle = RequestProxyHandle("http://proxy", tmp_path / "requests.jsonl")
@@ -263,7 +264,7 @@ def test_lifecycle_reports_early_exit_and_uses_failure_termination(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def run():
-        lifecycle = RequestProxyLifecycle(RequestProxyConfig(), "http://upstream", "run", tmp_path)
+        lifecycle = RequestProxyLifecycle(RequestProxyConfig(), "http://upstream", "run", tmp_path, "/v1/messages")
         lifecycle.handle = RequestProxyHandle("http://proxy", tmp_path / "missing")
         lifecycle.process = FakeProcess(tmp_path, [7])
         monkeypatch.setattr(
@@ -282,7 +283,7 @@ def test_lifecycle_reports_early_exit_and_uses_failure_termination(
 
 def test_lifecycle_reports_nonzero_exit_after_shutdown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     async def run():
-        lifecycle = RequestProxyLifecycle(RequestProxyConfig(), "http://upstream", "run", tmp_path)
+        lifecycle = RequestProxyLifecycle(RequestProxyConfig(), "http://upstream", "run", tmp_path, "/v1/messages")
         process = FakeProcess(tmp_path, [])
         process.exit = ProcessExit(7, tmp_path / "out", tmp_path / "err")
         lifecycle.process = process

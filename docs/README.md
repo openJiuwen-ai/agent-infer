@@ -6,7 +6,7 @@ Reference 和 Explanation；开发者内部设计稿位于仓根目录的 `desig
 ## 中文文档
 
 - **Tutorial**：[快速开始](zh/tutorial/01-quick-start.md)，适合首次安装和运行 AgentInfer。
-- **How-to**：[接入 vLLM](zh/how-to/integrate-vllm.md)和[运行基准测试](zh/how-to/run-benchmark.md)，
+- **How-to**：[接入 vLLM](zh/how-to/integrate-vllm.md)和[运行基准测试](zh/how-to/run-benchmark.md)、[Trace Replay](zh/how-to/run-trace-replay.md)，
   用于完成具体任务。
 - **Integrations**：[AgentRouter native middleware 补丁](../agentinfer/agentrouter/README.md)。
 - **Reference**：[Python API](zh/reference/python-api.md)、[基准命令行](zh/reference/benchmark-cli.md)、
@@ -19,7 +19,8 @@ Reference 和 Explanation；开发者内部设计稿位于仓根目录的 `desig
 
 - **Tutorial**: [Quick start](en/tutorial/01-quick-start.md) for first-time installation and execution.
 - **How-to**: [Integrate with vLLM](en/how-to/integrate-vllm.md) and
-  [run a benchmark](en/how-to/run-benchmark.md) to complete specific tasks.
+  [run a benchmark](en/how-to/run-benchmark.md), [Trace Replay](en/how-to/run-trace-replay.md) to complete specific
+  tasks.
 - **Integrations**: [AgentRouter native middleware patch](../agentinfer/agentrouter/README.md).
 - **Reference**: [Python API](en/reference/python-api.md), [benchmark CLI](en/reference/benchmark-cli.md),
   [benchmark configuration](en/reference/benchmark-config.md), and

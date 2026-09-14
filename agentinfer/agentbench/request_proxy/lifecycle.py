@@ -42,11 +42,19 @@ class RequestProxyCloseResult:
 class RequestProxyLifecycle:
     """Coordinate proxy spawn, readiness, authenticated shutdown, and evidence recovery."""
 
-    def __init__(self, config: RequestProxyConfig, upstream_url: str, run_id: str, output_dir: Path) -> None:
+    def __init__(
+        self,
+        config: RequestProxyConfig,
+        upstream_url: str,
+        run_id: str,
+        output_dir: Path,
+        endpoint: str,
+    ) -> None:
         self.config = config
         self.upstream_url = upstream_url
         self.run_id = run_id
         self.output_dir = output_dir
+        self.endpoint = endpoint
         self.trace_path = output_dir / "requests.jsonl"
         self.token = secrets.token_urlsafe(32)
         stdout_path = self.output_dir / "proxy.stdout.log"
@@ -71,6 +79,7 @@ class RequestProxyLifecycle:
             shutdown_token=self.token,
             stdout_path=self.process.stdout_path,
             stderr_path=self.process.stderr_path,
+            endpoint=self.endpoint,
         )
         await self.process.start(self.launch_config)
         self.handle = RequestProxyHandle(base_url, self.trace_path)
@@ -137,9 +146,13 @@ class RequestProxyLifecycle:
 
 
 def create_request_proxy_lifecycle(
-    config: RequestProxyConfig, upstream_url: str, run_id: str, output_dir: Path
+    config: RequestProxyConfig,
+    upstream_url: str,
+    run_id: str,
+    output_dir: Path,
+    endpoint: str = "/v1/messages",
 ) -> RequestProxyLifecycle:
-    return RequestProxyLifecycle(config, upstream_url, run_id, output_dir)
+    return RequestProxyLifecycle(config, upstream_url, run_id, output_dir, endpoint)
 
 
 def _available_port(host: str) -> int:

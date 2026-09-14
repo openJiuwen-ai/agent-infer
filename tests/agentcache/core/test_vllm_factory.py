@@ -168,3 +168,17 @@ def test_factory_rejects_unknown_policy_settings(settings: dict[str, int], messa
 def test_factory_rejects_non_finite_numeric_settings(invalid_value: int | float) -> None:
     with pytest.raises(ValueError, match="must be finite"):
         build_progress_ttl_controller(backend(), {"progress_ttl": {"ttl_min_seconds": invalid_value}})
+
+
+def test_benchmark_launcher_policy_is_supported_by_destination_factory() -> None:
+    """The migrated benchmark launcher must start with the retained scheduler."""
+    import json
+    import re
+    from pathlib import Path
+
+    launcher = Path(__file__).resolve().parents[2] / "agentbench" / "run-scheduler-e2e-compare.sh"
+    match = re.search(r"additional_config=\$\(printf '([^']+)'", launcher.read_text())
+    assert match is not None, "benchmark launcher must construct its candidate configuration"
+    settings = json.loads(match.group(1) % ("vllm-local", "/tmp/benchmark-config-test.sock", 5))["agentcache"]
+    controller = build_progress_ttl_controller(backend(), settings)
+    assert controller is not None

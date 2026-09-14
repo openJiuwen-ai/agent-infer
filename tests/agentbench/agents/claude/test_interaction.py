@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 from agentinfer.agentbench.agents.claude.interaction import (
+    GenericSelectionHandler,
     InteractionContext,
     InteractionController,
     InteractionState,
@@ -15,7 +16,25 @@ from agentinfer.agentbench.agents.claude.interaction import (
     PlanApprovalHandler,
     StartupDialogHandler,
     YesConfirmationHandler,
+    handler_types_for_profile,
 )
+
+_ASK_USER_QUESTION_TERMINAL = """
+Does the failing test expect properties to inherit docstrings?
+
+❯ 1. Properties should inherit docstrings
+  2. Test needs to be fixed
+  3. I need to see more examples
+
+Enter to select • ↑/↓ to navigate • Esc to cancel
+"""
+
+
+def _selection_controller() -> InteractionController:
+    return InteractionController(
+        handler_types_for_profile("plan-subagent"),
+        enable_idle_detection=False,
+    )
 
 
 @pytest.mark.parametrize(
@@ -105,3 +124,56 @@ def test_plan_prompt_suppression_ignores_dynamic_updates_and_resets_after_disapp
 
     exit_plan = "Exit plan mode?\nClaude wants to exit plan mode\n❯ Yes"
     assert controller.process(InteractionContext(exit_plan, None, 2.5, state)).kind == "send_keys"
+
+
+def test_generic_selection_handles_non_yes_ask_user_question() -> None:
+    state = InteractionState(startup_dismissed=True)
+    action = _selection_controller().process(InteractionContext(_ASK_USER_QUESTION_TERMINAL, None, 10.0, state))
+
+    assert action.kind == "send_keys"
+    assert action.keys == "Enter"
+    assert state.auto_generic_selections == 1
+
+
+def test_generic_selection_requires_highlighted_numbered_option() -> None:
+    terminal = """
+> 1. Quoted first option
+> 2. Quoted second option
+
+Enter to select
+"""
+    ctx = InteractionContext(terminal, None, 10.0, InteractionState(startup_dismissed=True))
+
+    assert GenericSelectionHandler().recognize(ctx) is False
+
+
+def test_generic_selection_retries_once_after_delay_then_stops() -> None:
+    state = InteractionState(startup_dismissed=True)
+    controller = _selection_controller()
+
+    assert controller.process(InteractionContext(_ASK_USER_QUESTION_TERMINAL, None, 10.0, state)).kind == "send_keys"
+    assert controller.process(InteractionContext(_ASK_USER_QUESTION_TERMINAL, None, 14.9, state)).kind == "none"
+    assert controller.process(InteractionContext(_ASK_USER_QUESTION_TERMINAL, None, 15.0, state)).kind == "send_keys"
+    assert controller.process(InteractionContext(_ASK_USER_QUESTION_TERMINAL, None, 20.0, state)).kind == "none"
+    assert state.auto_generic_selections == 2
+
+
+def test_generic_selection_retry_budget_resets_after_prompt_clears() -> None:
+    state = InteractionState(startup_dismissed=True)
+    controller = _selection_controller()
+
+    assert controller.process(InteractionContext(_ASK_USER_QUESTION_TERMINAL, None, 10.0, state)).kind == "send_keys"
+    assert controller.process(InteractionContext(_ASK_USER_QUESTION_TERMINAL, None, 15.0, state)).kind == "send_keys"
+    assert controller.process(InteractionContext("Working", None, 16.0, state)).kind == "none"
+    assert controller.process(InteractionContext(_ASK_USER_QUESTION_TERMINAL, None, 20.0, state)).kind == "send_keys"
+    assert state.auto_generic_selections == 3
+
+
+def test_generic_selection_does_not_claim_yes_prompt() -> None:
+    terminal = _ASK_USER_QUESTION_TERMINAL.replace("Properties should inherit docstrings", "Yes, this looks right", 1)
+    state = InteractionState(startup_dismissed=True)
+    action = _selection_controller().process(InteractionContext(terminal, None, 10.0, state))
+
+    assert action.kind == "send_keys"
+    assert state.auto_yes_confirmations == 1
+    assert state.auto_generic_selections == 0

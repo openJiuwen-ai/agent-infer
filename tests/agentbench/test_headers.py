@@ -4,6 +4,7 @@
 from agentinfer.scheduling.headers import (
     CLAUDE_AGENT_HEADER,
     CLAUDE_SESSION_HEADER,
+    DSH_SESSION_HEADER,
     parse_agent_identity,
     select_router_headers,
 )
@@ -44,3 +45,26 @@ def test_empty_identity_values_are_absent() -> None:
     identity = parse_agent_identity(headers)
     assert (identity.session_id, identity.actor_id, identity.actor_role) == (None, "unknown", "unknown")
     assert select_router_headers(headers) == {}
+
+
+def test_router_receives_dsh_session_header() -> None:
+    headers = {DSH_SESSION_HEADER: "session-dsh", "Authorization": "secret"}
+
+    assert select_router_headers(headers) == {DSH_SESSION_HEADER: "session-dsh"}
+    identity = parse_agent_identity(headers)
+    assert (identity.session_id, identity.actor_id, identity.actor_role) == ("session-dsh", "lead", "lead")
+
+
+def test_dsh_session_header_case_insensitive_and_trimmed() -> None:
+    headers = {DSH_SESSION_HEADER.swapcase(): " session-dsh "}
+
+    identity = parse_agent_identity(headers)
+    assert (identity.session_id, identity.actor_id, identity.actor_role) == ("session-dsh", "lead", "lead")
+    assert select_router_headers(headers) == {DSH_SESSION_HEADER: "session-dsh"}
+
+
+def test_claude_headers_win_over_dsh_headers() -> None:
+    headers = {CLAUDE_SESSION_HEADER: "claude-session", DSH_SESSION_HEADER: "dsh-session"}
+
+    identity = parse_agent_identity(headers)
+    assert (identity.session_id, identity.actor_id, identity.actor_role) == ("claude-session", "lead", "lead")

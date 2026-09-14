@@ -3,6 +3,7 @@
 
 """Small shared helpers for benchkit timestamps and artifact file writes."""
 
+import csv
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,18 @@ def write_text(path: Path, text: str) -> None:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+def atomic_write_csv(path: Path, rows: list[dict[str, object]], columns: list[str]) -> None:
+    """Write a CSV artifact through a temporary file before replacing it."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(rows)
+    tmp.replace(path)
 
 
 def atomic_write_json(path: Path, value: object) -> None:

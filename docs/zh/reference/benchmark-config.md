@@ -17,9 +17,9 @@ experiment:
 
 dataset:
   name: swebench_verified
-  index_path: ../data/swebench/instances.jsonl
-  selection_path: ../data/swebench/task-lists/default.txt
-  cache_dir: repo-cache
+  index_path: data/swebench/instances.jsonl
+  selection_path: data/swebench/task-lists/default.txt
+  cache_dir: data/swebench/repo-cache
 
 agent:
   type: claude
@@ -40,11 +40,6 @@ request_proxy:
   request_timeout_seconds: 3600
   startup_timeout_seconds: 120.0
   shutdown_timeout_seconds: 30.0
-
-router:
-  enabled: false
-  base_url: null
-  control_timeout_seconds: 10.0
 ```
 
 ## `experiment`
@@ -64,16 +59,16 @@ router:
 | 字段 | 默认值 | 约束和含义 |
 | --- | --- | --- |
 | `name` | `swebench_verified` | 当前唯一支持的数据集名称。 |
-| `index_path` | `../data/swebench/instances.jsonl` | SWE-bench JSONL 元数据。 |
-| `selection_path` | `../data/swebench/task-lists/default.txt` | 按行排列、保持顺序的任务 ID。 |
-| `cache_dir` | `repo-cache` | 多任务共享的 Git 仓库缓存目录。 |
+| `index_path` | `data/swebench/instances.jsonl` | SWE-bench JSONL 元数据。 |
+| `selection_path` | `data/swebench/task-lists/default.txt` | 按行排列、保持顺序的任务 ID。 |
+| `cache_dir` | `data/swebench/repo-cache` | 多任务共享的 Git 仓库缓存目录。 |
 
 ## `agent`
 
 | 字段 | 默认值 | 约束和含义 |
 | --- | --- | --- |
-| `type` | `claude` | 当前唯一支持的 Agent 运行时。 |
-| `profile` | `single` | `single` 或 `plan-subagent`。 |
+| `type` | `claude` | `claude`、`jiuwenswarm` 或 `dsh`。 |
+| `profile` | `single` | Claude/DSH：`single` 或 `plan-subagent`；JiuwenSwarm：`code.normal`。 |
 | `executable` | `claude` | Claude Code 命令名或路径。 |
 | `tmux_startup_seconds` | `2.0` | tmux 会话启动等待时间，必须 `>= 0`。 |
 | `terminal_capture_interval_seconds` | `30` | 终端证据采集间隔，必须 `>= 1`。 |
@@ -87,7 +82,7 @@ router:
 | `type` | `vllm` | 当前唯一支持的后端类型。 |
 | `base_url` | `http://127.0.0.1:8000` | vLLM API 基础 URL。 |
 | `model` | `Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8` | Claude Code 请求中发送的模型名。 |
-| `endpoint` | `/v1/messages` | 当前仅支持 Anthropic Messages 端点。 |
+| `endpoint` | `/v1/messages` | Claude 使用 `/v1/messages`；JiuwenSwarm/DSH 使用 `/v1/chat/completions`。 |
 | `api_key_env` | `null` | 可选的 API Key 环境变量名；配置中不得写入密钥值。 |
 
 ## `request_proxy`
@@ -99,19 +94,16 @@ router:
 | `startup_timeout_seconds` | `120.0` | 代理启动超时，必须 `>= 0`。 |
 | `shutdown_timeout_seconds` | `30.0` | 等待在途请求结束的超时，必须 `> 0`。 |
 
-## `router`
-
-| 字段 | 默认值 | 约束和含义 |
-| --- | --- | --- |
-| `enabled` | `false` | 是否启用 Router 控制流程。 |
-| `base_url` | `null` | Router 控制 API URL。 |
-| `control_timeout_seconds` | `10.0` | Router 注册和清理请求超时，必须 `> 0`。 |
-
-`enabled` 和 `base_url` 必须同时启用或同时停用。仅比较 vLLM 调度器时保持 Router 关闭。
-
 ## 路径解析
 
 YAML 中的 `result_dir`、数据集路径和包含目录的 `agent.executable` 相对于 YAML 文件所在目录解析。仅包含命令名
 的 `agent.executable` 由 `PATH` 查找。CLI 覆盖中的路径相对于调用命令时的当前目录解析。
 
 可覆盖字段及参数名见[基准命令行参考](benchmark-cli.md)。
+
+## 透明 Router 与 Replay
+
+通过 Router 运行时，将 `backend.base_url` 设为 Router URL，将可选的 `backend.metrics_url` 设为完整的 vLLM `/metrics` URL；默认在
+`base_url` 后追加 `/metrics`。不再接受旧 `router` 章节或会话注册控制协议。
+
+Replay 使用独立的 `experiment`、`backend`、`replay` 配置，见[回放指南](../how-to/run-trace-replay.md)。

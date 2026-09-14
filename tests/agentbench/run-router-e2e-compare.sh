@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
-
 # Cold baseline -> cold candidate -> compare. Services use explicit tmux sessions.
 set -euo pipefail
 
@@ -53,7 +50,7 @@ start_vllm() {
 start_router() {
   tmux new-session -d -s "$ROUTER_TMUX" \
     "source '$VENV/bin/activate' && vllm router --backends 'http://127.0.0.1:$VLLM_PORT' --port '$ROUTER_PORT' 2>&1 | tee '$LOG_DIR/router-$TIMESTAMP.log'"
-  wait_http "http://127.0.0.1:$ROUTER_PORT/health" 60
+  wait_http "http://127.0.0.1:$ROUTER_PORT/v1/models" 60
 }
 
 cd "$REPO"
@@ -63,6 +60,6 @@ tmux kill-session -t "$VLLM_TMUX"
 
 start_vllm
 start_router
-vllm bench serve --agentinfer run --config "$CANDIDATE_CONFIG" --base-url "http://127.0.0.1:$VLLM_PORT" --router-url "http://127.0.0.1:$ROUTER_PORT" --enabled --agent-executable "$CLAUDE_BIN" --task-num "$TASK_NUM" --max-concurrency "$CONCURRENCY" --result-dir "$CANDIDATE_DIR"
+vllm bench serve --agentinfer run --config "$CANDIDATE_CONFIG" --base-url "http://127.0.0.1:$ROUTER_PORT" --metrics-url "http://127.0.0.1:$VLLM_PORT/metrics" --agent-executable "$CLAUDE_BIN" --task-num "$TASK_NUM" --max-concurrency "$CONCURRENCY" --result-dir "$CANDIDATE_DIR"
 
 vllm bench serve --agentinfer compare --baseline "$BASELINE_DIR" --candidate "$CANDIDATE_DIR" | tee "$LOG_DIR/compare-$TIMESTAMP.txt"

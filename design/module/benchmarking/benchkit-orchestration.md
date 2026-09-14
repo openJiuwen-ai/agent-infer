@@ -40,12 +40,12 @@ rather than duplicating their algorithms.
 
 ```text
 load config -> select tasks -> create run -> preflight/capture
--> start proxy -> workers(register candidate -> agent -> cleanup)
+-> start proxy -> workers(agent -> finalize task)
 -> close proxy -> capture -> aggregate -> finalize
 ```
 
-Baseline runs target `backend.base_url` and never call Router control APIs. Candidate runs target `router.base_url`;
-registration and cleanup remain separate evidence from the agent result.
+Both arms target `backend.base_url` through the Request Proxy. For routed candidates this is the transparent Router
+URL; `backend.metrics_url` selects the vLLM metrics endpoint. There is no Router registration or cleanup protocol.
 
 ### BENCH-INV-002: CLI handlers remain thin
 

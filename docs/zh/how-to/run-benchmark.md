@@ -87,10 +87,36 @@ vllm bench serve --agentinfer compare \
 ```bash
 vllm bench serve --agentinfer summarize \
   results/agentinfer/run1 results/agentinfer/run2 \
-  --output combined-summary.csv
+  --output-csv combined-summary.csv
 ```
 
 命令参数见[基准命令行参考](../reference/benchmark-cli.md)，YAML 字段见
 [基准配置参考](../reference/benchmark-config.md)，输出文件见[运行产物参考](../reference/run-artifacts.md)。
 `completed` 只表示 Agent 进程完成，不表示补丁正确；发布结论前请阅读
 [基准方法](../explanation/benchmark-methodology.md)。
+
+## 选择 Agent 与透明 Router
+
+默认配置位于 `agentinfer/agentbench/configs/swebench_vllm.yaml`。Claude Code 使用 `single` 或 `plan-subagent`，需要 Claude CLI 和
+tmux。JiuwenSwarm 使用 `code.normal`，需要 JiuwenSwarm CLI；DSH 使用 `single` 或 `plan-subagent`，需要 DeepSeek Harness
+CLI。切换运行时时同时指定类型、profile、可执行文件和匹配端点：
+
+```bash
+vllm bench serve --agentinfer run \
+  --config agentinfer/agentbench/configs/swebench_vllm.yaml \
+  --agent-type jiuwenswarm --agent-profile code.normal \
+  --agent-executable jiuwenswarm --endpoint /v1/chat/completions \
+  --task-num 1 --result-dir results/jiuwenswarm-smoke
+```
+
+DSH 对应参数为 `--agent-type dsh --agent-profile single --agent-executable dsh --endpoint /v1/chat/completions`。
+通过 Router 运行时使用 `swebench_agentinfer.yaml`，设置 `backend.base_url` 和直接指向 vLLM 的 `backend.metrics_url`。Router
+仅透明转发，不需要旧注册/清理接口。
+
+已有请求 trace 可使用[Trace Replay](run-trace-replay.md)。
+
+## 本地烟雾验证
+
+执行 `python -m pytest tests/agentbench/test_benchmark_smoke.py -q`，无需模型服务即可验证
+生产 CLI、配置、工作区、分派、请求代理及结果汇总。测试使用本地运行时和 loopback 后端，
+不提供真实模型质量或性能结论。调度对比脚本使用目标仓库现有 controller factory 支持的字段。

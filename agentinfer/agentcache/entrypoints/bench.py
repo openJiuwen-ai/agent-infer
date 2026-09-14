@@ -6,7 +6,7 @@
 import sys
 from pathlib import Path
 
-_BENCHKIT_COMMANDS = frozenset({"compare", "prepare", "run", "summarize"})
+_BENCHKIT_COMMANDS = frozenset({"compare", "prepare", "replay", "run", "summarize"})
 
 
 def _strip_program_name(argv: list[str]) -> list[str]:

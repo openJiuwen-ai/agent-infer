@@ -8,21 +8,21 @@ from types import SimpleNamespace
 
 import pytest
 
-from agentinfer.agentbench.agents.contracts import AgentRunResult
-from agentinfer.agentbench.agents.outcomes import AgentRunOutcome
+from agentinfer.agentbench.agents.contracts import AgentRunOutcome, AgentRunResult
 from agentinfer.agentbench.benchkit.config import AgentBenchConfig
 from agentinfer.agentbench.benchkit.dataset import Task
 from agentinfer.agentbench.benchkit.runner import RunContext, _run_single_task, check_preflight
-from agentinfer.agentbench.benchkit.session_registration import SessionRegistrationResult
 from agentinfer.agentbench.request_proxy import RequestProxyCloseResult
 
 
-def _context(tmp_path: Path, *, router: bool) -> RunContext:
+def _context(tmp_path: Path, *, router: bool = False) -> RunContext:
     config = AgentBenchConfig.model_validate(
         {
             "experiment": {"result_dir": str(tmp_path)},
             "dataset": {"cache_dir": str(tmp_path / "cache")},
-            "router": {"enabled": router, "base_url": "http://router" if router else None},
+            "backend": {
+                "base_url": "http://router:8400" if router else "http://vllm:8000",
+            },
         }
     )
     return RunContext(config, tmp_path, tmp_path / "requests.jsonl", ())
@@ -61,75 +61,22 @@ class _Progress:
         self.closed = True
 
 
-def test_baseline_skips_router_control_and_serializes_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("agentinfer.agentbench.benchkit.runner.prepare_workspace", lambda *_args: None)
-    monkeypatch.setattr(
-        "agentinfer.agentbench.benchkit.runner.run_agent",
-        lambda request: asyncio.sleep(0, result=_agent_result(request.session_id)),
-    )
-
-    async def forbidden(*_args):
-        raise AssertionError("baseline must not call Router control")
-
-    monkeypatch.setattr("agentinfer.agentbench.benchkit.runner.register_session", forbidden)
-    monkeypatch.setattr("agentinfer.agentbench.benchkit.runner.cleanup_session", forbidden)
-    result = asyncio.run(
-        _run_single_task(_context(tmp_path, router=False), _task(), "http://proxy", tmp_path / "cache")
-    )
-    assert result.outcome == AgentRunOutcome.COMPLETED
-    assert (tmp_path / "tasks" / "instance" / "result.json").exists()
-
-
-def test_candidate_cleans_up_after_agent_exception_and_writes_failure(
+def test_router_backend_skips_control_protocol_and_serializes_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls = []
-    monkeypatch.setattr("agentinfer.agentbench.benchkit.runner.prepare_workspace", lambda *_args: None)
-
-    async def register(_url, session_id, _timeout):
-        calls.append("register")
-        return SessionRegistrationResult("register", session_id, True, 200, 0, None)
-
-    async def cleanup(_url, session_id, _timeout):
-        calls.append("cleanup")
-        return SessionRegistrationResult("cleanup", session_id, True, 200, 0, None)
-
-    async def fail(_request):
-        calls.append("agent")
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr("agentinfer.agentbench.benchkit.runner.register_session", register)
-    monkeypatch.setattr("agentinfer.agentbench.benchkit.runner.cleanup_session", cleanup)
-    monkeypatch.setattr("agentinfer.agentbench.benchkit.runner.run_agent", fail)
-    with pytest.raises(RuntimeError, match="failed in benchmark harness"):
-        asyncio.run(_run_single_task(_context(tmp_path, router=True), _task(), "http://proxy", tmp_path / "cache"))
-    assert calls == ["register", "agent", "cleanup"]
-    payload = json.loads((tmp_path / "tasks" / "instance" / "result.json").read_text(encoding="utf-8"))
-    assert payload["termination_reason"] == "harness_error"
-    assert payload["error"] == {"type": "RuntimeError", "message": "boom"}
-
-
-def test_candidate_cleanup_failure_is_serialized(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("agentinfer.agentbench.benchkit.runner.prepare_workspace", lambda *_args: None)
     monkeypatch.setattr(
         "agentinfer.agentbench.benchkit.runner.run_agent",
         lambda request: asyncio.sleep(0, result=_agent_result(request.session_id)),
     )
-    monkeypatch.setattr(
-        "agentinfer.agentbench.benchkit.runner.register_session",
-        lambda _url, session_id, _timeout: asyncio.sleep(
-            0, result=SessionRegistrationResult("register", session_id, True, 200, 0, None)
-        ),
+
+    result = asyncio.run(
+        _run_single_task(_context(tmp_path, router=True), _task(), "http://proxy", tmp_path / "cache", 0)
     )
-
-    async def cleanup(*_args):
-        raise RuntimeError("cleanup exploded")
-
-    monkeypatch.setattr("agentinfer.agentbench.benchkit.runner.cleanup_session", cleanup)
-    with pytest.raises(RuntimeError, match="Router cleanup failed"):
-        asyncio.run(_run_single_task(_context(tmp_path, router=True), _task(), "http://proxy", tmp_path / "cache"))
+    assert result.outcome == AgentRunOutcome.COMPLETED
     payload = (tmp_path / "tasks" / "instance" / "result.json").read_text(encoding="utf-8")
-    assert "cleanup exploded" in payload
+    assert "registration" not in payload
+    assert "cleanup" not in payload
 
 
 def _run_config(tmp_path: Path) -> AgentBenchConfig:
@@ -137,7 +84,7 @@ def _run_config(tmp_path: Path) -> AgentBenchConfig:
         {
             "experiment": {"result_dir": str(tmp_path / "run")},
             "dataset": {"cache_dir": str(tmp_path / "cache")},
-            "router": {"enabled": False, "base_url": None},
+            "backend": {"base_url": "http://router:8400", "metrics_url": "http://vllm:8000/metrics"},
         }
     )
 
@@ -159,7 +106,11 @@ def _patch_successful_run(monkeypatch: pytest.MonkeyPatch) -> None:
             close=lambda: asyncio.sleep(0, result=None),
         ),
     )
-    monkeypatch.setattr("agentinfer.agentbench.benchkit.runner._run_tasks", lambda *_args: asyncio.sleep(0))
+
+    async def run_tasks(context, *_args):
+        context.trace_path.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr("agentinfer.agentbench.benchkit.runner._run_tasks", run_tasks)
     monkeypatch.setattr(
         "agentinfer.agentbench.benchkit.runner.collect_environment",
         lambda: EvidenceCapture("environment", None, False, "unavailable", {}),
@@ -176,6 +127,44 @@ def _patch_successful_run(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _manifest(tmp_path: Path) -> dict:
     return json.loads((tmp_path / "run" / "manifest.json").read_text(encoding="utf-8"))
+
+
+def test_run_writes_session_agent_csvs_as_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from agentinfer.agentbench.benchkit.runner import run_benchmark
+
+    _patch_successful_run(monkeypatch)
+    asyncio.run(run_benchmark(_run_config(tmp_path)))
+
+    run_dir = tmp_path / "run"
+    assert (run_dir / "sessions.csv").exists()
+    assert (run_dir / "agents.csv").exists()
+    assert (run_dir / "distribution_samples.csv").exists()
+    manifest = _manifest(tmp_path)
+    assert manifest["status"] == "completed"
+    assert any(row["source"] == "sessions" and row["available"] for row in manifest["evidence"])
+    assert any(row["source"] == "agents" and row["available"] for row in manifest["evidence"])
+    assert any(row["source"] == "distribution_samples" and row["available"] for row in manifest["evidence"])
+
+
+def test_session_analysis_failure_is_nonfatal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from agentinfer.agentbench.benchkit.runner import run_benchmark
+
+    _patch_successful_run(monkeypatch)
+    monkeypatch.setattr(
+        "agentinfer.agentbench.benchkit.runner.write_analysis_artifacts",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("analysis exploded")),
+    )
+
+    asyncio.run(run_benchmark(_run_config(tmp_path)))
+
+    manifest = _manifest(tmp_path)
+    summary = json.loads((tmp_path / "run" / "summary.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "completed"
+    assert any(
+        row["source"] == "session_agent_analysis" and "analysis exploded" in row["reason"]
+        for row in manifest["evidence"]
+    )
+    assert any("analysis exploded" in reason for reason in summary["source_health"]["reasons"])
 
 
 def test_collector_failure_finalizes_manifest_and_reports_error(
@@ -226,16 +215,16 @@ def test_summary_artifact_write_failure_still_finalizes_manifest(
     from agentinfer.agentbench.benchkit.runner import run_benchmark
 
     _patch_successful_run(monkeypatch)
-    from agentinfer.agentbench.benchkit import runner
+    from agentinfer.agentbench.benchkit.artifacts import finalizer
 
-    real_write = runner.atomic_write_json
+    real_write = finalizer.atomic_write_json
 
     def fail_summary(path, value):
         if path.name == "summary.json":
             raise OSError("summary write exploded")
         real_write(path, value)
 
-    monkeypatch.setattr(runner, "atomic_write_json", fail_summary)
+    monkeypatch.setattr(finalizer, "atomic_write_json", fail_summary)
 
     with pytest.raises(RuntimeError, match="summary write exploded"):
         asyncio.run(run_benchmark(_run_config(tmp_path)))
@@ -244,29 +233,8 @@ def test_summary_artifact_write_failure_still_finalizes_manifest(
     assert any("summary write exploded" in (row["reason"] or "") for row in manifest["evidence"])
 
 
-def test_registration_failure_does_not_cleanup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("agentinfer.agentbench.benchkit.runner.prepare_workspace", lambda *_args: None)
-    monkeypatch.setattr(
-        "agentinfer.agentbench.benchkit.runner.register_session",
-        lambda _url, session_id, _timeout: asyncio.sleep(
-            0, result=SessionRegistrationResult("register", session_id, False, 409, 0, "conflict")
-        ),
-    )
-
-    async def forbidden(*_args):
-        raise AssertionError("cleanup must not run after failed registration")
-
-    monkeypatch.setattr("agentinfer.agentbench.benchkit.runner.cleanup_session", forbidden)
-
-    with pytest.raises(RuntimeError, match="failed in benchmark harness"):
-        asyncio.run(_run_single_task(_context(tmp_path, router=True), _task(), "http://proxy", tmp_path / "cache"))
-
-    payload = json.loads((tmp_path / "tasks" / "instance" / "result.json").read_text(encoding="utf-8"))
-    assert payload["error"]["message"].endswith("conflict")
-
-
 def test_preflight_requires_tmux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("agentinfer.agentbench.benchkit.runner.shutil.which", lambda _name: None)
+    monkeypatch.setattr("agentinfer.agentbench.agents.preflight.shutil.which", lambda _name: None)
 
     with pytest.raises(RuntimeError, match="tmux executable is not available: tmux"):
         asyncio.run(check_preflight(_run_config(tmp_path)))
@@ -274,11 +242,11 @@ def test_preflight_requires_tmux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
 def test_preflight_requires_agent_executable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "agentinfer.agentbench.benchkit.runner.shutil.which",
+        "agentinfer.agentbench.agents.preflight.shutil.which",
         lambda name: "/usr/bin/tmux" if name == "tmux" else None,
     )
     monkeypatch.setattr(
-        "agentinfer.agentbench.benchkit.runner.subprocess.run",
+        "agentinfer.agentbench.agents.preflight.subprocess.run",
         lambda *_args, **_kwargs: SimpleNamespace(returncode=0),
     )
 
@@ -288,7 +256,7 @@ def test_preflight_requires_agent_executable(tmp_path: Path, monkeypatch: pytest
 
 def test_preflight_rejects_broken_agent_executable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "agentinfer.agentbench.benchkit.runner.shutil.which",
+        "agentinfer.agentbench.agents.preflight.shutil.which",
         lambda name: f"/usr/bin/{name}",
     )
     results = iter(
@@ -298,15 +266,76 @@ def test_preflight_rejects_broken_agent_executable(tmp_path: Path, monkeypatch: 
         )
     )
     monkeypatch.setattr(
-        "agentinfer.agentbench.benchkit.runner.subprocess.run",
+        "agentinfer.agentbench.agents.preflight.subprocess.run",
         lambda *_args, **_kwargs: next(results),
     )
 
     with pytest.raises(
         RuntimeError,
-        match="Agent executable version check failed: claude\nunknown option --version",
+        match="Agent executable preflight check failed: claude --version\nunknown option --version",
     ):
         asyncio.run(check_preflight(_run_config(tmp_path)))
+
+
+def test_jiuwenswarm_preflight_does_not_require_tmux(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = AgentBenchConfig.model_validate(
+        {
+            **_run_config(tmp_path).model_dump(mode="python"),
+            "agent": {
+                "type": "jiuwenswarm",
+                "profile": "code.normal",
+                "executable": "jiuwenswarm",
+            },
+            "backend": {
+                **_run_config(tmp_path).backend.model_dump(mode="python"),
+                "endpoint": "/v1/chat/completions",
+            },
+        }
+    )
+    calls = []
+    urls = []
+
+    def which(name: str):
+        assert name != "tmux"
+        return f"/usr/bin/{name}"
+
+    def run(command, **_kwargs):
+        calls.append(command)
+        output = (
+            b"usage: jiuwenswarm {chat}\n"
+            if command[-1] == "--help" and "chat" not in command
+            else b"--jsonl --mode --session --cwd --project-dir --gateway-url --timeout\n"
+        )
+        return SimpleNamespace(returncode=0, stdout=output, stderr=b"")
+
+    class Response:
+        status_code = 200
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url):
+            urls.append(url)
+            return Response()
+
+    monkeypatch.setattr("agentinfer.agentbench.agents.preflight.shutil.which", which)
+    monkeypatch.setattr("agentinfer.agentbench.agents.preflight.subprocess.run", run)
+    monkeypatch.setattr("agentinfer.agentbench.benchkit.runner.httpx.AsyncClient", lambda **_kwargs: Client())
+
+    asyncio.run(check_preflight(config))
+
+    assert calls == [
+        ["/usr/bin/jiuwenswarm", "--help"],
+        ["/usr/bin/jiuwenswarm", "chat", "--help"],
+    ]
+    assert urls == ["http://router:8400/v1/models"]
 
 
 def test_preflight_failure_skips_remote_finalizers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -320,7 +349,6 @@ def test_preflight_failure_skips_remote_finalizers(tmp_path: Path, monkeypatch: 
 
     monkeypatch.setattr(runner, "check_preflight", fail)
     monkeypatch.setattr(runner, "capture_vllm_metrics", forbidden)
-    monkeypatch.setattr(runner, "capture_router_snapshot", forbidden)
 
     with pytest.raises(RuntimeError, match="preflight failed"):
         asyncio.run(runner.run_benchmark(_run_config(tmp_path)))
@@ -446,11 +474,26 @@ def test_run_artifacts_index_raw_evidence_without_embedding_payloads(
 
     _patch_successful_run(monkeypatch)
     samples = iter(("prometheus-start-payload", "prometheus-end-payload"))
+    metrics_urls = []
+    proxy_args = []
 
-    async def vllm(_url):
+    async def vllm(url):
+        metrics_urls.append(url)
         return EvidenceCapture("vllm", None, True, None, {"text": next(samples)})
 
     monkeypatch.setattr(runner, "capture_vllm_metrics", vllm)
+    monkeypatch.setattr(
+        runner,
+        "create_request_proxy_lifecycle",
+        lambda *args: (
+            proxy_args.append(args)
+            or SimpleNamespace(
+                start=lambda: asyncio.sleep(0, result=SimpleNamespace(base_url="http://proxy")),
+                wait_ready=lambda _timeout: asyncio.sleep(0),
+                close=lambda: asyncio.sleep(0, result=None),
+            )
+        ),
+    )
     monkeypatch.setattr(
         runner,
         "collect_environment",
@@ -462,7 +505,8 @@ def test_run_artifacts_index_raw_evidence_without_embedding_payloads(
         lambda _path: EvidenceCapture("source_control", None, True, None, {"commit": "raw-commit"}),
     )
 
-    asyncio.run(runner.run_benchmark(_run_config(tmp_path), cli_metadata={"entrypoint": "test"}))
+    config = _run_config(tmp_path)
+    asyncio.run(runner.run_benchmark(config, cli_metadata={"entrypoint": "test"}))
 
     run_dir = tmp_path / "run"
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -480,6 +524,9 @@ def test_run_artifacts_index_raw_evidence_without_embedding_payloads(
     assert all(row["metadata"] == {} for row in manifest["evidence"])
     assert all(row["metadata"] == {} for rows in summary["source_health"]["sources"].values() for row in rows)
     assert summary["cli"] == {"entrypoint": "test"}
+    assert summary["router"] == {"applicable": False, "events": {}}
+    assert metrics_urls == ["http://vllm:8000/metrics", "http://vllm:8000/metrics"]
+    assert proxy_args[0][1] == "http://router:8400"
 
 
 def test_non_graceful_proxy_close_fails_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
