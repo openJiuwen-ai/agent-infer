@@ -55,6 +55,9 @@ class _Controller:
     def needs_schedule_cycle(self, now_monotonic_s) -> bool:
         return self.retained_request_count > 0
 
+    def run_due_lightweight_checks(self, now_monotonic_s) -> None:
+        return None
+
     def consume_admitted_requests(self):
         return self.pool.consume_admitted()
 
@@ -209,17 +212,25 @@ def test_prefix_lookup_observer_captures_ref_counts_before_native_allocation() -
     computed = SimpleNamespace(
         blocks=([SimpleNamespace(ref_cnt=1), SimpleNamespace(ref_cnt=0)],),
     )
+    native_calls: list[str] = []
+
+    def native_get_computed_blocks(request):
+        native_calls.append(request.request_id)
+        return computed, 64
+
     owner = SimpleNamespace(
-        kv_cache_manager=SimpleNamespace(get_computed_blocks=lambda request: (computed, 64)),
+        kv_cache_manager=SimpleNamespace(get_computed_blocks=native_get_computed_blocks),
     )
     hooks = object.__new__(_VllmAdmissionHooks)
     hooks.tracked_native = {"request-1"}
     hooks._local_prefix_observations = {}
     hooks._install_prefix_lookup_observer(owner)
+    hooks._install_prefix_lookup_observer(owner)
 
     returned = owner.kv_cache_manager.get_computed_blocks(SimpleNamespace(request_id="request-1"))
 
     assert returned == (computed, 64)
+    assert native_calls == ["request-1"]
     assert hooks._local_prefix_observations == {"request-1": (64, 32)}
 
 

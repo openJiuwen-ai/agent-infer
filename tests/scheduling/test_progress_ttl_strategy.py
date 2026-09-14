@@ -838,6 +838,27 @@ def test_force_resume_timeout_bypasses_capacity_projection() -> None:
     ]
 
 
+def test_force_resume_timeout_bypasses_unknown_capacity() -> None:
+    components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0))
+    waiting = view("waiting", state=ProgramState.PAUSED, status=ProgramStatus.REASONING, tokens=900)
+    components.initial_factors.set_program_factors(
+        waiting.ref,
+        ProgressTTLProgramFactors(
+            request_wait_started_at_monotonic_s=60,
+            force_resume_timeout_seconds=30,
+            force_resume_deadline_monotonic_s=90,
+        ),
+    )
+    calls: list[TransitionRequest] = []
+    unknown_capacity = replace(snapshot(waiting, waiting=(waiting.ref,)), total_kv_tokens=None)
+
+    components.strategy.schedule_resume(unknown_capacity, components.initial_factors, controller(calls))
+
+    assert [(call.kind, call.reason) for call in calls] == [
+        (TransitionKind.RESUME, "progress_ttl_force_resume_timeout")
+    ]
+
+
 def test_force_resume_timeout_does_not_reactivate_idle_acting_program() -> None:
     components = build_progress_ttl_strategy(ProgressTTLConfig(decode_buffer_tokens=0))
     acting = view("acting", state=ProgramState.PAUSED, status=ProgramStatus.ACTING, tokens=900)

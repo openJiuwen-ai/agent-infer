@@ -425,7 +425,8 @@ class ProgressTTLStrategy(SchedulingStrategy[ProgressTTLGlobalFactors, ProgressT
                         backend_id=snapshot.backend_id,
                     )
                 )
-                remaining -= required
+                if remaining is not None:
+                    remaining -= required
                 active.append(program)
                 continue
             if sidecar.is_privileged:

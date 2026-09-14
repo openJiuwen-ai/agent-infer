@@ -180,9 +180,7 @@ class _VllmAdmissionHooks:
         if self.controller is None:
             return
         now = time.monotonic()
-        lightweight_check = getattr(self.controller, "run_due_lightweight_checks", None)
-        if callable(lightweight_check):
-            lightweight_check(now)
+        self.controller.run_due_lightweight_checks(now)
         needs_cycle = self.controller.needs_schedule_cycle(now)
         if not needs_cycle and not self._prefix_refresh_pending:
             return
@@ -352,6 +350,8 @@ class _VllmAdmissionHooks:
         if kv_cache_manager is None or not callable(native_get_computed_blocks):
             logger.warning("AgentInfer exact shared-prefix observation unavailable: get_computed_blocks is missing")
             return
+        if getattr(native_get_computed_blocks, "_agentinfer_prefix_lookup_observer", False):
+            return
 
         def observed_get_computed_blocks(request: Request):
             computed_blocks, cached_tokens = native_get_computed_blocks(request)
@@ -363,6 +363,7 @@ class _VllmAdmissionHooks:
                 )
             return computed_blocks, cached_tokens
 
+        observed_get_computed_blocks._agentinfer_prefix_lookup_observer = True
         kv_cache_manager.get_computed_blocks = observed_get_computed_blocks
 
     @staticmethod
