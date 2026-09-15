@@ -2,8 +2,8 @@
 
 ## TRIGGER
 
-Applies when the diff modifies `src/agentcache/__init__.py`, anything
-exported via `__all__`, or any symbol reachable as `agentcache.<name>`.
+Applies when the diff modifies an `agentinfer/**/__init__.py`, anything exported
+via `__all__`, a registered CLI entry point, or a public scheduling contract.
 
 ## CRITERION A1: public functions/classes have docstrings
 
