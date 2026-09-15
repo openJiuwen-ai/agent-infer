@@ -121,3 +121,60 @@ def test_messages_transport_keeps_title_prompt_tool_free_and_bridges_sampling(tm
     assert body["tools"] == []
     sampling = body["metadata"]["_agentinfer_replay_sampling"]
     assert sampling == {"seed": 9, "min_tokens": 4, "ignore_eos": True}
+
+
+def test_exact_token_validation_rejects_successful_response_with_wrong_usage(tmp_path: Path) -> None:
+    async def send() -> tuple[object, object]:
+        config = ReplayBenchConfig.model_validate(
+            {
+                "backend": {"base_url": "http://backend", "endpoint": "/v1/chat/completions"},
+                "replay": {
+                    "trace_type": "tracelab",
+                    "trace_path": "rounds.jsonl",
+                    "prompt_shape": "tracelab_synthetic",
+                    "prompt_calibration_tolerance_tokens": 0,
+                },
+            }
+        )
+        trace = tmp_path / "requests.jsonl"
+        writer = RequestTraceWriter(trace)
+        await writer.start()
+        transport = ReplayTransport(config, "run", writer)
+        await transport.client.aclose()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            stream = (
+                'data: {"choices":[{"delta":{"content":"x"}}]}\n\n'
+                'data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":3}}\n\n'
+                "data: [DONE]\n\n"
+            )
+            return httpx.Response(200, content=stream, headers={"content-type": "text/event-stream"})
+
+        transport.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        task = SimpleNamespace(runtime_session_id="session")
+        node = SimpleNamespace(
+            runtime_request_id="request",
+            actor_id="lead",
+            actor_role="lead",
+            prompt_kind="lead_main",
+            parent_actor_id=None,
+            planned_input_tokens=12,
+            planned_output_tokens=3,
+            backend_sampling_seed=7,
+            response_validation="exact_tokens",
+        )
+        result = await transport.send(
+            task,
+            node,
+            SyntheticPrompt("", (), ({"role": "user", "content": "message"},)),
+        )
+        await transport.close()
+        await writer.close()
+        return result, load_request_facts(trace)[0]
+
+    result, fact = asyncio.run(send())
+
+    assert result.success is False
+    assert "input expected=12 observed=11" in str(result.error)
+    assert fact.status == "error"
+    assert fact.input_tokens == 11

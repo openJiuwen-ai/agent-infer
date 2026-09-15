@@ -93,9 +93,11 @@ class ReplayConfig(ReplayStrictModel):
     interval_mode: Literal["trace", "lognormal"] = Field("trace", json_schema_extra={"cli": True})
     interval_lognormal: ReplayIntervalLognormalConfig | None = None
     sample_seed: int = 0
-    prompt_shape: Literal["claude_code_minimal_v1", "trace_record"] = Field(
-        "claude_code_minimal_v1",
-        json_schema_extra={"cli": True},
+    prompt_shape: Literal["agentinfer_synthetic", "inferact_synthetic", "tracelab_synthetic", "agentX_synthetic"] = (
+        Field(
+            "agentinfer_synthetic",
+            json_schema_extra={"cli": True},
+        )
     )
     lead_title_sys_shared_prefix: int = Field(0, ge=0)
     lead_name_sys_shared_prefix: int = Field(0, ge=0)
@@ -133,12 +135,21 @@ class ReplayConfig(ReplayStrictModel):
         elif self.interval_lognormal is not None:
             raise ValueError("interval_lognormal anchors require interval_mode=lognormal")
         if self.trace_type == "inferact_codex_swebenchpro":
-            if self.prompt_shape != "trace_record":
-                raise ValueError("inferact_codex_swebenchpro requires prompt_shape=trace_record")
+            if self.prompt_shape != "inferact_synthetic":
+                raise ValueError("inferact_codex_swebenchpro requires prompt_shape=inferact_synthetic")
             if self.interval_mode != "lognormal":
                 raise ValueError("inferact_codex_swebenchpro requires interval_mode=lognormal")
-        if self.trace_type == "agentinfer" and self.prompt_shape == "trace_record":
-            raise ValueError("agentinfer trace_type does not provide a unified trace_record IR")
+        if self.trace_type == "agentinfer" and self.prompt_shape == "inferact_synthetic":
+            raise ValueError("agentinfer trace_type does not provide a unified inferact_synthetic IR")
+        if self.trace_type == "tracelab":
+            if self.prompt_shape != "tracelab_synthetic":
+                raise ValueError("tracelab requires prompt_shape=tracelab_synthetic")
+            if self.prompt_calibration_tolerance_tokens != 0:
+                raise ValueError("tracelab requires prompt_calibration_tolerance_tokens=0")
+        elif self.prompt_shape == "tracelab_synthetic":
+            raise ValueError("prompt_shape=tracelab_synthetic requires trace_type=tracelab")
+        if self.prompt_shape == "agentX_synthetic" and self.trace_type != "agentX":
+            raise ValueError("prompt_shape=agentX_synthetic requires trace_type=agentX")
         return self
 
     def context_micro_trim_limit(self, target: int) -> int:
@@ -163,6 +174,8 @@ class ReplayBenchConfig(ReplayStrictModel):
 
         if self.replay.trace_type == "inferact_codex_swebenchpro" and self.backend.endpoint != "/v1/chat/completions":
             raise ValueError("inferact_codex_swebenchpro requires backend.endpoint=/v1/chat/completions")
+        if self.replay.trace_type == "tracelab" and self.backend.endpoint != "/v1/chat/completions":
+            raise ValueError("tracelab requires backend.endpoint=/v1/chat/completions")
         return self
 
 

@@ -10,7 +10,7 @@ import json
 import math
 import uuid
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Literal
 
 from .config import ReplayBenchConfig
@@ -26,6 +26,21 @@ from .unified_trace_ir import PromptReference, UnifiedTraceIR
 
 ContextMode = Literal["none", "independent", "append", "trim", "reset"]
 _CONTEXT_FREE_PROMPT_KINDS = frozenset({"lead_title", "lead_name"})
+
+
+@dataclass(frozen=True)
+class TokenRecipeProfile:
+    """Verified insertion boundaries for one Backend chat template."""
+
+    fixed_prefix_tokens: int
+    fixed_suffix_tokens: int
+    boundary_sha256: str
+    renderer_version: str = "agentinfer-token-recipe/v1"
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize the profile fields covered by the workload identity."""
+
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -50,6 +65,9 @@ class ReplayPlanNode:
     planned_input_tokens: int | None
     planned_output_tokens: int | None
     backend_sampling_seed: int | None
+    input_after: str | None = None
+    planned_reuse_tokens: int | None = None
+    response_validation: Literal["exact_tokens"] | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Serialize only the materialized fields required to execute the node."""
@@ -81,6 +99,12 @@ class ReplayPlanNode:
         )
         if self.prompt_ref is not None:
             value["prompt_ref"] = self.prompt_ref.to_dict()
+        if self.input_after is not None:
+            value["input_after"] = self.input_after
+        if self.planned_reuse_tokens is not None:
+            value["planned_reuse_tokens"] = self.planned_reuse_tokens
+        if self.response_validation is not None:
+            value["response_validation"] = self.response_validation
         return value
 
 
@@ -114,7 +138,7 @@ class ReplayTaskPlan:
 class ReplayPlan:
     """A validated deterministic Replay workload plan."""
 
-    schema_version: Literal["1"]
+    schema_version: Literal["1", "2"]
     plan_kind: Literal["structural"]
     planner_version: str
     execution_ready: bool
@@ -130,11 +154,12 @@ class ReplayPlan:
     prompt_calibration: dict[str, str | None]
     interval_model: IntervalModel
     tasks: tuple[ReplayTaskPlan, ...]
+    token_recipe_profile: TokenRecipeProfile | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Serialize the complete plan while preserving its artifact schema."""
 
-        return {
+        value = {
             "schema_version": self.schema_version,
             "plan_kind": self.plan_kind,
             "planner_version": self.planner_version,
@@ -152,6 +177,9 @@ class ReplayPlan:
             "interval_model": self.interval_model.to_dict(),
             "tasks": [task.to_dict() for task in self.tasks],
         }
+        if self.token_recipe_profile is not None:
+            value["token_recipe_profile"] = self.token_recipe_profile.to_dict()
+        return value
 
 
 def _canonical_json(value: object) -> str:
@@ -167,7 +195,7 @@ def _sha256_json(value: object) -> str:
     return hashlib.sha256(_canonical_json(value).encode()).hexdigest()
 
 
-def _workload_config(config: ReplayBenchConfig) -> dict[str, object]:
+def _workload_config(config: ReplayBenchConfig, planner_version: str) -> dict[str, object]:
     replay = config.replay.model_dump(mode="json")
     replay.pop("trace_path", None)
     return {
@@ -176,7 +204,7 @@ def _workload_config(config: ReplayBenchConfig) -> dict[str, object]:
         "model": config.backend.model,
         "replay": replay,
         "sampler_version": "agentinfer-replay-sampler/v1",
-        "planner_version": "agentinfer-replay-structural/v9",
+        "planner_version": planner_version,
     }
 
 
@@ -205,7 +233,9 @@ def _context_plan(
     source_context = request.context_after
     if request.replay_kind != "request":
         return source_context, "none"
-    if config.replay.prompt_shape == "trace_record":
+    if config.replay.prompt_shape == "tracelab_synthetic":
+        return None, "independent"
+    if config.replay.prompt_shape == "inferact_synthetic":
         if source_context is None:
             return None, "independent"
         return source_context, "append"
@@ -231,6 +261,7 @@ def _task_plan(
     config: ReplayBenchConfig,
     sampled: SampledSession,
     interval_model: IntervalModel,
+    token_recipe_profile: TokenRecipeProfile | None,
 ) -> ReplayTaskPlan:
     requests = _required_requests(sampled.source)
     token_targets = {
@@ -248,6 +279,30 @@ def _task_plan(
             token_targets,
         )
         planned_input_tokens, planned_output_tokens = token_targets[request.key]
+        input_after = request.input_after if config.replay.prompt_shape == "tracelab_synthetic" else None
+        planned_reuse_tokens = None
+        if config.replay.prompt_shape == "tracelab_synthetic":
+            if token_recipe_profile is None:
+                raise ValueError("token_recipe planning requires a verified template profile")
+            assert planned_input_tokens is not None
+            minimum = token_recipe_profile.fixed_prefix_tokens + token_recipe_profile.fixed_suffix_tokens + 1
+            if planned_input_tokens < minimum:
+                raise ValueError(
+                    f"token_recipe input target {planned_input_tokens} is below template minimum {minimum}"
+                )
+            if input_after is None:
+                planned_reuse_tokens = 0
+            else:
+                previous_input = token_targets[input_after][0]
+                assert previous_input is not None
+                upper = min(
+                    previous_input - token_recipe_profile.fixed_suffix_tokens - 1,
+                    planned_input_tokens - token_recipe_profile.fixed_suffix_tokens - 1,
+                )
+                planned_reuse_tokens = max(
+                    token_recipe_profile.fixed_prefix_tokens,
+                    min(request.source_cached_tokens or 0, upper),
+                )
         nodes.append(
             ReplayPlanNode(
                 runtime_request_id=_runtime_request_id(
@@ -288,6 +343,9 @@ def _task_plan(
                     if request.replay_kind == "request"
                     else None
                 ),
+                input_after=input_after,
+                planned_reuse_tokens=planned_reuse_tokens,
+                response_validation="exact_tokens" if config.replay.prompt_shape == "tracelab_synthetic" else None,
             )
         )
     return ReplayTaskPlan(
@@ -335,6 +393,7 @@ def _validate_task(task: ReplayTaskPlan) -> None:
         for field, reference in (
             ("send_after", node.send_after),
             ("context_after", node.context_after),
+            ("input_after", node.input_after),
             ("prompt_recipe_key", node.prompt_recipe_key),
         ):
             if reference is not None and reference not in by_key:
@@ -358,6 +417,11 @@ def _validate_task(task: ReplayTaskPlan) -> None:
             raise ValueError(f"{node.context_mode} context must not reference context_after")
         if node.context_mode in {"append", "trim"} and context_after is None:
             raise ValueError(f"{node.context_mode} context requires context_after")
+        if node.input_after is not None:
+            if node.context_after is not None or node.context_mode != "independent":
+                raise ValueError("input_after requires independent context without context_after")
+            if node.planned_reuse_tokens is None or node.planned_reuse_tokens <= 0:
+                raise ValueError("input_after requires a positive planned_reuse_tokens")
     _validate_acyclic(nodes)
 
 
@@ -375,12 +439,13 @@ def build_replay_plan(
     config: ReplayBenchConfig,
     analysis: ReplayAnalysis,
     trace_ir: UnifiedTraceIR | None = None,
+    token_recipe_profile: TokenRecipeProfile | None = None,
 ) -> ReplayPlan:
     """Build a deterministic structural plan without sending Backend requests."""
 
-    if config.replay.prompt_shape == "trace_record":
+    if config.replay.prompt_shape in {"inferact_synthetic", "tracelab_synthetic"}:
         if trace_ir is None:
-            raise ValueError("trace_record planning requires a validated unified Trace IR")
+            raise ValueError(f"{config.replay.prompt_shape} planning requires a validated unified Trace IR")
     elif trace_ir is not None:
         raise ValueError("a unified Trace IR was supplied for a non-trace-record Replay mode")
     interval_model = build_interval_model(config.replay)
@@ -389,13 +454,22 @@ def build_replay_plan(
     if total_tasks <= 0:
         raise ValueError("the Replay trace has no usable sessions")
 
-    workload_config = _workload_config(config)
+    if config.replay.prompt_shape == "tracelab_synthetic":
+        if trace_ir is None or trace_ir.prompt_source_kind != "token_recipe":
+            raise ValueError("token_recipe planning requires token_recipe unified Trace IR")
+        if token_recipe_profile is None:
+            raise ValueError("token_recipe planning requires a verified template profile")
+    planner_version = (
+        "agentinfer-replay-structural/v10" if token_recipe_profile is not None else "agentinfer-replay-structural/v9"
+    )
+    workload_config = _workload_config(config, planner_version)
     plan_namespace = _sha256_json(
         {
             "source_sha256": analysis.source_sha256,
             "source_bundle_sha256": trace_ir.bundle_sha256 if trace_ir is not None else None,
             "workload_config": workload_config,
             "interval_model": interval_model.to_dict(),
+            "token_recipe_profile": token_recipe_profile.to_dict() if token_recipe_profile is not None else None,
         }
     )
     sampled = sample_replay_sessions(
@@ -404,19 +478,22 @@ def build_replay_plan(
         seed=config.replay.sample_seed,
         plan_namespace=plan_namespace,
     )
-    tasks = tuple(_task_plan(config, sampled_session, interval_model) for sampled_session in sampled)
+    tasks = tuple(
+        _task_plan(config, sampled_session, interval_model, token_recipe_profile) for sampled_session in sampled
+    )
     _validate_plan(tasks)
     workload = {
         "source_sha256": analysis.source_sha256,
         "source_bundle_sha256": trace_ir.bundle_sha256 if trace_ir is not None else None,
         "workload_config": workload_config,
         "interval_model": interval_model.to_dict(),
+        "token_recipe_profile": token_recipe_profile.to_dict() if token_recipe_profile is not None else None,
         "tasks": [task.to_dict() for task in tasks],
     }
     return ReplayPlan(
-        schema_version="1",
+        schema_version="2" if token_recipe_profile is not None else "1",
         plan_kind="structural",
-        planner_version="agentinfer-replay-structural/v9",
+        planner_version=planner_version,
         execution_ready=False,
         execution_unavailable_reason="structural plan requires runtime Prompt calibration",
         source=str(config.replay.trace_path),
@@ -434,4 +511,5 @@ def build_replay_plan(
         },
         interval_model=interval_model,
         tasks=tasks,
+        token_recipe_profile=token_recipe_profile,
     )

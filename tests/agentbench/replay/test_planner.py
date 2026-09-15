@@ -78,6 +78,56 @@ def test_execution_metadata_partitions_sent_and_pre_send_failures() -> None:
     assert metadata["dependency_skipped_requests"] == 1
 
 
+def test_execution_metadata_partitions_recipe_cache_usage() -> None:
+    planned = (
+        SimpleNamespace(node_type="request", context_mode="independent", runtime_request_id="root", input_after=None),
+        SimpleNamespace(
+            node_type="request",
+            context_mode="independent",
+            runtime_request_id="next",
+            input_after="source-root",
+        ),
+    )
+    plan = SimpleNamespace(workload_fingerprint="fingerprint", tasks=(SimpleNamespace(requests=planned),))
+    nodes = (
+        NodeExecution("root", "root", "request", "lead_main", "success", 0, 0, 0, None),
+        NodeExecution("next", "next", "request", "continuation", "success", 0, 0, 0, None),
+    )
+    task_results = (ReplayTaskExecution("task", "session", "completed", 1, None, nodes),)
+    facts = tuple(
+        RequestFact(
+            "1",
+            "run",
+            request_id,
+            "session",
+            "lead",
+            "lead",
+            "start",
+            "finish",
+            "success",
+            200,
+            1,
+            0.1,
+            10,
+            2,
+            None,
+            cached,
+            "http://backend",
+            None,
+        )
+        for request_id, cached in (("root", 0), ("next", 8))
+    )
+
+    metadata = _execution_metadata(plan, task_results, facts=facts)  # type: ignore[arg-type]
+
+    assert metadata["cache_usage_coverage_requests"] == 2
+    assert metadata["observed_cached_tokens"] == 8
+    assert metadata["first_request_cache_usage_coverage"] == 1
+    assert metadata["first_request_observed_cached_tokens"] == 0
+    assert metadata["continuation_cache_usage_coverage"] == 1
+    assert metadata["continuation_observed_cached_tokens"] == 8
+
+
 def _source(path: Path) -> None:
     rows = [
         _row("s1-lead", "s1", "lead", 0, 1, cached_tokens=6),

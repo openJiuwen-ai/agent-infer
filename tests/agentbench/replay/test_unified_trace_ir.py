@@ -157,7 +157,7 @@ def test_trace_record_uses_human_sidecar_and_live_length_aligned_assistant(tmp_p
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": tmp_path / "source.json",
-                "prompt_shape": "trace_record",
+                "prompt_shape": "inferact_synthetic",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {
                     "p50_seconds": 2,
@@ -200,7 +200,7 @@ def test_trace_record_audits_large_live_assistant_residual_without_rewriting_tex
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": tmp_path / "source.json",
-                "prompt_shape": "trace_record",
+                "prompt_shape": "inferact_synthetic",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
             },
@@ -304,7 +304,7 @@ def test_inferact_trace_is_validated_before_analysis(
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": source,
-                "prompt_shape": "trace_record",
+                "prompt_shape": "inferact_synthetic",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
             }
@@ -362,7 +362,7 @@ def test_trace_record_runner_reports_consistent_residual_metrics(
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": source,
-                "prompt_shape": "trace_record",
+                "prompt_shape": "inferact_synthetic",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
                 "prompt_calibration_tolerance_tokens": 1,
@@ -393,9 +393,12 @@ def test_trace_record_runner_reports_consistent_residual_metrics(
     assert validation["sum_absolute_residual_tokens"] == 6
 
 
-@pytest.mark.parametrize("trace_type", ["agentX", "tracelab"])
-def test_reserved_trace_types_fail_explicitly(tmp_path: Path, trace_type: str) -> None:
-    config = ReplayBenchConfig.model_validate({"replay": {"trace_type": trace_type, "trace_path": tmp_path / "trace"}})
+@pytest.mark.parametrize("trace_type", ["agentX"])
+@pytest.mark.parametrize("prompt_shape", ["agentinfer_synthetic", "agentX_synthetic"])
+def test_reserved_trace_types_fail_explicitly(tmp_path: Path, trace_type: str, prompt_shape: str) -> None:
+    config = ReplayBenchConfig.model_validate(
+        {"replay": {"trace_type": trace_type, "trace_path": tmp_path / "trace", "prompt_shape": prompt_shape}}
+    )
 
     with pytest.raises(NotImplementedError, match="reserved for future integration"):
         _prepare_replay_source(config, tmp_path / "result")
@@ -445,7 +448,7 @@ def test_runtime_converter_uses_configured_backend_tokenizer(monkeypatch: pytest
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": "source.json",
-                "prompt_shape": "trace_record",
+                "prompt_shape": "inferact_synthetic",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
             },
@@ -490,7 +493,7 @@ def test_runtime_converter_rejects_incompatible_chat_template(monkeypatch: pytes
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": "source.json",
-                "prompt_shape": "trace_record",
+                "prompt_shape": "inferact_synthetic",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
             }
