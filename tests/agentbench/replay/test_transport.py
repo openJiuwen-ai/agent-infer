@@ -36,7 +36,11 @@ def test_chat_transport_streams_content_usage_and_plan_identity(tmp_path: Path) 
     async def send() -> tuple[object, dict[str, object]]:
         config = ReplayBenchConfig.model_validate(
             {
-                "backend": {"base_url": "http://backend", "endpoint": "/v1/chat/completions"},
+                "backend": {
+                    "base_url": "http://backend",
+                    "endpoint": "/v1/chat/completions",
+                    "chat_template_kwargs": {"enable_thinking": False, "clear_thinking": True},
+                },
                 "replay": {"trace_path": "source.jsonl"},
             }
         )
@@ -82,6 +86,7 @@ def test_chat_transport_streams_content_usage_and_plan_identity(tmp_path: Path) 
     assert result.assistant_content == "hello"
     assert body["min_tokens"] == body["max_tokens"] == 3
     assert body["seed"] == 7
+    assert body["chat_template_kwargs"] == {"enable_thinking": False, "clear_thinking": True}
     assert "tools" not in body
     assert facts[0].request_id == "request"
     assert facts[0].request_purpose == "lead_main"

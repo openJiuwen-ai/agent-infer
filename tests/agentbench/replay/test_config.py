@@ -54,6 +54,25 @@ def test_tokenizer_url_follows_backend_until_explicitly_overridden() -> None:
     assert explicit.backend.resolved_tokenizer_base_url == "http://tokenizer"
 
 
+def test_backend_accepts_chat_template_kwargs() -> None:
+    config = ReplayBenchConfig.model_validate(
+        {
+            "backend": {
+                "chat_template_kwargs": {
+                    "enable_thinking": False,
+                    "clear_thinking": True,
+                }
+            },
+            "replay": {"trace_path": "source.jsonl"},
+        }
+    )
+
+    assert config.backend.chat_template_kwargs == {
+        "enable_thinking": False,
+        "clear_thinking": True,
+    }
+
+
 def test_replay_sample_yaml_loads() -> None:
     config = load_replay_config(Path("agentinfer/agentbench/configs/replay_benchmark.yaml"))
 

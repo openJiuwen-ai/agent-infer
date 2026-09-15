@@ -162,6 +162,8 @@ class ReplayTransport:
             }
             if prompt.tools:
                 body["tools"] = list(prompt.tools)
+            if self.config.backend.chat_template_kwargs:
+                body["chat_template_kwargs"] = dict(self.config.backend.chat_template_kwargs)
             return body
         body = {
             **prompt.anthropic_payload(self.config.backend.model),

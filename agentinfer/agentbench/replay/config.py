@@ -44,6 +44,7 @@ class ReplayBackendConfig(ReplayStrictModel):
         "/v1/chat/completions",
         json_schema_extra={"cli": True},
     )
+    chat_template_kwargs: dict[str, object] = Field(default_factory=dict)
     api_key_env: str | None = None
 
     @property
