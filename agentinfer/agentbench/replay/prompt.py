@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -19,7 +20,7 @@ from typing import Literal
 import httpx
 
 from .config import ReplayBenchConfig
-from .planner import ReplayPlanNode, ReplayTaskPlan
+from .planner import ReplayPlanNode, ReplayTaskPlan, TokenRecipeProfile
 from .tokenizer_retry import TOKENIZER_REQUEST_MAX_ATTEMPTS, TOKENIZER_RETRY_BACKOFF_SECONDS
 from .unified_trace_ir import PromptReference, TraceTextStore, UnifiedTraceIR
 
@@ -50,6 +51,9 @@ class PromptCalibration:
     repair_attempts: int
     count_history: tuple[int, ...]
     adjustment: Literal["none", "pad", "trim", "trim_and_pad", "reset", "reset_and_pad"]
+    planned_reuse_tokens: int | None = None
+    actual_shared_prefix_tokens: int | None = None
+    wire_token_ids_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +65,7 @@ class SyntheticPrompt:
     messages: tuple[dict[str, object], ...]
     calibration: PromptCalibration | None = None
     extra_body: dict[str, object] | None = None
+    wire_token_ids: tuple[int, ...] | None = None
 
     def anthropic_tools(self) -> list[dict[str, object]]:
         """Convert internal function tools to Anthropic Messages tool objects."""
@@ -123,6 +128,8 @@ class TokenizerClient:
         )
         self._token_ids: dict[str, tuple[int, ...]] = {}
         self._text_cache: dict[tuple[str, int], str] = {}
+        self.token_recipe_prefix_ids: tuple[int, ...] | None = None
+        self.token_recipe_suffix_ids: tuple[int, ...] | None = None
 
     async def close(self) -> None:
         await self.client.aclose()
@@ -141,6 +148,56 @@ class TokenizerClient:
         response = await self._post("/tokenize", json=prompt.tokenizer_payload(self.model))
         response.raise_for_status()
         return int(response.json()["count"])
+
+    async def prompt_token_ids(self, prompt: SyntheticPrompt) -> tuple[int, ...]:
+        """Return token IDs for the exact Chat Completions wire Prompt."""
+
+        if self.endpoint != "/v1/chat/completions":
+            raise ValueError("complete Prompt token IDs require /v1/chat/completions")
+        response = await self._post("/tokenize", json=prompt.tokenizer_payload(self.model))
+        response.raise_for_status()
+        tokens = response.json().get("tokens")
+        if not isinstance(tokens, list) or any(
+            isinstance(token, bool) or not isinstance(token, int) for token in tokens
+        ):
+            raise ValueError("Backend /tokenize response has no integer tokens list")
+        return tuple(tokens)
+
+    async def probe_token_recipe_profile(self) -> TokenRecipeProfile:
+        """Verify stable user-content insertion boundaries in the Backend template."""
+
+        left_text = await self.token_text("token-recipe-probe-left", 32)
+        right_text = await self.token_text("token-recipe-probe-right", 32)
+        left_content = await self.text_token_ids(left_text)
+        right_content = await self.text_token_ids(right_text)
+        left = await self.prompt_token_ids(SyntheticPrompt("", (), ({"role": "user", "content": left_text},)))
+        right = await self.prompt_token_ids(SyntheticPrompt("", (), ({"role": "user", "content": right_text},)))
+
+        def insertion(wire: tuple[int, ...], content: tuple[int, ...]) -> tuple[int, int]:
+            matches = [
+                index for index in range(len(wire) - len(content) + 1) if wire[index : index + len(content)] == content
+            ]
+            if len(matches) != 1:
+                raise ValueError("Backend template does not expose one stable user-content insertion")
+            start = matches[0]
+            return start, len(wire) - start - len(content)
+
+        left_boundary = insertion(left, left_content)
+        right_boundary = insertion(right, right_content)
+        if left_boundary != right_boundary:
+            raise ValueError("Backend template user-content boundaries vary by content")
+        prefix, suffix = left_boundary
+        if prefix <= 0 or suffix <= 0:
+            raise ValueError("Backend template has no stable token_recipe framing")
+        if left[:prefix] != right[:prefix] or left[len(left) - suffix :] != right[len(right) - suffix :]:
+            raise ValueError("Backend template does not preserve raw user-content token IDs")
+        self.token_recipe_prefix_ids = left[:prefix]
+        self.token_recipe_suffix_ids = left[len(left) - suffix :]
+        material = json.dumps(
+            {"prefix": self.token_recipe_prefix_ids, "suffix": self.token_recipe_suffix_ids},
+            separators=(",", ":"),
+        ).encode()
+        return TokenRecipeProfile(prefix, suffix, hashlib.sha256(material).hexdigest())
 
     async def text_token_ids(self, text: str) -> tuple[int, ...]:
         response = await self._post(
@@ -187,11 +244,11 @@ class TokenizerClient:
                 await asyncio.sleep(delay)
         raise AssertionError("unreachable")
 
-    async def token_text(self, namespace: str, count: int) -> str:
+    async def token_text(self, namespace: str, count: int, *, cache: bool = True) -> str:
         if count == 0:
             return ""
         cache_key = (namespace, count)
-        if cache_key in self._text_cache:
+        if cache and cache_key in self._text_cache:
             return self._text_cache[cache_key]
         ids = self._token_ids.get(namespace)
         if ids is None:
@@ -200,7 +257,8 @@ class TokenizerClient:
             self._token_ids[namespace] = ids
         tokens = [ids[index % len(ids)] for index in range(count)]
         text = await self.detokenize_tokens(tokens)
-        self._text_cache[cache_key] = text
+        if cache:
+            self._text_cache[cache_key] = text
         return text
 
 
@@ -215,8 +273,12 @@ class PromptBuilder:
     ) -> None:
         self.config = config
         self.tokenizer = tokenizer
-        if config.replay.prompt_shape == "trace_record" and trace_ir is None:
-            raise ValueError("trace_record Prompt construction requires a validated unified Trace IR")
+        if config.replay.prompt_shape == "inferact_synthetic" and trace_ir is None:
+            raise ValueError("inferact_synthetic Prompt construction requires a validated unified Trace IR")
+        if config.replay.prompt_shape == "tracelab_synthetic" and (
+            trace_ir is None or trace_ir.prompt_source_kind != "token_recipe"
+        ):
+            raise ValueError("token_recipe Prompt construction requires token_recipe unified Trace IR")
         self.trace_texts = TraceTextStore(trace_ir) if trace_ir is not None else None
 
     async def build(
@@ -227,8 +289,10 @@ class PromptBuilder:
     ) -> SyntheticPrompt:
         """Build one node Prompt from its recipe, context mode, and prior exchange."""
 
-        if self.config.replay.prompt_shape == "trace_record":
+        if self.config.replay.prompt_shape == "inferact_synthetic":
             return await self._trace_record_prompt(node, context)
+        if self.config.replay.prompt_shape == "tracelab_synthetic":
+            return await self._token_recipe_prompt(task, node, context)
         namespace = f"{task.runtime_session_id}:{node.prompt_recipe_key}"
         context_mode = getattr(node, "context_mode", "independent" if context is None else "append")
         if context_mode == "reset":
@@ -251,6 +315,104 @@ class PromptBuilder:
             node.planned_input_tokens,
             context_mode=context_mode,
         )
+
+    @staticmethod
+    def _longest_common_prefix(left: tuple[int, ...], right: tuple[int, ...]) -> int:
+        """Return the number of identical leading token IDs."""
+
+        size = 0
+        while size < min(len(left), len(right)) and left[size] == right[size]:
+            size += 1
+        return size
+
+    async def _token_recipe_prompt(
+        self,
+        task: ReplayTaskPlan,
+        node: ReplayPlanNode,
+        context: PromptExchange | None,
+    ) -> SyntheticPrompt:
+        """Render an exact-length full Prompt with a measured predecessor prefix."""
+
+        prefix_ids = self.tokenizer.token_recipe_prefix_ids
+        suffix_ids = self.tokenizer.token_recipe_suffix_ids
+        if prefix_ids is None or suffix_ids is None:
+            raise ValueError("token_recipe template profile was not probed")
+        assert node.planned_input_tokens is not None
+        assert node.planned_reuse_tokens is not None
+        target = node.planned_input_tokens
+        content_count = target - len(prefix_ids) - len(suffix_ids)
+        if content_count < 1:
+            raise ValueError(f"token_recipe target {target} cannot fit template and private content")
+
+        previous_ids: tuple[int, ...] | None = None
+        shared_content: tuple[int, ...] = ()
+        if node.input_after is not None:
+            if context is None or context.prompt.wire_token_ids is None:
+                raise ValueError(f"token_recipe request {node.source_key} has no input predecessor")
+            previous_ids = context.prompt.wire_token_ids
+            reuse = node.planned_reuse_tokens
+            if reuse < len(prefix_ids):
+                raise ValueError("planned token_recipe prefix is shorter than the template prefix")
+            shared_content = previous_ids[len(prefix_ids) : reuse]
+        elif context is not None:
+            raise ValueError("token_recipe root unexpectedly received an input predecessor")
+
+        private_count = content_count - len(shared_content)
+        if private_count < 1:
+            raise ValueError("token_recipe has no room for request-private content")
+        namespace = f"{task.runtime_session_id}:{node.source_key}:token-recipe"
+        selected_ids: tuple[int, ...] | None = None
+        selected_text: str | None = None
+        for variant in range(32):
+            private_text = await self.tokenizer.token_text(f"{namespace}:{variant}", private_count, cache=False)
+            private_ids = await self.tokenizer.text_token_ids(private_text)
+            if len(private_ids) != private_count:
+                continue
+            candidate_ids = shared_content + private_ids
+            if (
+                previous_ids is not None
+                and previous_ids[node.planned_reuse_tokens] == candidate_ids[len(shared_content)]
+            ):
+                continue
+            content = await self.tokenizer.detokenize_tokens(candidate_ids)
+            if await self.tokenizer.text_token_ids(content) != candidate_ids:
+                continue
+            selected_ids = candidate_ids
+            selected_text = content
+            break
+        if selected_ids is None or selected_text is None:
+            raise ValueError(f"cannot render stable token_recipe private suffix for {node.source_key}")
+
+        prompt = SyntheticPrompt("", (), ({"role": "user", "content": selected_text},))
+        wire_ids = await self.tokenizer.prompt_token_ids(prompt)
+        expected_ids = prefix_ids + selected_ids + suffix_ids
+        if wire_ids != expected_ids or len(wire_ids) != target:
+            raise ValueError(f"token_recipe wire tokens do not match the verified template for {node.source_key}")
+        actual_reuse = None if previous_ids is None else self._longest_common_prefix(previous_ids, wire_ids)
+        if actual_reuse is not None and actual_reuse != node.planned_reuse_tokens:
+            raise ValueError(
+                f"token_recipe LCP mismatch for {node.source_key}: planned={node.planned_reuse_tokens} actual={actual_reuse}"
+            )
+        digest = hashlib.sha256(json.dumps(wire_ids, separators=(",", ":")).encode()).hexdigest()
+        calibration = PromptCalibration(
+            target_tokens=target,
+            initial_tokens=target,
+            final_tokens=target,
+            added_filler_tokens=private_count,
+            requested_filler_tokens=private_count,
+            actual_prompt_token_gain=private_count,
+            trimmed_filler_tokens=0,
+            residual_tokens=0,
+            target_met=True,
+            accepted_with_tolerance=False,
+            repair_attempts=0,
+            count_history=(target,),
+            adjustment="pad",
+            planned_reuse_tokens=node.planned_reuse_tokens,
+            actual_shared_prefix_tokens=actual_reuse,
+            wire_token_ids_sha256=digest,
+        )
+        return SyntheticPrompt(prompt.system, prompt.tools, prompt.messages, calibration, None, wire_ids)
 
     async def _auxiliary_prompt(
         self,
@@ -374,7 +536,7 @@ class PromptBuilder:
         assert self.trace_texts is not None
         reference = node.prompt_ref
         if not isinstance(reference, PromptReference):
-            raise ValueError(f"trace_record request {node.source_key} has no valid prompt_ref")
+            raise ValueError(f"inferact_synthetic request {node.source_key} has no valid prompt_ref")
         human_content = self.trace_texts.read(reference)
         user_message: dict[str, object] = {"role": "user", "content": human_content}
         if context is None:
@@ -391,7 +553,7 @@ class PromptBuilder:
         tolerance = self.config.replay.prompt_calibration_tolerance_tokens
         if abs(residual) > tolerance:
             logger.warning(
-                "trace_record Prompt exceeds the residual audit tolerance without modifying source text: "
+                "inferact_synthetic Prompt exceeds the residual audit tolerance without modifying source text: "
                 "source_key=%s target_tokens=%d final_tokens=%d residual_tokens=%d tolerance_tokens=%d",
                 node.source_key,
                 node.planned_input_tokens,

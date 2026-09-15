@@ -4,5 +4,6 @@
 """Dataset converters that produce the unified Replay Trace IR contract."""
 
 from .base import ConverterSummary, DeterministicBlockRenderer, ReplayDatasetConverter
+from .tracelab import TraceLabConverter
 
-__all__ = ["ConverterSummary", "DeterministicBlockRenderer", "ReplayDatasetConverter"]
+__all__ = ["ConverterSummary", "DeterministicBlockRenderer", "ReplayDatasetConverter", "TraceLabConverter"]

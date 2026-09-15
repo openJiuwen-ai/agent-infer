@@ -59,6 +59,7 @@ class ReplayTransport:
         ttft: float | None = None
         usage: dict[str, int] = {}
         content: list[str] = []
+        saw_done = False
         try:
             async with self.client.stream(
                 "POST",
@@ -74,7 +75,10 @@ class ReplayTransport:
                         if not line.startswith("data:"):
                             continue
                         raw = line[5:].strip()
-                        if not raw or raw == "[DONE]":
+                        if raw == "[DONE]":
+                            saw_done = True
+                            continue
+                        if not raw:
                             continue
                         payload = json.loads(raw)
                         delta = self._observe(payload, usage)
@@ -86,6 +90,17 @@ class ReplayTransport:
             error = f"{type(exc).__name__}: {exc}"
 
         finished_clock = time.monotonic()
+        if error is None and getattr(node, "response_validation", None) == "exact_tokens":
+            expected_input = node.planned_input_tokens
+            expected_output = node.planned_output_tokens
+            if not saw_done:
+                error = "exact token validation failed: stream ended without [DONE]"
+            elif usage.get("input_tokens") != expected_input or usage.get("output_tokens") != expected_output:
+                error = (
+                    "exact token validation failed: "
+                    f"input expected={expected_input} observed={usage.get('input_tokens')}; "
+                    f"output expected={expected_output} observed={usage.get('output_tokens')}"
+                )
         success = status_code is not None and status_code < 400 and error is None
         self.writer.submit(
             RequestFact(

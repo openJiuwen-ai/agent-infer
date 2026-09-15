@@ -176,7 +176,7 @@ def test_minimal_claude_shape_preserves_context_without_cache_control() -> None:
             {
                 "replay": {
                     "trace_path": "source.jsonl",
-                    "prompt_shape": "claude_code_minimal_v1",
+                    "prompt_shape": "agentinfer_synthetic",
                     "lead_1st_sys_shared_prefix": 2,
                     "lead_1st_sys_session_prefix": 3,
                     "lead_1st_tool_shared_prefix": 4,
@@ -485,7 +485,7 @@ def test_claude_shape_calibration_changes_only_private_remainder() -> None:
             {
                 "replay": {
                     "trace_path": "source.jsonl",
-                    "prompt_shape": "claude_code_minimal_v1",
+                    "prompt_shape": "agentinfer_synthetic",
                     "lead_1st_msg_shared_prefix": 5,
                     "lead_1st_trailing_system_prefix": 6,
                 }

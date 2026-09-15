@@ -23,16 +23,20 @@ backend:
 replay:
   # Trace adapter: agentinfer | inferact_codex_swebenchpro | agentX | tracelab.
   trace_type: agentinfer
-  # Source trace. Inferact conversion output is written under <result_dir>/convert_result/.
+  # Source trace. Dataset conversion output is written under <result_dir>/convert_result/.
   trace_path: ../data/replay/requests.jsonl
-  # Inferact additionally requires prompt_shape=trace_record, interval_mode=lognormal,
+  # Inferact additionally requires prompt_shape=inferact_synthetic, interval_mode=lognormal,
+  # and backend.endpoint=/v1/chat/completions.
+  # TraceLab requires prompt_shape=tracelab_synthetic, prompt_calibration_tolerance_tokens=0,
   # and backend.endpoint=/v1/chat/completions.
   trace_same_agent_gap_scale: 1.0
   trace_same_agent_gap_offset_seconds: 0.0
   interval_mode: trace
   # Seed for deterministic session sampling and Backend requests.
   sample_seed: 0
-  prompt_shape: claude_code_minimal_v1
+  # Prompt shape: agentinfer_synthetic | inferact_synthetic | tracelab_synthetic | agentX_synthetic.
+  # agentX_synthetic is reserved; AgentX conversion and execution are not implemented yet.
+  prompt_shape: agentinfer_synthetic
   # Replay omits cache_control markers; vLLM prefix caching is configured server-side.
   # Lead title uses only title-system sharing; Lead main uses first tool/message sharing.
   lead_title_sys_shared_prefix: 296

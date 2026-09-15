@@ -100,10 +100,12 @@ class ReplayExecutor:
         error = None
         nodes: list[NodeExecution] = []
         try:
-            await asyncio.wait_for(
-                self._execute_graph(task, nodes),
-                self.config.experiment.task_timeout_seconds,
+            operation = (
+                self._execute_token_recipe_task(task, nodes)
+                if self.config.replay.prompt_shape == "tracelab_synthetic"
+                else self._execute_graph(task, nodes)
             )
+            await asyncio.wait_for(operation, self.config.experiment.task_timeout_seconds)
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
         failed_nodes = any(node.status != "success" for node in nodes)
@@ -115,6 +117,86 @@ class ReplayExecutor:
             error,
             tuple(nodes),
         )
+
+    async def _execute_token_recipe_task(
+        self,
+        task: ReplayTaskPlan,
+        results: list[NodeExecution],
+    ) -> None:
+        """Execute a linear recipe while retaining only the preceding full Prompt."""
+
+        task_started = time.monotonic()
+        predecessor_finished = task_started
+        previous_prompt: SyntheticPrompt | None = None
+        recipe_failed = False
+        for node in task.requests:
+            if recipe_failed:
+                results.append(
+                    NodeExecution(
+                        node.source_key,
+                        node.runtime_request_id,
+                        node.node_type,
+                        node.prompt_kind,
+                        "skipped_recipe_dependency_failed",
+                        None,
+                        None,
+                        None,
+                        "input recipe predecessor failed",
+                        node.context_mode,
+                        None,
+                    )
+                )
+                continue
+            if node.node_type != "request":
+                raise ValueError("token_recipe plans may only contain request nodes")
+            context = PromptExchange(previous_prompt, "") if previous_prompt is not None else None
+            try:
+                prompt = await self.prompts.build(task, node, context)
+            except Exception as exc:
+                logger.exception(
+                    "Token recipe Prompt construction failed: session_id=%s source_key=%s",
+                    task.runtime_session_id,
+                    node.source_key,
+                )
+                recipe_failed = True
+                results.append(
+                    NodeExecution(
+                        node.source_key,
+                        node.runtime_request_id,
+                        node.node_type,
+                        node.prompt_kind,
+                        "failed",
+                        None,
+                        None,
+                        None,
+                        f"{type(exc).__name__}: {exc}",
+                        node.context_mode,
+                        None,
+                    )
+                )
+                continue
+            release_clock = predecessor_finished + node.effective_interval_seconds
+            planned_offset = release_clock - task_started
+            await asyncio.sleep(max(0, release_clock - time.monotonic()))
+            sent_clock = time.monotonic()
+            response = await self.transport.send(task, node, prompt)
+            results.append(
+                NodeExecution(
+                    node.source_key,
+                    node.runtime_request_id,
+                    node.node_type,
+                    node.prompt_kind,
+                    "success" if response.success else "failed",
+                    planned_offset,
+                    sent_clock - task_started,
+                    max(0, sent_clock - release_clock),
+                    response.error,
+                    node.context_mode,
+                    asdict(prompt.calibration) if prompt.calibration is not None else None,
+                )
+            )
+            previous_prompt = prompt
+            predecessor_finished = response.finished_clock
 
     async def _execute_graph(
         self,

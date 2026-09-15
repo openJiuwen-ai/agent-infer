@@ -138,9 +138,11 @@ def effective_interval_seconds(
 
     if request.send_after is None and request.delay_seconds == 0:
         return 0.0
-    if request.dependency_kind != "same_agent" or request.same_agent_gap_seconds is None:
+    if request.dependency_kind != "same_agent":
         return request.delay_seconds
     if config.interval_mode == "trace":
+        if request.same_agent_gap_seconds is None:
+            raise ValueError(f"trace interval is unavailable for request {request.key}")
         return max(
             0.0,
             request.same_agent_gap_seconds * config.trace_same_agent_gap_scale

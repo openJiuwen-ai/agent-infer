@@ -65,7 +65,7 @@ def test_replay_sample_yaml_loads() -> None:
     assert config.backend.metrics_url is None
     assert config.backend.effective_metrics_url == "http://127.0.0.1:8000/metrics"
     assert config.replay.interval_mode == "trace"
-    assert config.replay.prompt_shape == "claude_code_minimal_v1"
+    assert config.replay.prompt_shape == "agentinfer_synthetic"
     assert config.replay.lead_title_sys_shared_prefix == 296
     assert config.replay.lead_name_sys_shared_prefix == 105
     assert config.replay.lead_1st_sys_shared_prefix == 18
@@ -97,12 +97,18 @@ def test_replay_rejects_obsolete_router_config() -> None:
         )
 
 
-def test_replay_defaults_to_minimal_and_rejects_removed_legacy_shape() -> None:
+@pytest.mark.parametrize("obsolete_shape", ["legacy", "claude_code_minimal_v1", "trace_record", "token_recipe"])
+def test_replay_defaults_to_agentinfer_and_rejects_obsolete_shapes(obsolete_shape: str) -> None:
     config = ReplayBenchConfig.model_validate({"replay": {"trace_path": "source.jsonl"}})
 
-    assert config.replay.prompt_shape == "claude_code_minimal_v1"
+    assert config.replay.prompt_shape == "agentinfer_synthetic"
     with pytest.raises(ValidationError, match="prompt_shape"):
-        ReplayBenchConfig.model_validate({"replay": {"trace_path": "source.jsonl", "prompt_shape": "legacy"}})
+        ReplayBenchConfig.model_validate({"replay": {"trace_path": "source.jsonl", "prompt_shape": obsolete_shape}})
+
+
+def test_reserved_agentx_shape_cannot_select_agentinfer_execution() -> None:
+    with pytest.raises(ValidationError, match="requires trace_type=agentX"):
+        ReplayBenchConfig.model_validate({"replay": {"trace_path": "source.jsonl", "prompt_shape": "agentX_synthetic"}})
 
 
 def test_lognormal_requires_three_quantile_anchors() -> None:
@@ -146,13 +152,36 @@ def test_inferact_requires_chat_completions_endpoint() -> None:
         "replay": {
             "trace_type": "inferact_codex_swebenchpro",
             "trace_path": "source.json",
-            "prompt_shape": "trace_record",
+            "prompt_shape": "inferact_synthetic",
             "interval_mode": "lognormal",
             "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
         },
     }
     with pytest.raises(ValidationError, match="backend.endpoint=/v1/chat/completions"):
         ReplayBenchConfig.model_validate(payload)
+
+
+def test_tracelab_requires_token_recipe_exact_calibration_and_chat_endpoint() -> None:
+    valid = {
+        "backend": {"endpoint": "/v1/chat/completions"},
+        "replay": {
+            "trace_type": "tracelab",
+            "trace_path": "rounds.jsonl",
+            "prompt_shape": "tracelab_synthetic",
+            "prompt_calibration_tolerance_tokens": 0,
+        },
+    }
+    assert ReplayBenchConfig.model_validate(valid).replay.trace_type == "tracelab"
+
+    for section, field, value, message in (
+        ("replay", "prompt_shape", "inferact_synthetic", "prompt_shape=tracelab_synthetic"),
+        ("replay", "prompt_calibration_tolerance_tokens", 1, "tolerance_tokens=0"),
+        ("backend", "endpoint", "/v1/messages", "endpoint=/v1/chat/completions"),
+    ):
+        payload = {name: dict(settings) for name, settings in valid.items()}
+        payload[section][field] = value
+        with pytest.raises(ValidationError, match=message):
+            ReplayBenchConfig.model_validate(payload)
 
 
 def test_trace_path_is_resolved_relative_to_yaml(tmp_path: Path) -> None:
