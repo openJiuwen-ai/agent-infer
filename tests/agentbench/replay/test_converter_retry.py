@@ -23,8 +23,9 @@ def backend(monkeypatch):
         state["calls"] += 1
         payload = json.loads(request.content)
         prompt = payload.get("prompt", "")
+        searchable_text = prompt or "".join(message["content"] for message in payload.get("messages", []))
         trigger = state["trigger"]
-        if state["failures"] and (trigger is None or trigger in prompt):
+        if state["failures"] and (trigger is None or trigger in searchable_text):
             state["failures"] -= 1
             failure = state["failure"]
             if isinstance(failure, httpx.Response):
@@ -78,7 +79,7 @@ def config(tmp_path):
 
 @pytest.mark.parametrize("trigger", [None, "second"])
 def test_conversion_recovers_without_changing_artifacts(backend, config, tmp_path, trigger):
-    """A transient failure at initialization or mid-conversion preserves the entire IR."""
+    """A transient failure on the first request or mid-conversion preserves the entire IR."""
     _prepare_replay_source(config, tmp_path / "baseline")
     backend.update(failures=1, trigger=trigger)
     _prepare_replay_source(config, tmp_path / "recovered")

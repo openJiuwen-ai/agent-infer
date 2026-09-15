@@ -32,9 +32,8 @@ class _CharacterTokenizer:
     def content_tokens(self, text: str) -> int:
         return len(text)
 
-    def trace_turn_tokens(self, completed_tokens: int, human: str, assistant: str) -> tuple[int, int]:
-        input_tokens = completed_tokens + len(human)
-        return input_tokens, completed_tokens + len(human) + len(assistant)
+    def input_tokens(self, messages: list[dict[str, str]]) -> int:
+        return sum(len(message["content"]) for message in messages)
 
 
 class _RuntimeCharacterTokenizer:
@@ -401,8 +400,8 @@ def test_reserved_trace_types_fail_explicitly(tmp_path: Path, trace_type: str) -
         _prepare_replay_source(config, tmp_path / "result")
 
 
-def test_runtime_converter_uses_configured_backend_tokenizer(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[str, str]] = []
+def test_runtime_converter_uses_configured_backend_chat_template(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
 
     class Response:
         def __init__(self, count: int) -> None:
@@ -419,18 +418,8 @@ def test_runtime_converter_uses_configured_backend_tokenizer(monkeypatch: pytest
             pass
 
         def post(self, url: str, json: dict[str, object]) -> Response:
-            if "prompt" in json:
-                prompt = str(json["prompt"])
-            else:
-                prompt = (
-                    "".join(
-                        f"<|im_start|>{message['role']}\n{message['content']}<|im_end|>\n"
-                        for message in json["messages"]
-                    )
-                    + "<|im_start|>assistant\n"
-                )
-            calls.append((url, prompt))
-            return Response(len(prompt))
+            calls.append((url, json))
+            return Response(37)
 
         def close(self) -> None:
             pass
@@ -441,6 +430,7 @@ def test_runtime_converter_uses_configured_backend_tokenizer(monkeypatch: pytest
             "backend": {
                 "base_url": "http://backend",
                 "tokenizer_base_url": "http://tokenizer",
+                "model": "example/custom-chat-model",
             },
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
@@ -453,15 +443,31 @@ def test_runtime_converter_uses_configured_backend_tokenizer(monkeypatch: pytest
     )
 
     converter = CodexSwebenchProConverter.from_backend(config)
-    input_tokens, completed_tokens = converter.tokenizer.trace_turn_tokens(0, "human", "assistant")
+    messages = [
+        {"role": "user", "content": "human"},
+        {"role": "assistant", "content": "assistant"},
+        {"role": "user", "content": "next"},
+    ]
+    input_tokens = converter.tokenizer.input_tokens(messages)
     converter.close()
 
-    assert input_tokens > 0 and completed_tokens > input_tokens
-    assert calls and all(url == "http://tokenizer/tokenize" for url, _ in calls)
+    assert input_tokens == 37
+    assert calls == [
+        (
+            "http://tokenizer/tokenize",
+            {
+                "model": "example/custom-chat-model",
+                "messages": messages,
+                "add_generation_prompt": True,
+            },
+        )
+    ]
 
 
-def test_runtime_converter_rejects_incompatible_chat_template(monkeypatch: pytest.MonkeyPatch) -> None:
-    closed = False
+def test_runtime_converter_counts_each_turn_with_full_backend_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    message_calls: list[list[dict[str, str]]] = []
 
     class Response:
         def __init__(self, count: int) -> None:
@@ -478,28 +484,51 @@ def test_runtime_converter_rejects_incompatible_chat_template(monkeypatch: pytes
             pass
 
         def post(self, url: str, json: dict[str, object]) -> Response:
-            return Response(1 if "messages" in json else len(str(json["prompt"])))
+            if "messages" in json:
+                messages = json["messages"]
+                assert isinstance(messages, list)
+                message_calls.append([dict(message) for message in messages])
+                return Response(100 + len(messages))
+            return Response(len(str(json["prompt"])))
 
         def close(self) -> None:
-            nonlocal closed
-            closed = True
+            pass
 
     monkeypatch.setattr("agentinfer.agentbench.replay.converters.codex_swebenchpro.httpx.Client", Client)
-    config = ReplayBenchConfig.model_validate(
-        {
-            "replay": {
-                "trace_type": "inferact_codex_swebenchpro",
-                "trace_path": "source.json",
-                "prompt_shape": "trace_record",
-                "interval_mode": "lognormal",
-                "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
-            }
-        }
+    source = tmp_path / "source.json"
+    source.write_text(
+        json.dumps(
+            [
+                {
+                    "conversations": [
+                        {"from": "human", "value": "first"},
+                        {"from": "gpt", "value": "answer"},
+                        {"from": "human", "value": "second"},
+                        {"from": "gpt", "value": "done"},
+                    ]
+                }
+            ]
+        ),
+        encoding="utf-8",
     )
+    config = ReplayBenchConfig.model_validate({"replay": {"trace_path": source}})
+    converter = CodexSwebenchProConverter.from_backend(config)
+    converter.convert(source, tmp_path / "output")
+    converter.close()
 
-    with pytest.raises(ValueError, match="incompatible"):
-        CodexSwebenchProConverter.from_backend(config)
-    assert closed is True
+    assert message_calls == [
+        [{"role": "user", "content": "first"}],
+        [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "answer"},
+            {"role": "user", "content": "second"},
+        ],
+    ]
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "output" / "requests.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["input_tokens"] for row in rows] == [101, 103]
 
 
 def test_converter_rejects_empty_source(tmp_path: Path) -> None:

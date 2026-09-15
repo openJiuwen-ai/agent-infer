@@ -27,7 +27,7 @@ from ..tokenizer_retry import TOKENIZER_REQUEST_MAX_ATTEMPTS, TOKENIZER_RETRY_BA
 from ..unified_trace_ir import write_trace_ir_manifest
 from .base import ConverterSummary, ReplayDatasetConverter
 
-_CONVERTER_VERSION = "agentinfer-codex-swebenchpro/v3"
+_CONVERTER_VERSION = "agentinfer-codex-swebenchpro/v4"
 logger = logging.getLogger(__name__)
 
 
@@ -119,8 +119,8 @@ class _TraceTokenizer(Protocol):
 
         ...
 
-    def trace_turn_tokens(self, completed_tokens: int, human: str, assistant: str) -> tuple[int, int]:
-        """Return current input tokens and the updated completed transcript count."""
+    def input_tokens(self, messages: list[dict[str, str]]) -> int:
+        """Count one complete conversation using the Backend chat template."""
 
         ...
 
@@ -140,12 +140,6 @@ class _BackendTokenizer:
             trust_env=False,
         )
         self._count_cache: dict[bytes, int] = {}
-        try:
-            self.generation_prefix_tokens = self._count("<|im_start|>assistant\n")
-            self._validate_chat_template()
-        except BaseException:
-            self.client.close()
-            raise
 
     def close(self) -> None:
         """Close the synchronous Backend HTTP client."""
@@ -192,44 +186,20 @@ class _BackendTokenizer:
             self._count_cache[cache_key] = count
         return count
 
-    def _validate_chat_template(self) -> None:
-        messages = [
-            {"role": "user", "content": "agentinfer template probe"},
-            {"role": "assistant", "content": "probe response"},
-            {"role": "user", "content": "next probe"},
-        ]
-        complete_count = self._request_count(
-            {
-                "messages": messages,
-                "add_generation_prompt": True,
-            }
-        )
-        incremental_count = (
-            self._wire_chunk_tokens("user", "agentinfer template probe")
-            + self._wire_chunk_tokens("assistant", "probe response")
-            + self._wire_chunk_tokens("user", "next probe")
-            + self.generation_prefix_tokens
-        )
-        if complete_count != incremental_count:
-            raise ValueError(
-                "Backend tokenizer chat template is incompatible with the audited incremental Qwen ChatML layout"
-            )
-
-    def _wire_chunk_tokens(self, role: str, text: str) -> int:
-        return self._count(f"<|im_start|>{role}\n{text}<|im_end|>\n")
-
     def content_tokens(self, text: str) -> int:
         """Count raw content through the Backend tokenizer endpoint."""
 
         return self._count(text)
 
-    def trace_turn_tokens(self, completed_tokens: int, human: str, assistant: str) -> tuple[int, int]:
-        """Increment the audited Qwen ChatML transcript using Backend counts."""
+    def input_tokens(self, messages: list[dict[str, str]]) -> int:
+        """Count a conversation with the configured model's Backend chat template."""
 
-        user_tokens = self._wire_chunk_tokens("user", human)
-        input_tokens = completed_tokens + user_tokens + self.generation_prefix_tokens
-        completed_tokens += user_tokens + self._wire_chunk_tokens("assistant", assistant)
-        return input_tokens, completed_tokens
+        return self._request_count(
+            {
+                "messages": list(messages),
+                "add_generation_prompt": True,
+            }
+        )
 
 
 class CodexSwebenchProConverter(ReplayDatasetConverter):
@@ -283,7 +253,7 @@ class CodexSwebenchProConverter(ReplayDatasetConverter):
                 session_id = f"codex-session-{session_index:04d}"
                 session_dir = text_root / session_id
                 session_dir.mkdir()
-                completed_tokens = 0
+                messages: list[dict[str, str]] = []
                 for turn_index in range(len(conversations) // 2):
                     human = conversations[turn_index * 2]
                     assistant = conversations[turn_index * 2 + 1]
@@ -298,14 +268,12 @@ class CodexSwebenchProConverter(ReplayDatasetConverter):
 
                     text_path = session_dir / f"turn_{turn_index}.txt"
                     text_path.write_text(human_text, encoding="utf-8")
-                    input_tokens, completed_tokens = self.tokenizer.trace_turn_tokens(
-                        completed_tokens,
-                        human_text,
-                        assistant_text,
-                    )
+                    messages.append({"role": "user", "content": human_text})
+                    input_tokens = self.tokenizer.input_tokens(messages)
                     output_tokens = self.tokenizer.content_tokens(assistant_text)
                     if input_tokens <= 0 or output_tokens <= 0:
                         raise ValueError(f"{session_id} turn {turn_index} produced a non-positive token count")
+                    messages.append({"role": "assistant", "content": assistant_text})
                     synthetic = base_time + timedelta(microseconds=turn_index)
                     row = {
                         "request_id": f"{session_id}-turn-{turn_index:04d}",
