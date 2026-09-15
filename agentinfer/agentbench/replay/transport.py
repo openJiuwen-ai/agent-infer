@@ -61,7 +61,10 @@ class ReplayTransport:
         ttft: float | None = None
         usage: dict[str, int] = {}
         content: list[str] = []
-        reasoning: list[str] | None = [] if self.config.replay.prompt_shape == "trace_record" else None
+        reasoning: list[str] | None = (
+            [] if self.config.replay.prompt_shape in {"inferact_synthetic", "tracelab_synthetic"} else None
+        )
+        saw_done = False
         try:
             async with self.client.stream(
                 "POST",
@@ -77,7 +80,10 @@ class ReplayTransport:
                         if not line.startswith("data:"):
                             continue
                         raw = line[5:].strip()
-                        if not raw or raw == "[DONE]":
+                        if raw == "[DONE]":
+                            saw_done = True
+                            continue
+                        if not raw:
                             continue
                         payload = json.loads(raw)
                         reasoning_size = len(reasoning) if reasoning is not None else 0
@@ -94,7 +100,7 @@ class ReplayTransport:
             error is None
             and status_code is not None
             and status_code < 400
-            and self.config.replay.prompt_shape == "trace_record"
+            and self.config.replay.prompt_shape == "inferact_synthetic"
         ):
             actual = usage.get("input_tokens")
             target = node.planned_input_tokens
@@ -103,6 +109,17 @@ class ReplayTransport:
             elif actual != target:
                 error = f"Current-turn input verification failed: actual={actual} target={target}; exact count required"
         finished_clock = time.monotonic()
+        if error is None and getattr(node, "response_validation", None) == "exact_tokens":
+            expected_input = node.planned_input_tokens
+            expected_output = node.planned_output_tokens
+            if not saw_done:
+                error = "exact token validation failed: stream ended without [DONE]"
+            elif usage.get("input_tokens") != expected_input or usage.get("output_tokens") != expected_output:
+                error = (
+                    "exact token validation failed: "
+                    f"input expected={expected_input} observed={usage.get('input_tokens')}; "
+                    f"output expected={expected_output} observed={usage.get('output_tokens')}"
+                )
         success = status_code is not None and status_code < 400 and error is None
         self.writer.submit(
             RequestFact(
@@ -206,7 +223,7 @@ class ReplayTransport:
         return body
 
     def _observe(self, payload: dict[str, object], usage: dict[str, int], reasoning: list[str] | None = None) -> str:
-        """Collect usage and, for trace_record, keep reasoning separate from visible text."""
+        """Collect usage and keep requested reasoning separate from visible text."""
 
         raw_usage = payload.get("usage")
         if not isinstance(raw_usage, dict):

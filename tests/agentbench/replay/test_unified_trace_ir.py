@@ -181,7 +181,7 @@ def test_trace_ir_rejects_old_manifest_schema(tmp_path: Path) -> None:
         validate_trace_ir(output / "requests.jsonl", output / "texts")
 
 
-def test_trace_record_uses_human_sidecar_and_live_length_aligned_assistant(tmp_path: Path) -> None:
+def test_inferact_synthetic_uses_human_sidecar_and_live_length_aligned_assistant(tmp_path: Path) -> None:
     output, _, trace_ir = _trace_ir(tmp_path)
     config = ReplayBenchConfig.model_validate(
         {
@@ -189,7 +189,7 @@ def test_trace_record_uses_human_sidecar_and_live_length_aligned_assistant(tmp_p
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": tmp_path / "source.json",
-                "prompt_shape": "trace_record",
+                "prompt_shape": "inferact_synthetic",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {
                     "p50_seconds": 2,
@@ -224,7 +224,7 @@ def test_trace_record_uses_human_sidecar_and_live_length_aligned_assistant(tmp_p
     assert all(node.context_mode in {"independent", "append"} for node in task.requests)
 
 
-def test_trace_record_repairs_live_assistant_drift_by_default(tmp_path: Path) -> None:
+def test_inferact_synthetic_repairs_live_assistant_drift_by_default(tmp_path: Path) -> None:
     output, _, trace_ir = _trace_ir(tmp_path)
     config = ReplayBenchConfig.model_validate(
         {
@@ -232,7 +232,7 @@ def test_trace_record_repairs_live_assistant_drift_by_default(tmp_path: Path) ->
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": tmp_path / "source.json",
-                "prompt_shape": "trace_record",
+                "prompt_shape": "inferact_synthetic",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
             },
@@ -333,7 +333,7 @@ def test_inferact_trace_is_validated_before_analysis(
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": source,
-                "prompt_shape": "trace_record",
+                "prompt_shape": "inferact_synthetic",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
             }
@@ -353,7 +353,7 @@ def test_inferact_trace_is_validated_before_analysis(
     assert {capture.source for capture in captures} == {"replay_conversion_manifest"}
 
 
-def test_trace_record_runner_rejects_backend_residuals_and_reports_them(
+def test_inferact_synthetic_runner_rejects_backend_residuals_and_reports_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Reject even a one-token backend mismatch and retain the evidence in summaries."""
@@ -395,7 +395,7 @@ def test_trace_record_runner_rejects_backend_residuals_and_reports_them(
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": source,
-                "prompt_shape": "trace_record",
+                "prompt_shape": "inferact_synthetic",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
                 "prompt_calibration_tolerance_tokens": 0,
@@ -500,7 +500,7 @@ def test_current_turn_replay_repeats_targets_with_different_live_answers(tmp_pat
                 "replay": {
                     "trace_type": "inferact_codex_swebenchpro",
                     "trace_path": source,
-                    "prompt_shape": "trace_record",
+                    "prompt_shape": "inferact_synthetic",
                     "interval_mode": "lognormal",
                     "interval_lognormal": {"p50_seconds": 0.002, "p95_seconds": 0.03, "p99_seconds": 0.09},
                 },
@@ -532,9 +532,8 @@ def test_current_turn_replay_repeats_targets_with_different_live_answers(tmp_pat
         assert all(item["pad"] == item["trim"] == 8 for item in adjustments)
 
 
-@pytest.mark.parametrize("trace_type", ["agentX", "tracelab"])
-def test_reserved_trace_types_fail_explicitly(tmp_path: Path, trace_type: str) -> None:
-    config = ReplayBenchConfig.model_validate({"replay": {"trace_type": trace_type, "trace_path": tmp_path / "trace"}})
+def test_reserved_agentx_trace_type_fails_explicitly(tmp_path: Path) -> None:
+    config = ReplayBenchConfig.model_validate({"replay": {"trace_type": "agentX", "trace_path": tmp_path / "trace"}})
 
     with pytest.raises(NotImplementedError, match="reserved for future integration"):
         _prepare_replay_source(config, tmp_path / "result")
@@ -576,7 +575,7 @@ def test_runtime_converter_uses_configured_backend_chat_template(monkeypatch: py
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": "source.json",
-                "prompt_shape": "trace_record",
+                "prompt_shape": "inferact_synthetic",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
             },

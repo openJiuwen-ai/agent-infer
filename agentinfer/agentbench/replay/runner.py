@@ -24,16 +24,17 @@ from ..benchkit.metrics.schema import EvidenceCapture
 from ..benchkit.metrics.source_health import evaluate_captures
 from ..benchkit.metrics.task import aggregate_task_results
 from ..benchkit.metrics.vllm import aggregate_vllm_metrics
-from ..request_proxy.request_trace import RequestTraceWriter, load_request_facts
+from ..request_proxy.request_trace import RequestFact, RequestTraceWriter, load_request_facts
 from .analyzer import analyze_replay_trace, replay_analysis_to_dict
 from .config import ReplayBenchConfig
 from .converters.codex_swebenchpro import CodexSwebenchProConverter
+from .converters.tracelab import TraceLabConverter
 from .executor import ReplayExecutor, ReplayTaskExecution
 from .local_tokenizer import LocalTokenizerCounter
 from .planner import ReplayPlan, build_replay_plan
 from .prompt import PromptBuilder, TokenizerClient
 from .transport import ReplayTransport
-from .unified_trace_ir import UnifiedTraceIR, validate_trace_ir
+from .unified_trace_ir import UnifiedTraceIR, analyze_explicit_trace_ir, validate_trace_ir
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,7 @@ def _execution_metadata(
     plan: ReplayPlan,
     tasks: tuple[ReplayTaskExecution, ...],
     tolerance_tokens: int = 0,
+    facts: tuple[RequestFact, ...] = (),
 ) -> dict[str, object]:
     """Aggregate planned coverage, node outcomes, and Prompt calibration evidence."""
 
@@ -111,6 +113,24 @@ def _execution_metadata(
         abs(int(item["backend_input_residual_tokens"]))
         for item in calibrations
         if item.get("backend_input_residual_tokens") is not None
+    ]
+    planned_by_runtime_id = (
+        {node.runtime_request_id: node for task in plan.tasks for node in task.requests if node.node_type == "request"}
+        if facts
+        else {}
+    )
+    cache_facts = [fact for fact in facts if fact.cached_tokens is not None]
+    first_cache_facts = [
+        fact
+        for fact in cache_facts
+        if planned_by_runtime_id.get(fact.request_id) is not None
+        and planned_by_runtime_id[fact.request_id].context_after is None
+    ]
+    continuation_cache_facts = [
+        fact
+        for fact in cache_facts
+        if planned_by_runtime_id.get(fact.request_id) is not None
+        and planned_by_runtime_id[fact.request_id].context_after is not None
     ]
     return {
         "workload_fingerprint": plan.workload_fingerprint,
@@ -163,6 +183,12 @@ def _execution_metadata(
         "backend_input_requests_over_tolerance": sum(value > tolerance_tokens for value in backend_residuals),
         "backend_input_max_absolute_residual_tokens": max(backend_residuals, default=0),
         "trimmed_filler_tokens": sum(int(item.get("trimmed_filler_tokens", 0)) for item in adjustments),
+        "cache_usage_coverage_requests": len(cache_facts),
+        "observed_cached_tokens": sum(fact.cached_tokens or 0 for fact in cache_facts),
+        "first_request_cache_usage_coverage": len(first_cache_facts),
+        "first_request_observed_cached_tokens": sum(fact.cached_tokens or 0 for fact in first_cache_facts),
+        "continuation_cache_usage_coverage": len(continuation_cache_facts),
+        "continuation_observed_cached_tokens": sum(fact.cached_tokens or 0 for fact in continuation_cache_facts),
     }
 
 
@@ -176,7 +202,7 @@ def _prepare_replay_source(
     if trace_type == "agentinfer":
         logger.info("Using AgentInfer Replay trace directly: trace_path=%s", config.replay.trace_path)
         return config.replay.trace_path, None, (), None
-    if trace_type in {"agentX", "tracelab"}:
+    if trace_type == "agentX":
         raise NotImplementedError(f"trace_type={trace_type} is reserved for future integration")
 
     convert_dir = output_dir / "convert_result"
@@ -187,13 +213,19 @@ def _prepare_replay_source(
         config.replay.trace_path,
         convert_dir,
     )
-    converter = CodexSwebenchProConverter.from_backend(config)
-    try:
+    if trace_type == "tracelab":
+        converter = TraceLabConverter()
         summary = converter.convert(config.replay.trace_path, convert_dir)
-        local_tokenizer = getattr(converter.tokenizer, "local_tokenizer", None)
-    finally:
-        converter.close()
-    trace_ir = validate_trace_ir(convert_dir / "requests.jsonl", convert_dir / "texts")
+        trace_ir = validate_trace_ir(convert_dir / "requests.jsonl")
+        local_tokenizer = None
+    else:
+        converter = CodexSwebenchProConverter.from_backend(config)
+        try:
+            summary = converter.convert(config.replay.trace_path, convert_dir)
+            local_tokenizer = getattr(converter.tokenizer, "local_tokenizer", None)
+        finally:
+            converter.close()
+        trace_ir = validate_trace_ir(convert_dir / "requests.jsonl", convert_dir / "texts")
     captures = (_capture("replay_conversion_manifest", trace_ir.manifest_path),)
     logger.info(
         "Replay trace conversion completed: trace_type=%s sessions=%d requests=%d duration_seconds=%.3f bundle_sha256=%s",
@@ -236,7 +268,11 @@ async def _run_replay(
         analysis_source, trace_ir, conversion_captures, local_tokenizer = _prepare_replay_source(config, output_dir)
         captures.extend(conversion_captures)
 
-        analysis = analyze_replay_trace(analysis_source)
+        analysis = (
+            analyze_explicit_trace_ir(trace_ir)
+            if trace_ir is not None and trace_ir.prompt_source_kind == "token_recipe"
+            else analyze_replay_trace(analysis_source)
+        )
         analysis_path = output_dir / "replay-source-analysis.json"
         atomic_write_json(analysis_path, replay_analysis_to_dict(analysis))
         captures.append(_capture("replay_source_analysis", analysis_path))
@@ -285,6 +321,7 @@ async def _run_replay(
         writer_started = False
         if writer_health.writer_error is not None:
             raise RuntimeError(f"request trace writer failed: {writer_health.writer_error}")
+        facts = tuple(load_request_facts(requests_path))
 
         plan = replace(plan, prompt_calibration={**plan.prompt_calibration, "status": "completed"})
         atomic_write_json(plan_path, plan.to_dict())
@@ -293,6 +330,7 @@ async def _run_replay(
             plan,
             task_results,
             config.replay.prompt_calibration_tolerance_tokens,
+            facts,
         )
         atomic_write_json(
             execution_path,
@@ -305,7 +343,7 @@ async def _run_replay(
         )
         captures.append(_capture("replay_execution", execution_path))
 
-        if config.replay.prompt_shape == "trace_record":
+        if config.replay.prompt_shape == "inferact_synthetic":
             validation_path = output_dir / "trace-record-validation.json"
             atomic_write_json(
                 validation_path,
@@ -347,7 +385,6 @@ async def _run_replay(
             write_text(vllm_end_path, vllm_end)
         captures.append(_capture("vllm_end", vllm_end_path, vllm_end_capture.available, vllm_end_capture.reason))
 
-        facts = load_request_facts(requests_path)
         finished_at = utc_now()
         run_wall_time = max((finished_at - manifest.created_at).total_seconds(), 1e-9)
         summary = build_run_summary(

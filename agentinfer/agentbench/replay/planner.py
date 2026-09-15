@@ -50,6 +50,7 @@ class ReplayPlanNode:
     planned_input_tokens: int | None
     planned_output_tokens: int | None
     backend_sampling_seed: int | None
+    response_validation: Literal["exact_tokens"] | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Serialize only the materialized fields required to execute the node."""
@@ -81,6 +82,8 @@ class ReplayPlanNode:
         )
         if self.prompt_ref is not None:
             value["prompt_ref"] = self.prompt_ref.to_dict()
+        if self.response_validation is not None:
+            value["response_validation"] = self.response_validation
         return value
 
 
@@ -114,7 +117,7 @@ class ReplayTaskPlan:
 class ReplayPlan:
     """A validated deterministic Replay workload plan."""
 
-    schema_version: Literal["1"]
+    schema_version: Literal["1", "2"]
     plan_kind: Literal["structural"]
     planner_version: str
     execution_ready: bool
@@ -134,7 +137,7 @@ class ReplayPlan:
     def to_dict(self) -> dict[str, object]:
         """Serialize the complete plan while preserving its artifact schema."""
 
-        return {
+        value = {
             "schema_version": self.schema_version,
             "plan_kind": self.plan_kind,
             "planner_version": self.planner_version,
@@ -152,6 +155,7 @@ class ReplayPlan:
             "interval_model": self.interval_model.to_dict(),
             "tasks": [task.to_dict() for task in self.tasks],
         }
+        return value
 
 
 def _canonical_json(value: object) -> str:
@@ -167,7 +171,7 @@ def _sha256_json(value: object) -> str:
     return hashlib.sha256(_canonical_json(value).encode()).hexdigest()
 
 
-def _workload_config(config: ReplayBenchConfig) -> dict[str, object]:
+def _workload_config(config: ReplayBenchConfig, planner_version: str) -> dict[str, object]:
     replay = config.replay.model_dump(mode="json")
     replay.pop("trace_path", None)
     return {
@@ -176,8 +180,8 @@ def _workload_config(config: ReplayBenchConfig) -> dict[str, object]:
         "model": config.backend.model,
         "chat_template_kwargs": config.backend.chat_template_kwargs,
         "replay": replay,
-        "sampler_version": "agentinfer-replay-sampler/v1",
-        "planner_version": "agentinfer-replay-structural/v9",
+        "sampler_version": "agentinfer-replay-sampler",
+        "planner_version": planner_version,
     }
 
 
@@ -206,7 +210,7 @@ def _context_plan(
     source_context = request.context_after
     if request.replay_kind != "request":
         return source_context, "none"
-    if config.replay.prompt_shape == "trace_record":
+    if config.replay.prompt_shape in {"inferact_synthetic", "tracelab_synthetic"}:
         if source_context is None:
             return None, "independent"
         return source_context, "append"
@@ -289,6 +293,7 @@ def _task_plan(
                     if request.replay_kind == "request"
                     else None
                 ),
+                response_validation="exact_tokens" if config.replay.prompt_shape == "tracelab_synthetic" else None,
             )
         )
     return ReplayTaskPlan(
@@ -323,7 +328,7 @@ def _validate_acyclic(nodes: Iterable[ReplayPlanNode]) -> None:
         visit(key)
 
 
-def _validate_task(task: ReplayTaskPlan) -> None:
+def _validate_task(task: ReplayTaskPlan, *, allow_unknown_context: bool = False) -> None:
     nodes = task.requests
     keys = [node.source_key for node in nodes]
     if len(keys) != len(set(keys)):
@@ -353,7 +358,9 @@ def _validate_task(task: ReplayTaskPlan) -> None:
             context = by_key[context_after]
             if context.actor_id != node.actor_id:
                 raise ValueError("context_after must reference the same actor")
-            if context.source_status != "success":
+            # TraceLab has no historical success evidence; execution still requires a live success.
+            allowed_statuses = {"success", "unknown"} if allow_unknown_context else {"success"}
+            if context.source_status not in allowed_statuses:
                 raise ValueError("context_after must reference a source success")
         if node.context_mode in {"independent", "reset"} and context_after is not None:
             raise ValueError(f"{node.context_mode} context must not reference context_after")
@@ -362,14 +369,14 @@ def _validate_task(task: ReplayTaskPlan) -> None:
     _validate_acyclic(nodes)
 
 
-def _validate_plan(tasks: Iterable[ReplayTaskPlan]) -> None:
+def _validate_plan(tasks: Iterable[ReplayTaskPlan], *, allow_unknown_context: bool = False) -> None:
     runtime_sessions: set[str] = set()
     for task in tasks:
         runtime_session_id = task.runtime_session_id
         if runtime_session_id in runtime_sessions:
             raise ValueError("runtime session ids must be unique")
         runtime_sessions.add(runtime_session_id)
-        _validate_task(task)
+        _validate_task(task, allow_unknown_context=allow_unknown_context)
 
 
 def build_replay_plan(
@@ -379,9 +386,9 @@ def build_replay_plan(
 ) -> ReplayPlan:
     """Build a deterministic structural plan without sending Backend requests."""
 
-    if config.replay.prompt_shape == "trace_record":
+    if config.replay.prompt_shape in {"inferact_synthetic", "tracelab_synthetic"}:
         if trace_ir is None:
-            raise ValueError("trace_record planning requires a validated unified Trace IR")
+            raise ValueError(f"{config.replay.prompt_shape} planning requires a validated unified Trace IR")
     elif trace_ir is not None:
         raise ValueError("a unified Trace IR was supplied for a non-trace-record Replay mode")
     interval_model = build_interval_model(config.replay)
@@ -390,7 +397,11 @@ def build_replay_plan(
     if total_tasks <= 0:
         raise ValueError("the Replay trace has no usable sessions")
 
-    workload_config = _workload_config(config)
+    if config.replay.prompt_shape == "tracelab_synthetic":
+        if trace_ir is None or trace_ir.prompt_source_kind != "token_recipe":
+            raise ValueError("token_recipe planning requires token_recipe unified Trace IR")
+    planner_version = "agentinfer-replay-structural"
+    workload_config = _workload_config(config, planner_version)
     plan_namespace = _sha256_json(
         {
             "source_sha256": analysis.source_sha256,
@@ -406,7 +417,7 @@ def build_replay_plan(
         plan_namespace=plan_namespace,
     )
     tasks = tuple(_task_plan(config, sampled_session, interval_model) for sampled_session in sampled)
-    _validate_plan(tasks)
+    _validate_plan(tasks, allow_unknown_context=config.replay.prompt_shape == "tracelab_synthetic")
     workload = {
         "source_sha256": analysis.source_sha256,
         "source_bundle_sha256": trace_ir.bundle_sha256 if trace_ir is not None else None,
@@ -415,9 +426,9 @@ def build_replay_plan(
         "tasks": [task.to_dict() for task in tasks],
     }
     return ReplayPlan(
-        schema_version="1",
+        schema_version="2" if config.replay.prompt_shape == "tracelab_synthetic" else "1",
         plan_kind="structural",
-        planner_version="agentinfer-replay-structural/v9",
+        planner_version=planner_version,
         execution_ready=False,
         execution_unavailable_reason="structural plan requires runtime Prompt calibration",
         source=str(config.replay.trace_path),

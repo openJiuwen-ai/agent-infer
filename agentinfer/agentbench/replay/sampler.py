@@ -15,7 +15,7 @@ _REPLAY_NAMESPACE = uuid.UUID("08bcf83c-e28d-5cb6-8677-020bdfb74775")
 
 
 def _cycle_key(seed: int, cycle_index: int, session_id: str) -> tuple[str, str]:
-    digest = hashlib.sha256(f"{seed}\0{cycle_index}\0{session_id}\0sampler/v1".encode()).hexdigest()
+    digest = hashlib.sha256(f"{seed}\0{cycle_index}\0{session_id}\0sampler".encode()).hexdigest()
     return digest, session_id
 
 

@@ -34,6 +34,30 @@ def test_schema_overrides_metrics_url(tmp_path: Path) -> None:
     assert _apply_cli_overrides(args, config).backend.metrics_url == "http://vllm:8000/metrics"
 
 
+@pytest.mark.parametrize(
+    ("shape", "obsolete"),
+    [
+        ("agentinfer_synthetic", "claude_code_minimal_v1"),
+        ("inferact_synthetic", "trace_record"),
+        ("tracelab_synthetic", "token_recipe"),
+    ],
+)
+def test_replay_cli_accepts_source_named_shapes_and_rejects_old_names(shape: str, obsolete: str) -> None:
+    parser = _parser()
+    args = parser.parse_args(["replay", "--config", "replay.yaml", "--prompt-shape", shape])
+    assert args.prompt_shape == shape
+    with pytest.raises(SystemExit):
+        parser.parse_args(["replay", "--config", "replay.yaml", "--prompt-shape", obsolete])
+
+
+def test_replay_cli_accepts_reserved_agentx_shape() -> None:
+    args = _parser().parse_args(
+        ["replay", "--config", "replay.yaml", "--trace-type", "agentX", "--prompt-shape", "agentX_synthetic"]
+    )
+    assert args.trace_type == "agentX"
+    assert args.prompt_shape == "agentX_synthetic"
+
+
 @pytest.mark.parametrize("flag", ["--enabled", "--no-enabled", "--router-url"])
 def test_removed_router_cli_flags_are_rejected(flag: str) -> None:
     with pytest.raises(SystemExit):
