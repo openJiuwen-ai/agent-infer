@@ -17,6 +17,7 @@ backend:
   tokenizer_base_url: null             # null uses backend.base_url for /tokenize and /detokenize
   model: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8  # model used by Claude Code requests
   endpoint: /v1/messages               # e.g., Anthropic Messages endpoint
+  chat_template_kwargs: {}             # kwargs passed to the model chat template on OpenAI-compatible endpoints
   api_key_env: null                    # environment variable containing the API key; null = none
 
 # === Replay: configuration for trace replay ===

@@ -131,6 +131,7 @@ class _BackendTokenizer:
     def __init__(self, config: ReplayBenchConfig) -> None:
         self.model = config.backend.model
         self.base_url = config.backend.resolved_tokenizer_base_url.rstrip("/")
+        self.chat_template_kwargs = dict(config.backend.chat_template_kwargs)
         headers = {}
         if config.backend.api_key_env:
             headers["authorization"] = f"Bearer {os.environ[config.backend.api_key_env]}"
@@ -194,12 +195,13 @@ class _BackendTokenizer:
     def input_tokens(self, messages: list[dict[str, str]]) -> int:
         """Count a conversation with the configured model's Backend chat template."""
 
-        return self._request_count(
-            {
-                "messages": list(messages),
-                "add_generation_prompt": True,
-            }
-        )
+        payload: dict[str, object] = {
+            "messages": list(messages),
+            "add_generation_prompt": True,
+        }
+        if self.chat_template_kwargs:
+            payload["chat_template_kwargs"] = self.chat_template_kwargs
+        return self._request_count(payload)
 
 
 class CodexSwebenchProConverter(ReplayDatasetConverter):

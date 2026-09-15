@@ -87,7 +87,11 @@ class SyntheticPrompt:
             payload.update(self.extra_body)
         return payload
 
-    def tokenizer_payload(self, model: str) -> dict[str, object]:
+    def tokenizer_payload(
+        self,
+        model: str,
+        chat_template_kwargs: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         messages = ([{"role": "system", "content": self.system}] if self.system else []) + list(self.messages)
         payload: dict[str, object] = {
             "model": model,
@@ -96,6 +100,8 @@ class SyntheticPrompt:
         }
         if self.tools:
             payload["tools"] = list(self.tools)
+        if chat_template_kwargs:
+            payload["chat_template_kwargs"] = dict(chat_template_kwargs)
         return payload
 
 
@@ -112,6 +118,7 @@ class TokenizerClient:
         self.model = config.backend.model
         self.endpoint = config.backend.endpoint
         self.base_url = config.backend.resolved_tokenizer_base_url.rstrip("/")
+        self.chat_template_kwargs = dict(config.backend.chat_template_kwargs)
         headers = {}
         if config.backend.api_key_env:
             headers["authorization"] = f"Bearer {os.environ[config.backend.api_key_env]}"
@@ -138,7 +145,10 @@ class TokenizerClient:
             )
             response.raise_for_status()
             return int(response.json()["input_tokens"])
-        response = await self._post("/tokenize", json=prompt.tokenizer_payload(self.model))
+        response = await self._post(
+            "/tokenize",
+            json=prompt.tokenizer_payload(self.model, self.chat_template_kwargs),
+        )
         response.raise_for_status()
         return int(response.json()["count"])
 

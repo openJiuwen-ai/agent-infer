@@ -431,6 +431,7 @@ def test_runtime_converter_uses_configured_backend_chat_template(monkeypatch: py
                 "base_url": "http://backend",
                 "tokenizer_base_url": "http://tokenizer",
                 "model": "example/custom-chat-model",
+                "chat_template_kwargs": {"enable_thinking": False},
             },
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
@@ -459,6 +460,7 @@ def test_runtime_converter_uses_configured_backend_chat_template(monkeypatch: py
                 "model": "example/custom-chat-model",
                 "messages": messages,
                 "add_generation_prompt": True,
+                "chat_template_kwargs": {"enable_thinking": False},
             },
         )
     ]
