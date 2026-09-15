@@ -19,6 +19,7 @@ from typing import Literal
 import httpx
 
 from .config import ReplayBenchConfig
+from .local_tokenizer import LocalTokenizerCounter
 from .planner import ReplayPlanNode, ReplayTaskPlan
 from .tokenizer_retry import TOKENIZER_REQUEST_MAX_ATTEMPTS, TOKENIZER_RETRY_BACKOFF_SECONDS
 from .unified_trace_ir import PromptReference, TraceTextStore, UnifiedTraceIR
@@ -114,11 +115,14 @@ class PromptExchange:
 class TokenizerClient:
     """Build deterministic filler text and count its serialized Prompt tokens."""
 
-    def __init__(self, config: ReplayBenchConfig) -> None:
+    def __init__(self, config: ReplayBenchConfig, local_tokenizer: LocalTokenizerCounter | None = None) -> None:
+        """Create a tokenizer client, optionally reusing one validated during conversion."""
+
         self.model = config.backend.model
         self.endpoint = config.backend.endpoint
         self.base_url = config.backend.resolved_tokenizer_base_url.rstrip("/")
         self.chat_template_kwargs = dict(config.backend.chat_template_kwargs)
+        self.local_tokenizer = local_tokenizer if self.endpoint == "/v1/chat/completions" else None
         headers = {}
         if config.backend.api_key_env:
             headers["authorization"] = f"Bearer {os.environ[config.backend.api_key_env]}"
@@ -145,6 +149,16 @@ class TokenizerClient:
             )
             response.raise_for_status()
             return int(response.json()["input_tokens"])
+        if self.local_tokenizer is not None:
+            payload = prompt.tokenizer_payload(self.model, self.chat_template_kwargs)
+            messages = payload["messages"]
+            tools = payload.get("tools")
+            assert isinstance(messages, list)
+            assert tools is None or isinstance(tools, list)
+            if not prompt.system and not tools:
+                return await asyncio.to_thread(self.local_tokenizer.input_tokens, messages)
+            tokens = await asyncio.to_thread(self.local_tokenizer.chat_token_ids, messages, tools=tools)
+            return len(tokens)
         response = await self._post(
             "/tokenize",
             json=prompt.tokenizer_payload(self.model, self.chat_template_kwargs),
@@ -153,6 +167,8 @@ class TokenizerClient:
         return int(response.json()["count"])
 
     async def text_token_ids(self, text: str) -> tuple[int, ...]:
+        if self.local_tokenizer is not None:
+            return await asyncio.to_thread(self.local_tokenizer.text_token_ids, text)
         response = await self._post(
             "/tokenize",
             json={"model": self.model, "prompt": text, "add_special_tokens": False},
@@ -163,6 +179,8 @@ class TokenizerClient:
     async def detokenize_tokens(self, tokens: tuple[int, ...] | list[int]) -> str:
         if not tokens:
             return ""
+        if self.local_tokenizer is not None:
+            return await asyncio.to_thread(self.local_tokenizer.detokenize_tokens, tokens)
         response = await self._post(
             "/detokenize",
             json={"model": self.model, "tokens": list(tokens)},

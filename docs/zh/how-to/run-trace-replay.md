@@ -11,6 +11,12 @@ Replay 从请求 trace 恢复会话、Agent、请求依赖、间隔和 token 目
 `agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware`，以传递身份和采样参数。
 具体服务参数见[接入 vLLM](integrate-vllm.md)。
 
+Inferact 转换会从 `/v1/models` 和可选的 `/tokenizer_info` 发现后端 tokenizer。若同机存在对应
+tokenizer 文件，并且本地与后端的原始文本和聊天模板 token ID 探针完全一致，转换和回放校准会使用
+本地 tokenizer；模板满足追加计数探针时采用增量计数，否则在本地计算完整聊天模板。无法发现或验证
+本地 tokenizer 时自动回退到 `/tokenize`。vLLM 需使用 `--enable-tokenizer-info-endpoint` 才会提供
+`/tokenizer_info`；服务端覆盖 chat template 时建议启用该端点。
+
 ## 回放内置样例
 
 在仓库根目录执行，使用实际后端模型名替换 `MODEL_NAME`：

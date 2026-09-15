@@ -160,6 +160,39 @@ def test_tokenizer_count_forwards_chat_template_kwargs() -> None:
     assert captured["chat_template_kwargs"] == {"enable_thinking": False, "clear_thinking": True}
 
 
+def test_tokenizer_client_reuses_validated_local_counter() -> None:
+    calls: list[list[dict[str, object]]] = []
+
+    def input_tokens(messages: list[dict[str, object]]) -> int:
+        calls.append(messages)
+        return 42
+
+    local = SimpleNamespace(
+        input_tokens=input_tokens,
+        text_token_ids=lambda text: (1, 2),
+        detokenize_tokens=lambda tokens: "decoded",
+    )
+    config = ReplayBenchConfig.model_validate(
+        {
+            "backend": {"endpoint": "/v1/chat/completions", "model": "local-model"},
+            "replay": {"trace_path": "source.jsonl"},
+        }
+    )
+
+    async def exercise() -> tuple[int, tuple[int, ...], str]:
+        tokenizer = TokenizerClient(config, local)  # type: ignore[arg-type]
+        try:
+            count = await tokenizer.count(SyntheticPrompt("", (), ({"role": "user", "content": "hello"},)))
+            token_ids = await tokenizer.text_token_ids("text")
+            decoded = await tokenizer.detokenize_tokens([1, 2])
+            return count, token_ids, decoded
+        finally:
+            await tokenizer.close()
+
+    assert asyncio.run(exercise()) == (42, (1, 2), "decoded")
+    assert calls == [[{"role": "user", "content": "hello"}]]
+
+
 def test_lead_title_name_and_main_build_distinct_prompt_shapes() -> None:
     async def build() -> tuple[object, object, object]:
         builder = PromptBuilder(_config(), _Tokenizer())  # type: ignore[arg-type]

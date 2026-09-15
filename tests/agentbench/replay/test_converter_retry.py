@@ -16,11 +16,21 @@ from agentinfer.agentbench.replay.runner import _prepare_replay_source
 @pytest.fixture
 def backend(monkeypatch):
     """Install a deterministic counting backend with controlled transport failures."""
-    state = {"calls": 0, "failures": 0, "trigger": None, "failure": None, "clients": [], "delays": []}
+    state = {
+        "calls": 0,
+        "tokenize_calls": 0,
+        "failures": 0,
+        "trigger": None,
+        "failure": None,
+        "clients": [],
+        "delays": [],
+    }
     client_class = httpx.Client
 
     def respond(request):
         state["calls"] += 1
+        if request.url.path == "/tokenize":
+            state["tokenize_calls"] += 1
         payload = json.loads(request.content)
         prompt = payload.get("prompt", "")
         searchable_text = prompt or "".join(message["content"] for message in payload.get("messages", []))
@@ -44,6 +54,7 @@ def backend(monkeypatch):
         return result
 
     monkeypatch.setattr(codex_swebenchpro.httpx, "Client", client)
+    monkeypatch.setattr(codex_swebenchpro, "discover_local_tokenizer", lambda *args, **kwargs: None)
     monkeypatch.setattr(codex_swebenchpro.time, "sleep", state["delays"].append)
     return state
 
@@ -117,6 +128,6 @@ def test_conversion_does_not_retry_invalid_responses(backend, config, tmp_path, 
     backend.update(failures=1, failure=response)
     with pytest.raises(error):
         _prepare_replay_source(config, tmp_path / "invalid")
-    assert backend["calls"] == 1
+    assert backend["tokenize_calls"] == 1
     assert backend["delays"] == []
     assert all(c.is_closed for c in backend["clients"])

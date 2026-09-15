@@ -109,6 +109,8 @@ def test_converter_writes_closed_trace_ir_contract_and_detects_tampering(
     assert manifest["schema_version"] == "2"
     assert "capabilities" not in manifest
     assert manifest["summary"]["source_records_consumed"] == 1
+    assert manifest["summary"]["tokenizer_counting_mode"] == "custom"
+    assert manifest["summary"]["tokenizer_operations"] is None
     assert len(manifest["texts"]) == 2
     rows = [json.loads(line) for line in (output / "requests.jsonl").read_text(encoding="utf-8").splitlines()]
     assert all(row["actor_id"] == row["actor_role"] == "lead" for row in rows)
@@ -315,10 +317,11 @@ def test_inferact_trace_is_validated_before_analysis(
             _prepare_replay_source(config, tmp_path / "result")
         return
 
-    analysis_source, trace_ir, captures = _prepare_replay_source(config, tmp_path / "result")
+    analysis_source, trace_ir, captures, local_tokenizer = _prepare_replay_source(config, tmp_path / "result")
 
     assert analysis_source == tmp_path / "result" / "convert_result" / "requests.jsonl"
     assert trace_ir is not None and trace_ir.root == tmp_path / "result" / "convert_result"
+    assert local_tokenizer is None
     assert {capture.source for capture in captures} == {"replay_conversion_manifest"}
 
 
@@ -527,8 +530,7 @@ def test_runtime_converter_counts_each_turn_with_full_backend_history(
         ],
     ]
     rows = [
-        json.loads(line)
-        for line in (tmp_path / "output" / "requests.jsonl").read_text(encoding="utf-8").splitlines()
+        json.loads(line) for line in (tmp_path / "output" / "requests.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert [row["input_tokens"] for row in rows] == [101, 103]
 

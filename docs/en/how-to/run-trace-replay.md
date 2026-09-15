@@ -13,6 +13,14 @@ and `backend.metrics_url` to the complete vLLM metrics URL. For `/v1/messages`, 
 `agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware` to propagate identity and sampling parameters.
 See [vLLM integration](integrate-vllm.md) for deployment options.
 
+Inferact conversion discovers the Backend tokenizer through `/v1/models` and the optional `/tokenizer_info`.
+When matching tokenizer files are available on the same host and raw-text and chat-template token-ID probes match
+the Backend exactly, conversion and Replay calibration use the local tokenizer. Append-stable templates use
+incremental counting; other templates are counted locally in full. Discovery or validation failure falls back to
+`/tokenize`. vLLM exposes
+`/tokenizer_info` only when started with `--enable-tokenizer-info-endpoint`; enable it when the server overrides the
+model's chat template.
+
 ## Replay the bundled sample
 
 Run from the repository root, replacing `MODEL_NAME` with the actual served model name:

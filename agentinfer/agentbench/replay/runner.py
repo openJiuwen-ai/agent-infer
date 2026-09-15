@@ -29,6 +29,7 @@ from .analyzer import analyze_replay_trace, replay_analysis_to_dict
 from .config import ReplayBenchConfig
 from .converters.codex_swebenchpro import CodexSwebenchProConverter
 from .executor import ReplayExecutor, ReplayTaskExecution
+from .local_tokenizer import LocalTokenizerCounter
 from .planner import ReplayPlan, build_replay_plan
 from .prompt import PromptBuilder, TokenizerClient
 from .transport import ReplayTransport
@@ -156,13 +157,13 @@ def _execution_metadata(
 def _prepare_replay_source(
     config: ReplayBenchConfig,
     output_dir: Path,
-) -> tuple[Path, UnifiedTraceIR | None, tuple[EvidenceCapture, ...]]:
+) -> tuple[Path, UnifiedTraceIR | None, tuple[EvidenceCapture, ...], LocalTokenizerCounter | None]:
     """Resolve the Analyzer input, validating converted IR once before returning it."""
 
     trace_type = config.replay.trace_type
     if trace_type == "agentinfer":
         logger.info("Using AgentInfer Replay trace directly: trace_path=%s", config.replay.trace_path)
-        return config.replay.trace_path, None, ()
+        return config.replay.trace_path, None, (), None
     if trace_type in {"agentX", "tracelab"}:
         raise NotImplementedError(f"trace_type={trace_type} is reserved for future integration")
 
@@ -177,6 +178,7 @@ def _prepare_replay_source(
     converter = CodexSwebenchProConverter.from_backend(config)
     try:
         summary = converter.convert(config.replay.trace_path, convert_dir)
+        local_tokenizer = getattr(converter.tokenizer, "local_tokenizer", None)
     finally:
         converter.close()
     trace_ir = validate_trace_ir(convert_dir / "requests.jsonl", convert_dir / "texts")
@@ -189,7 +191,7 @@ def _prepare_replay_source(
         time.monotonic() - started,
         trace_ir.bundle_sha256,
     )
-    return trace_ir.requests_path, trace_ir, captures
+    return trace_ir.requests_path, trace_ir, captures, local_tokenizer
 
 
 async def _run_replay(
@@ -219,7 +221,7 @@ async def _run_replay(
         write_text(requests_path, "")
         captures.append(_capture("request_trace", requests_path))
 
-        analysis_source, trace_ir, conversion_captures = _prepare_replay_source(config, output_dir)
+        analysis_source, trace_ir, conversion_captures, local_tokenizer = _prepare_replay_source(config, output_dir)
         captures.extend(conversion_captures)
 
         analysis = analyze_replay_trace(analysis_source)
@@ -254,7 +256,7 @@ async def _run_replay(
         writer = RequestTraceWriter(requests_path)
         await writer.start()
         writer_started = True
-        tokenizer = TokenizerClient(config)
+        tokenizer = TokenizerClient(config, local_tokenizer)
         transport = ReplayTransport(config, output_dir.name, writer)
         execution = ReplayExecutor(config, plan, PromptBuilder(config, tokenizer, trace_ir), transport).execute()
         if config.experiment.run_timeout_seconds:

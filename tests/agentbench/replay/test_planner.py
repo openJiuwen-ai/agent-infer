@@ -322,7 +322,7 @@ def test_runner_writes_completed_execution_artifacts(tmp_path: Path, monkeypatch
     result_dir = tmp_path / "result"
 
     class FakeTokenizer:
-        def __init__(self, config: object) -> None:
+        def __init__(self, config: object, local_tokenizer: object = None) -> None:
             pass
 
         async def close(self) -> None:
@@ -459,7 +459,7 @@ def test_runner_failure_preserves_evidence_and_closes_clients(
     state = {"tokenizer_closed": False, "transport_closed": False}
 
     class FakeTokenizer:
-        def __init__(self, config: object) -> None:
+        def __init__(self, config: object, local_tokenizer: object = None) -> None:
             pass
 
         async def close(self) -> None:
