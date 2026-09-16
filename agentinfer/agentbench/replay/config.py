@@ -116,17 +116,13 @@ class ReplayConfig(ReplayStrictModel):
     max_input_tokens: int | None = Field(None, ge=1)
     max_output_tokens: int | None = Field(None, ge=1)
     context_adjustment_mode: Literal["strict", "adaptive"] = "strict"
-    trace_record_calibration_mode: Literal["current_turn", "audit"] = Field(
-        "current_turn",
-        description="For trace_record, calibrate only the newest user text; audit preserves source text and reports drift.",
-    )
     context_micro_trim_max_tokens: int = Field(64, ge=0)
     context_micro_trim_max_ratio: float = Field(0.005, ge=0, le=1)
     prompt_calibration_tolerance_tokens: int = Field(
-        1,
+        0,
         ge=0,
         le=8,
-        description="Accept a small audited residual after exact repair; capped at 8 to expose larger drift.",
+        description="Residual allowance for synthetic prompts; Inferact always uses exact input lengths.",
     )
     request_timeout_seconds: int = Field(3600, ge=1)
 
@@ -142,6 +138,8 @@ class ReplayConfig(ReplayStrictModel):
                 raise ValueError("inferact_codex_swebenchpro requires prompt_shape=trace_record")
             if self.interval_mode != "lognormal":
                 raise ValueError("inferact_codex_swebenchpro requires interval_mode=lognormal")
+            # Accept older YAML files while enforcing exact Inferact accounting.
+            self.prompt_calibration_tolerance_tokens = 0
         if self.trace_type == "agentinfer" and self.prompt_shape == "trace_record":
             raise ValueError("agentinfer trace_type does not provide a unified trace_record IR")
         return self

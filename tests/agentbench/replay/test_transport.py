@@ -129,7 +129,7 @@ def test_messages_transport_keeps_title_prompt_tool_free_and_bridges_sampling(tm
     assert sampling == {"seed": 9, "min_tokens": 4, "ignore_eos": True}
 
 
-@pytest.mark.parametrize("actual,success", [(5, True), (6, False), (None, False)])
+@pytest.mark.parametrize("actual,success", [(5, True), (6, False), (4, False), (None, False)])
 def test_trace_record_checks_wire_usage_and_preserves_both_stream_fields(tmp_path, actual, success):
     """Even HTTP 200 must fail strict calibration on missing or different backend usage."""
 
@@ -142,11 +142,12 @@ def test_trace_record_checks_wire_usage_and_preserves_both_stream_fields(tmp_pat
                     "prompt_shape": "trace_record",
                     "interval_mode": "lognormal",
                     "interval_lognormal": {"p50_seconds": 1, "p95_seconds": 2, "p99_seconds": 3},
-                    "prompt_calibration_tolerance_tokens": 0,
+                    "prompt_calibration_tolerance_tokens": 8,
                 },
             }
         )
         writer = RequestTraceWriter(tmp_path / "requests.jsonl")
+        assert config.replay.prompt_calibration_tolerance_tokens == 0
         await writer.start()
         transport = ReplayTransport(config, "run", writer)
         await transport.client.aclose()

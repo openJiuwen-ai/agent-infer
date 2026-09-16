@@ -416,7 +416,7 @@ class PromptBuilder:
         node: ReplayPlanNode,
         context: PromptExchange | None,
     ) -> SyntheticPrompt:
-        """Append a live exchange and optionally calibrate only the newest user text."""
+        """Append a live exchange and exactly calibrate only the newest user text."""
 
         assert self.trace_texts is not None
         reference = node.prompt_ref
@@ -436,36 +436,7 @@ class PromptBuilder:
 
         assert node.planned_input_tokens is not None
         count = await self.tokenizer.count(prompt)
-        if self.config.replay.trace_record_calibration_mode == "current_turn":
-            return await self._calibrate_current_turn(prompt, node, count)
-        residual = count - node.planned_input_tokens
-        tolerance = self.config.replay.prompt_calibration_tolerance_tokens
-        if abs(residual) > tolerance:
-            logger.warning(
-                "trace_record Prompt exceeds the residual audit tolerance without modifying source text: "
-                "source_key=%s target_tokens=%d final_tokens=%d residual_tokens=%d tolerance_tokens=%d",
-                node.source_key,
-                node.planned_input_tokens,
-                count,
-                residual,
-                tolerance,
-            )
-        calibration = PromptCalibration(
-            target_tokens=node.planned_input_tokens,
-            initial_tokens=count,
-            final_tokens=count,
-            added_filler_tokens=0,
-            requested_filler_tokens=0,
-            actual_prompt_token_gain=0,
-            trimmed_filler_tokens=0,
-            residual_tokens=residual,
-            target_met=residual == 0,
-            accepted_with_tolerance=residual != 0 and abs(residual) <= tolerance,
-            repair_attempts=0,
-            count_history=(count,),
-            adjustment="none",
-        )
-        return SyntheticPrompt(prompt.system, prompt.tools, prompt.messages, calibration, prompt.extra_body)
+        return await self._calibrate_current_turn(prompt, node, count)
 
     async def _calibrate_current_turn(
         self, prompt: SyntheticPrompt, node: ReplayPlanNode, initial_count: int
@@ -479,7 +450,6 @@ class PromptBuilder:
 
         assert node.planned_input_tokens is not None
         target = node.planned_input_tokens
-        tolerance = self.config.replay.prompt_calibration_tolerance_tokens
         index = len(prompt.messages) - 1
         original = prompt.messages[index]["content"]
         assert prompt.messages[index]["role"] == "user" and isinstance(original, str)
@@ -499,7 +469,7 @@ class PromptBuilder:
             assert empty_ids is not None
             empty_count = len(empty_ids)
             history.append(empty_count)
-            if empty_count > target + tolerance:
+            if empty_count > target:
                 raise ValueError(
                     f"Current-turn calibration unreachable for {node.source_key}: "
                     f"frozen history with empty user needs {empty_count} tokens, target={target}; "
@@ -552,10 +522,10 @@ class PromptBuilder:
             history.extend(repair_history)
         if history[-1] != count:
             history.append(count)
-        if abs(count - target) > tolerance:
+        if count != target:
             raise ValueError(
                 f"Current-turn calibration unreachable for {node.source_key}: "
-                f"final_tokens={count} target={target} tolerance={tolerance}; frozen history preserved"
+                f"final_tokens={count} target={target}; frozen history preserved"
             )
         preserved = None
         if original_ids is not None:
@@ -599,7 +569,7 @@ class PromptBuilder:
             trimmed_filler_tokens=0,
             residual_tokens=count - target,
             target_met=count == target,
-            accepted_with_tolerance=count != target,
+            accepted_with_tolerance=False,
             repair_attempts=attempts,
             count_history=tuple(history),
             adjustment=adjustment,

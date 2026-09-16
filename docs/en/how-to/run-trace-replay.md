@@ -49,7 +49,6 @@ recording sources. The backend context window must accommodate the request targe
 | `replay.sample_seed` | Reproducible session selection and backend sampling seed. |
 | `replay.max_input_tokens` / `max_output_tokens` | Optional token caps; `null` preserves trace targets. |
 | `replay.context_adjustment_mode` | `strict` rejects non-append-only context; `adaptive` audits trims and context resets. |
-| `replay.trace_record_calibration_mode` | Inferact defaults to `current_turn`: pad/trim the newest user suffix. `audit` preserves source text and reports drift. |
 | `replay.request_timeout_seconds` | Per-request timeout. |
 
 For all fields, defaults, and constraints see the [Replay configuration
@@ -64,24 +63,18 @@ separate `reasoning_content`. It pads the newest user text when below target, or
 when over target. Trimming uses character boundaries; every candidate is counted with the full chat template.
 The historical trimming/reset rules of `context_adjustment_mode` do not apply to this path.
 
-Set these fields in an existing Inferact configuration for exact per-request input lengths:
+Inferact always requires exact per-request input lengths, with no additional mode or tolerance configuration.
+Legacy nonzero `prompt_calibration_tolerance_tokens` values are normalized to zero when loading Inferact configuration.
 
-```yaml
-replay:
-  trace_record_calibration_mode: current_turn
-  prompt_calibration_tolerance_tokens: 0
-```
-
-If frozen history plus an empty user exceeds the target plus tolerance, bounded suffix repair cannot satisfy tolerance,
+If frozen history plus an empty user exceeds the target, bounded suffix repair cannot reach the exact target,
 or calibration changes the token prefix shared by the original and empty-user templates, the request fails before
-inference. Missing `usage.prompt_tokens` or a backend input count beyond tolerance also fails the request;
-dependent requests are skipped. History is never trimmed to force a fit. Nonzero tolerance permits small residuals
-and cannot guarantee identical totals across runs.
+inference. Missing `usage.prompt_tokens` or a backend input count differing from the target also fails the request;
+dependent requests are skipped. History is never trimmed to force a fit.
 
 Per-request calibration in `replay-execution.json` records `trimmed_current_user_tokens`,
 `trimmed_current_user_characters`, `preserved_prefix_tokens`, and `backend_input_residual_tokens`.
 Source-text trimming is separate from `trimmed_filler_tokens`. In `trace-record-validation.json`,
-`input_length_comparable` is true only when all planned requests succeed and backend usage satisfies tolerance.
+`input_length_comparable` is true only when all planned requests succeed and backend input usage exactly matches targets.
 This checks input lengths; it does not guarantee identical Prefix Cache hits or preserve the meaning of trimmed text.
 
 ## Inspect and compare results

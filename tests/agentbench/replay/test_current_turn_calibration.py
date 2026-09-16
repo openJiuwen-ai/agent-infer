@@ -96,7 +96,8 @@ def test_frozen_history_over_budget_fails_without_erasing_old_padding():
     assert prompt.messages[-1]["content"] == "new"
 
 
-def test_empty_current_user_can_retain_frozen_history_within_explicit_tolerance():
+@pytest.mark.parametrize("tolerance", [0, 1, 8])
+def test_frozen_history_one_token_over_budget_is_always_rejected(tolerance):
     prompt = SyntheticPrompt(
         "",
         (),
@@ -106,11 +107,8 @@ def test_empty_current_user_can_retain_frozen_history_within_explicit_tolerance(
             {"role": "user", "content": "new"},
         ),
     )
-    result = calibrate(prompt, 9, tolerance=1)
-    assert result.messages[:-1] == prompt.messages[:-1]
-    assert result.messages[-1]["content"] == ""
-    assert result.calibration.final_tokens == 10
-    assert result.calibration.accepted_with_tolerance
+    with pytest.raises(ValueError, match="frozen history with empty user needs 10 tokens"):
+        calibrate(prompt, 9, tolerance=tolerance)
 
 
 def test_padding_is_not_assumed_additive_at_text_boundary():
@@ -127,7 +125,8 @@ def test_padding_is_not_assumed_additive_at_text_boundary():
     assert result.calibration.repair_attempts > 1
 
 
-def test_unreachable_token_length_obeys_tolerance_after_bounded_repair():
+@pytest.mark.parametrize("tolerance", [0, 1, 8])
+def test_unreachable_token_length_never_accepts_a_residual(tolerance):
     class EvenTokenizer(TextTokenizer):
         async def prompt_token_ids(self, prompt):
             tokens = await super().prompt_token_ids(prompt)
@@ -135,11 +134,7 @@ def test_unreachable_token_length_obeys_tolerance_after_bounded_repair():
 
     prompt = SyntheticPrompt("", (), ({"role": "user", "content": "a"},))
     with pytest.raises(ValueError, match="Current-turn calibration unreachable"):
-        calibrate(prompt, 3, EvenTokenizer())
-    result = calibrate(prompt, 3, EvenTokenizer(), tolerance=1)
-    assert result.calibration.accepted_with_tolerance
-    assert abs(result.calibration.residual_tokens) == 1
-    assert result.calibration.repair_attempts == 32
+        calibrate(prompt, 3, EvenTokenizer(), tolerance=tolerance)
 
 
 def test_template_rewrite_of_old_prefix_is_rejected():

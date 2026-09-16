@@ -95,15 +95,13 @@ class ReplayTransport:
             and status_code is not None
             and status_code < 400
             and self.config.replay.prompt_shape == "trace_record"
-            and self.config.replay.trace_record_calibration_mode == "current_turn"
         ):
             actual = usage.get("input_tokens")
             target = node.planned_input_tokens
-            tolerance = self.config.replay.prompt_calibration_tolerance_tokens
             if actual is None:
                 error = "Current-turn input verification failed: Backend usage.prompt_tokens is missing"
-            elif target is None or abs(actual - target) > tolerance:
-                error = f"Current-turn input verification failed: actual={actual} target={target} tolerance={tolerance}"
+            elif actual != target:
+                error = f"Current-turn input verification failed: actual={actual} target={target}; exact count required"
         finished_clock = time.monotonic()
         success = status_code is not None and status_code < 400 and error is None
         self.writer.submit(

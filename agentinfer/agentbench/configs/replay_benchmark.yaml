@@ -34,8 +34,6 @@ replay:
   # Seed for deterministic session sampling and Backend requests.
   sample_seed: 0
   prompt_shape: claude_code_minimal_v1
-  # Inferact trace_record: modify only the newest user suffix; audit preserves source text.
-  trace_record_calibration_mode: current_turn
   # Replay omits cache_control markers; vLLM prefix caching is configured server-side.
   # Lead title uses only title-system sharing; Lead main uses first tool/message sharing.
   lead_title_sys_shared_prefix: 296
@@ -61,7 +59,7 @@ replay:
   context_adjustment_mode: adaptive
   context_micro_trim_max_tokens: 64
   context_micro_trim_max_ratio: 0.005
-  # Use 0 for identical per-request input lengths; nonzero permits audited residuals after repair.
-  prompt_calibration_tolerance_tokens: 1
+  # Exact by default. Inferact trace_record always requires zero residual.
+  prompt_calibration_tolerance_tokens: 0
   # Per-request Backend timeout in seconds.
   request_timeout_seconds: 3600

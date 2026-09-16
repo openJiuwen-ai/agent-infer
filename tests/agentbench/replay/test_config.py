@@ -101,8 +101,8 @@ def test_replay_sample_yaml_loads() -> None:
     assert config.replay.context_adjustment_mode == "adaptive"
     assert config.replay.context_micro_trim_max_tokens == 64
     assert config.replay.context_micro_trim_max_ratio == 0.005
-    assert config.replay.prompt_calibration_tolerance_tokens == 1
-    assert config.replay.trace_record_calibration_mode == "current_turn"
+    assert config.replay.prompt_calibration_tolerance_tokens == 0
+    assert "trace_record_calibration_mode" not in type(config.replay).model_fields
     assert config.replay.context_micro_trim_limit(100) == 64
     assert config.replay.context_micro_trim_limit(20_000) == 100
 

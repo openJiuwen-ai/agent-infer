@@ -44,7 +44,6 @@ vllm bench serve --agentinfer replay \
 | `replay.sample_seed` | 可重复的会话抽样和后端采样种子。 |
 | `replay.max_input_tokens` / `max_output_tokens` | 可选 token 目标上限；`null` 保留 trace 目标。 |
 | `replay.context_adjustment_mode` | `strict` 拒绝非追加上下文；`adaptive` 审计裁剪和上下文重置。 |
-| `replay.trace_record_calibration_mode` | Inferact 默认 `current_turn`，只补齐或裁剪最新 user 尾部；`audit` 保留源文本，仅记录长度漂移。 |
 | `replay.request_timeout_seconds` | 单请求超时。 |
 
 完整字段、默认值和约束见[Replay 配置模型](../../../agentinfer/agentbench/replay/config.py)与
@@ -58,24 +57,18 @@ Inferact `trace_record` 模式默认冻结已发送的历史消息（包括旧 f
 裁剪该条源文本的尾部，再重新分词修正边界误差。裁剪按字符边界进行，不删除历史消息。
 `context_adjustment_mode` 的历史裁剪和重置规则不适用于这一校准路径。
 
-在现有 Inferact 配置中设置以下字段，即要求每个成功请求的输入 token 数精确匹配计划：
+Inferact 默认且始终要求每个成功请求的输入 token 数精确匹配计划，无需增加模式或容差配置。
+旧配置中的非零 `prompt_calibration_tolerance_tokens` 会在 Inferact 配置加载时归零。
 
-```yaml
-replay:
-  trace_record_calibration_mode: current_turn
-  prompt_calibration_tolerance_tokens: 0
-```
-
-若移空最新 user 后仍超出目标及允许容差、有限次后缀修复无法满足容差，或 token ID 校验发现校准改变了
+若移空最新 user 后仍超出目标、有限次后缀修复无法精确命中目标，或 token ID 校验发现校准改变了
 原始/空 user 两种模板共有的前缀，请求会在发送前失败。推理响应缺少 `usage.prompt_tokens` 或
-实际输入超出容差时，该请求也标记失败，依赖它的后续请求跳过。不会通过缩减历史来强行对齐。
-非零容差允许小幅差异，不能保证两次运行 token 总量相同。
+实际输入与目标不一致时，该请求也标记失败，依赖它的后续请求跳过。不会通过缩减历史来强行对齐。
 
 `replay-execution.json` 中每轮校准记录包含 `trimmed_current_user_tokens`、
 `trimmed_current_user_characters`、`preserved_prefix_tokens` 和 `backend_input_residual_tokens`。
 当前源文本的裁剪不会计入 `trimmed_filler_tokens`。
 `trace-record-validation.json` 的 `input_length_comparable` 只有在全部计划请求成功且后端 usage
-均满足容差时才为真；这是输入长度检查，不能保证 Prefix Cache 命中一致或真实任务语义不受裁剪影响。
+均精确匹配计划时才为真；这是输入长度检查，不能保证 Prefix Cache 命中一致或真实任务语义不受裁剪影响。
 
 ## 检查和比较结果
 

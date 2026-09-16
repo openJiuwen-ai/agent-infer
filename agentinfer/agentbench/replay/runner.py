@@ -313,7 +313,7 @@ async def _run_replay(
                     "schema_version": "1",
                     "workload_fingerprint": plan.workload_fingerprint,
                     "source_bundle_sha256": plan.source_bundle_sha256,
-                    "tolerance_tokens": config.replay.prompt_calibration_tolerance_tokens,
+                    "tolerance_tokens": 0,
                     "max_absolute_residual_tokens": execution_metadata[
                         "prompt_calibration_max_absolute_residual_tokens"
                     ],
@@ -322,7 +322,6 @@ async def _run_replay(
                     ],
                     "sum_absolute_residual_tokens": execution_metadata["prompt_calibration_absolute_residual_tokens"],
                     "requests_over_tolerance": execution_metadata["prompt_calibration_requests_over_tolerance"],
-                    "calibration_mode": config.replay.trace_record_calibration_mode,
                     "trimmed_current_user_tokens": execution_metadata["trimmed_current_user_tokens"],
                     "trimmed_current_user_characters": execution_metadata["trimmed_current_user_characters"],
                     "backend_input_checked_requests": execution_metadata["backend_input_checked_requests"],
@@ -335,11 +334,7 @@ async def _run_replay(
                         == execution_metadata["backend_input_checked_requests"]
                         and execution_metadata["backend_input_requests_over_tolerance"] == 0
                     ),
-                    "wire_fidelity": (
-                        "frozen_history_current_user_suffix_calibrated"
-                        if config.replay.trace_record_calibration_mode == "current_turn"
-                        else "content_order_and_token_length_not_byte_identical"
-                    ),
+                    "wire_fidelity": "frozen_history_current_user_suffix_calibrated",
                     "assistant_source": "live_backend_length_constrained",
                 },
             )

@@ -37,6 +37,18 @@ class _CharacterTokenizer:
 
 
 class _RuntimeCharacterTokenizer:
+    async def prompt_token_ids(self, prompt: SyntheticPrompt) -> tuple[int, ...]:
+        return tuple(ord(c) for message in prompt.messages for c in str(message["content"]))
+
+    async def text_token_ids(self, text: str) -> tuple[int, ...]:
+        return tuple(map(ord, text))
+
+    async def detokenize_tokens(self, tokens) -> str:
+        return "".join(map(chr, tokens))
+
+    async def token_text(self, namespace: str, count: int) -> str:
+        return "p" * count
+
     async def count(self, prompt: SyntheticPrompt) -> int:
         total = 0
         for message in prompt.messages:
@@ -193,7 +205,7 @@ def test_trace_record_uses_human_sidecar_and_live_length_aligned_assistant(tmp_p
     assert all(node.context_mode in {"independent", "append"} for node in task.requests)
 
 
-def test_trace_record_audits_large_live_assistant_residual_without_rewriting_text(tmp_path: Path) -> None:
+def test_trace_record_repairs_live_assistant_drift_by_default(tmp_path: Path) -> None:
     output, _, trace_ir = _trace_ir(tmp_path)
     config = ReplayBenchConfig.model_validate(
         {
@@ -202,7 +214,6 @@ def test_trace_record_audits_large_live_assistant_residual_without_rewriting_tex
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": tmp_path / "source.json",
                 "prompt_shape": "trace_record",
-                "trace_record_calibration_mode": "audit",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
             },
@@ -212,21 +223,18 @@ def test_trace_record_audits_large_live_assistant_residual_without_rewriting_tex
     task = plan.tasks[0]
     first_node, second_node = task.requests
 
-    class DriftTokenizer(_RuntimeCharacterTokenizer):
-        async def count(self, prompt: SyntheticPrompt) -> int:
-            count = await super().count(prompt)
-            return count - 13 if len(prompt.messages) > 1 else count
-
     async def build_prompt() -> SyntheticPrompt:
-        builder = PromptBuilder(config, DriftTokenizer(), trace_ir)  # type: ignore[arg-type]
+        builder = PromptBuilder(config, _RuntimeCharacterTokenizer(), trace_ir)  # type: ignore[arg-type]
         first = await builder.build(task, first_node, None)
-        return await builder.build(task, second_node, PromptExchange(first, "AB"))
+        return await builder.build(task, second_node, PromptExchange(first, "A" * 15))
 
     prompt = asyncio.run(build_prompt())
 
-    assert prompt.messages[1] == {"role": "assistant", "content": "AB"}
+    assert prompt.messages[0] == {"role": "user", "content": "hello"}
+    assert prompt.messages[1] == {"role": "assistant", "content": "A" * 15}
     assert prompt.calibration is not None
-    assert prompt.calibration.residual_tokens == -13
+    assert prompt.calibration.residual_tokens == 0
+    assert prompt.calibration.trimmed_current_user_tokens == 13
     assert prompt.calibration.accepted_with_tolerance is False
 
 
@@ -326,10 +334,10 @@ def test_inferact_trace_is_validated_before_analysis(
     assert {capture.source for capture in captures} == {"replay_conversion_manifest"}
 
 
-def test_trace_record_runner_reports_consistent_residual_metrics(
+def test_trace_record_runner_rejects_backend_residuals_and_reports_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Use the real Runner and HTTP adapters to audit signed residuals across artifacts."""
+    """Reject even a one-token backend mismatch and retain the evidence in summaries."""
 
     source = tmp_path / "source.json"
     source.write_text(
@@ -344,17 +352,20 @@ def test_trace_record_runner_reports_consistent_residual_metrics(
     residuals = iter((0, 1, -1, 2, -2))
 
     def respond(request: httpx.Request) -> httpx.Response:
-        """Return token counts at and beyond tolerance, plus length-constrained SSE."""
+        """Calibrate exactly, then return drifting backend usage."""
 
         if request.url.path == "/metrics":
             return httpx.Response(503)
         body = json.loads(request.content)
         if request.url.path == "/tokenize":
-            return httpx.Response(200, json={"count": 5 + next(residuals)})
+            return httpx.Response(200, json={"count": 5})
         assert request.url.path == "/v1/chat/completions"
         assert body["messages"] == [{"role": "user", "content": "hello"}]
         assert body["min_tokens"] == body["max_tokens"] == 2
-        chunk = {"choices": [{"delta": {"content": "AB"}}], "usage": {"prompt_tokens": 5, "completion_tokens": 2}}
+        chunk = {
+            "choices": [{"delta": {"content": "AB"}}],
+            "usage": {"prompt_tokens": 5 + next(residuals), "completion_tokens": 2},
+        }
         return httpx.Response(200, text=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n")
 
     client = httpx.AsyncClient
@@ -366,7 +377,6 @@ def test_trace_record_runner_reports_consistent_residual_metrics(
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": source,
                 "prompt_shape": "trace_record",
-                "trace_record_calibration_mode": "audit",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
                 "prompt_calibration_tolerance_tokens": 1,
@@ -386,15 +396,18 @@ def test_trace_record_runner_reports_consistent_residual_metrics(
     assert not (result / "replay-normalization.json").exists()
     assert "replay_normalization" not in {capture["source"] for capture in manifest["evidence"]}
     assert "replay_normalization" not in summary["source_health"]["sources"]
-    assert summary["requests"]["successful_requests"] == 5
+    assert summary["requests"]["successful_requests"] == 1
+    assert summary["requests"]["failed_requests"] == 4
     assert summary["execution"]["metadata"] == execution["summary"]
     assert (
-        validation["requests_over_tolerance"] == execution["summary"]["prompt_calibration_requests_over_tolerance"] == 2
+        validation["requests_over_tolerance"] == execution["summary"]["prompt_calibration_requests_over_tolerance"] == 0
     )
-    assert execution["summary"]["prompt_calibration_exact_requests"] == 1
-    assert execution["summary"]["prompt_calibration_tolerated_requests"] == 2
-    assert validation["max_absolute_residual_tokens"] == 2
-    assert validation["sum_absolute_residual_tokens"] == 6
+    assert execution["summary"]["prompt_calibration_exact_requests"] == 5
+    assert execution["summary"]["prompt_calibration_tolerated_requests"] == 0
+    assert validation["tolerance_tokens"] == 0
+    assert validation["input_length_comparable"] is False
+    assert validation["backend_input_requests_over_tolerance"] == 4
+    assert execution["summary"]["backend_input_max_absolute_residual_tokens"] == 2
 
 
 @pytest.mark.parametrize("bad_usage", [False, True])
@@ -471,7 +484,6 @@ def test_current_turn_replay_repeats_targets_with_different_live_answers(tmp_pat
                     "prompt_shape": "trace_record",
                     "interval_mode": "lognormal",
                     "interval_lognormal": {"p50_seconds": 0.002, "p95_seconds": 0.03, "p99_seconds": 0.09},
-                    "prompt_calibration_tolerance_tokens": 0,
                 },
             }
         )
