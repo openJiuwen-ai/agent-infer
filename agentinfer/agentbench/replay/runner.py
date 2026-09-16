@@ -107,6 +107,11 @@ def _execution_metadata(
     request_nodes = [node for node in nodes if node.node_type == "request"]
     attempted_request_nodes = [node for node in request_nodes if node.actual_send_offset_seconds is not None]
     absolute_residuals = [abs(int(item.get("residual_tokens", 0))) for item in calibrations]
+    backend_residuals = [
+        abs(int(item["backend_input_residual_tokens"]))
+        for item in calibrations
+        if item.get("backend_input_residual_tokens") is not None
+    ]
     return {
         "workload_fingerprint": plan.workload_fingerprint,
         "planned_tasks": len(plan.tasks),
@@ -150,6 +155,13 @@ def _execution_metadata(
         "prompt_calibration_requests_over_tolerance": sum(value > tolerance_tokens for value in absolute_residuals),
         "requested_filler_tokens": sum(int(item.get("requested_filler_tokens", 0)) for item in calibrations),
         "actual_prompt_token_gain": sum(int(item.get("actual_prompt_token_gain", 0)) for item in calibrations),
+        "trimmed_current_user_tokens": sum(int(item.get("trimmed_current_user_tokens", 0)) for item in calibrations),
+        "trimmed_current_user_characters": sum(
+            int(item.get("trimmed_current_user_characters", 0)) for item in calibrations
+        ),
+        "backend_input_checked_requests": len(backend_residuals),
+        "backend_input_requests_over_tolerance": sum(value > tolerance_tokens for value in backend_residuals),
+        "backend_input_max_absolute_residual_tokens": max(backend_residuals, default=0),
         "trimmed_filler_tokens": sum(int(item.get("trimmed_filler_tokens", 0)) for item in adjustments),
     }
 
@@ -310,7 +322,24 @@ async def _run_replay(
                     ],
                     "sum_absolute_residual_tokens": execution_metadata["prompt_calibration_absolute_residual_tokens"],
                     "requests_over_tolerance": execution_metadata["prompt_calibration_requests_over_tolerance"],
-                    "wire_fidelity": "content_order_and_token_length_not_byte_identical",
+                    "calibration_mode": config.replay.trace_record_calibration_mode,
+                    "trimmed_current_user_tokens": execution_metadata["trimmed_current_user_tokens"],
+                    "trimmed_current_user_characters": execution_metadata["trimmed_current_user_characters"],
+                    "backend_input_checked_requests": execution_metadata["backend_input_checked_requests"],
+                    "backend_input_requests_over_tolerance": execution_metadata[
+                        "backend_input_requests_over_tolerance"
+                    ],
+                    "input_length_comparable": (
+                        execution_metadata["successful_requests"]
+                        == execution_metadata["planned_requests"]
+                        == execution_metadata["backend_input_checked_requests"]
+                        and execution_metadata["backend_input_requests_over_tolerance"] == 0
+                    ),
+                    "wire_fidelity": (
+                        "frozen_history_current_user_suffix_calibrated"
+                        if config.replay.trace_record_calibration_mode == "current_turn"
+                        else "content_order_and_token_length_not_byte_identical"
+                    ),
                     "assistant_source": "live_backend_length_constrained",
                 },
             )

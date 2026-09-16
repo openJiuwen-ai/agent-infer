@@ -116,6 +116,10 @@ class ReplayConfig(ReplayStrictModel):
     max_input_tokens: int | None = Field(None, ge=1)
     max_output_tokens: int | None = Field(None, ge=1)
     context_adjustment_mode: Literal["strict", "adaptive"] = "strict"
+    trace_record_calibration_mode: Literal["current_turn", "audit"] = Field(
+        "current_turn",
+        description="For trace_record, calibrate only the newest user text; audit preserves source text and reports drift.",
+    )
     context_micro_trim_max_tokens: int = Field(64, ge=0)
     context_micro_trim_max_ratio: float = Field(0.005, ge=0, le=1)
     prompt_calibration_tolerance_tokens: int = Field(

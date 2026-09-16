@@ -13,7 +13,7 @@ Replay 从请求 trace 恢复会话、Agent、请求依赖、间隔和 token 目
 
 Inferact 转换会从 `/v1/models` 和可选的 `/tokenizer_info` 发现后端 tokenizer。若同机存在对应
 tokenizer 文件，并且本地与后端的原始文本和聊天模板 token ID 探针完全一致，转换和回放校准会使用
-本地 tokenizer；模板满足追加计数探针时采用增量计数，否则在本地计算完整聊天模板。无法发现或验证
+本地 tokenizer；转换可采用增量计数，运行期校准始终计算完整聊天模板。无法发现或验证
 本地 tokenizer 时自动回退到 `/tokenize`。vLLM 需使用 `--enable-tokenizer-info-endpoint` 才会提供
 `/tokenizer_info`；服务端覆盖 chat template 时建议启用该端点。
 
@@ -44,11 +44,38 @@ vllm bench serve --agentinfer replay \
 | `replay.sample_seed` | 可重复的会话抽样和后端采样种子。 |
 | `replay.max_input_tokens` / `max_output_tokens` | 可选 token 目标上限；`null` 保留 trace 目标。 |
 | `replay.context_adjustment_mode` | `strict` 拒绝非追加上下文；`adaptive` 审计裁剪和上下文重置。 |
+| `replay.trace_record_calibration_mode` | Inferact 默认 `current_turn`，只补齐或裁剪最新 user 尾部；`audit` 保留源文本，仅记录长度漂移。 |
 | `replay.request_timeout_seconds` | 单请求超时。 |
 
 完整字段、默认值和约束见[Replay 配置模型](../../../agentinfer/agentbench/replay/config.py)与
 [示例 YAML](../../../agentinfer/agentbench/configs/replay_benchmark.yaml)。运行
 `vllm bench serve --agentinfer replay --help` 查看支持的 CLI 覆盖参数。
+
+### 保留实时回答并对齐输入长度
+
+Inferact `trace_record` 模式默认冻结已发送的历史消息（包括旧 filler），并原样保留实时 assistant
+正文和独立的 `reasoning_content`。最新 user 消息不足目标长度时追加确定性 filler；超出目标时仅
+裁剪该条源文本的尾部，再重新分词修正边界误差。裁剪按字符边界进行，不删除历史消息。
+`context_adjustment_mode` 的历史裁剪和重置规则不适用于这一校准路径。
+
+在现有 Inferact 配置中设置以下字段，即要求每个成功请求的输入 token 数精确匹配计划：
+
+```yaml
+replay:
+  trace_record_calibration_mode: current_turn
+  prompt_calibration_tolerance_tokens: 0
+```
+
+若移空最新 user 后仍超预算、有限次后缀修复无法命中目标，或 token ID 校验发现校准改变了
+原始/空 user 两种模板共有的前缀，请求会在发送前失败。推理响应缺少 `usage.prompt_tokens` 或
+实际输入超出容差时，该请求也标记失败，依赖它的后续请求跳过。不会通过缩减历史来强行对齐。
+非零容差允许小幅差异，不能保证两次运行 token 总量相同。
+
+`replay-execution.json` 中每轮校准记录包含 `trimmed_current_user_tokens`、
+`trimmed_current_user_characters`、`preserved_prefix_tokens` 和 `backend_input_residual_tokens`。
+当前源文本的裁剪不会计入 `trimmed_filler_tokens`。
+`trace-record-validation.json` 的 `input_length_comparable` 只有在全部计划请求成功且后端 usage
+均满足容差时才为真；这是输入长度检查，不能保证 Prefix Cache 命中一致或真实任务语义不受裁剪影响。
 
 ## 检查和比较结果
 

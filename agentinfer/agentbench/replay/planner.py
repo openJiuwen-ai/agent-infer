@@ -174,6 +174,7 @@ def _workload_config(config: ReplayBenchConfig) -> dict[str, object]:
         "task_num": config.experiment.task_num,
         "max_concurrency": config.experiment.max_concurrency,
         "model": config.backend.model,
+        "chat_template_kwargs": config.backend.chat_template_kwargs,
         "replay": replay,
         "sampler_version": "agentinfer-replay-sampler/v1",
         "planner_version": "agentinfer-replay-structural/v9",

@@ -163,12 +163,12 @@ def test_tokenizer_count_forwards_chat_template_kwargs() -> None:
 def test_tokenizer_client_reuses_validated_local_counter() -> None:
     calls: list[list[dict[str, object]]] = []
 
-    def input_tokens(messages: list[dict[str, object]]) -> int:
+    def chat_token_ids(messages: list[dict[str, object]], *, tools=None) -> tuple[int, ...]:
         calls.append(messages)
-        return 42
+        return tuple(range(42))
 
     local = SimpleNamespace(
-        input_tokens=input_tokens,
+        chat_token_ids=chat_token_ids,
         text_token_ids=lambda text: (1, 2),
         detokenize_tokens=lambda tokens: "decoded",
     )

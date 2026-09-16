@@ -202,6 +202,7 @@ def test_trace_record_audits_large_live_assistant_residual_without_rewriting_tex
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": tmp_path / "source.json",
                 "prompt_shape": "trace_record",
+                "trace_record_calibration_mode": "audit",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
             },
@@ -365,6 +366,7 @@ def test_trace_record_runner_reports_consistent_residual_metrics(
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": source,
                 "prompt_shape": "trace_record",
+                "trace_record_calibration_mode": "audit",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
                 "prompt_calibration_tolerance_tokens": 1,
@@ -393,6 +395,110 @@ def test_trace_record_runner_reports_consistent_residual_metrics(
     assert execution["summary"]["prompt_calibration_tolerated_requests"] == 2
     assert validation["max_absolute_residual_tokens"] == 2
     assert validation["sum_absolute_residual_tokens"] == 6
+
+
+@pytest.mark.parametrize("bad_usage", [False, True])
+def test_current_turn_replay_repeats_targets_with_different_live_answers(tmp_path, monkeypatch, bad_usage):
+    """Run 8 tasks at concurrency 4 twice, preserving history with pad/trim in both orders."""
+    source = tmp_path / "source.json"
+    source.write_text(
+        json.dumps(
+            [
+                {
+                    "conversations": [
+                        {"from": "human", "value": "hello"},
+                        {"from": "gpt", "value": "xy"},
+                        {"from": "human", "value": "abcdefghij"},
+                        {"from": "gpt", "value": "xy"},
+                        {"from": "human", "value": "klmnopqrst"},
+                        {"from": "gpt", "value": "xy"},
+                    ]
+                }
+            ]
+            * 8
+        )
+    )
+    monkeypatch.setattr(
+        CodexSwebenchProConverter, "from_backend", classmethod(lambda cls, config: cls(_CharacterTokenizer()))
+    )
+    client = httpx.AsyncClient
+    totals = []
+    adjustments = []
+    for run_index, replies in enumerate([["A", "BBBB", "ZZ"], ["CCCC", "D", "ZZ"]]):
+        captured = {}
+
+        def respond(request, replies=replies, captured=captured):
+            if request.url.path == "/metrics":
+                return httpx.Response(503)
+            body = json.loads(request.content)
+            if request.url.path == "/detokenize":
+                return httpx.Response(200, json={"prompt": "".join(map(chr, body["tokens"]))})
+            text = body.get("prompt")
+            if text is None:
+                text = "".join(message["content"] for message in body["messages"])
+            count = len(text)
+            if request.url.path == "/tokenize":
+                return httpx.Response(200, json={"count": count, "tokens": list(map(ord, text))})
+            assert request.url.path == "/v1/chat/completions"
+            session = captured.setdefault(request.headers["x-claude-code-session-id"], [])
+            index = len(session)
+            assert count == [5, 17, 29][index]
+            if session:
+                assert body["messages"][:-2] == session[-1]["messages"]
+                assert body["messages"][-2] == {
+                    "role": "assistant",
+                    "content": replies[index - 1],
+                    "reasoning_content": "thought",
+                }
+            session.append(body)
+            chunk = {
+                "choices": [{"delta": {"content": replies[index], "reasoning_content": "thought"}}],
+                "usage": {"prompt_tokens": count + int(bad_usage), "completion_tokens": 2},
+            }
+            return httpx.Response(200, text=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n")
+
+        monkeypatch.setattr(
+            httpx,
+            "AsyncClient",
+            lambda handler=respond, **kwargs: client(transport=httpx.MockTransport(handler), **kwargs),
+        )
+        config = ReplayBenchConfig.model_validate(
+            {
+                "experiment": {"task_num": 8, "max_concurrency": 4, "result_dir": tmp_path / f"run-{run_index}"},
+                "replay": {
+                    "trace_type": "inferact_codex_swebenchpro",
+                    "trace_path": source,
+                    "prompt_shape": "trace_record",
+                    "interval_mode": "lognormal",
+                    "interval_lognormal": {"p50_seconds": 0.002, "p95_seconds": 0.03, "p99_seconds": 0.09},
+                    "prompt_calibration_tolerance_tokens": 0,
+                },
+            }
+        )
+        result = run_replay(config)
+        summary = json.loads((result / "summary.json").read_text())
+        validation = json.loads((result / "trace-record-validation.json").read_text())
+        if bad_usage:
+            assert summary["tasks"]["failed"] == 8
+            assert summary["requests"]["successful_requests"] == 0
+            assert summary["requests"]["failed_requests"] == 8
+            assert summary["execution"]["metadata"]["dependency_skipped_requests"] == 16
+            assert validation["input_length_comparable"] is False
+            assert validation["backend_input_requests_over_tolerance"] == 8
+            continue
+        assert summary["requests"]["successful_requests"] == 24
+        assert summary["tasks"]["completed"] == 8
+        assert summary["tasks"]["failed"] == 0
+        assert validation["input_length_comparable"] is True
+        assert validation["requests_over_tolerance"] == 0
+        assert validation["backend_input_checked_requests"] == 24
+        assert validation["trimmed_current_user_characters"] == 16
+        assert summary["execution"]["metadata"]["trimmed_filler_tokens"] == 0
+        adjustments.append(summary["execution"]["metadata"]["prompt_calibration_adjustments"])
+        totals.append(summary["requests"]["input_tokens"])
+    if not bad_usage:
+        assert totals == [408, 408]
+        assert all(item["pad"] == item["trim"] == 8 for item in adjustments)
 
 
 @pytest.mark.parametrize("trace_type", ["agentX", "tracelab"])

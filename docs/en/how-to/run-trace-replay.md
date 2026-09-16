@@ -15,8 +15,8 @@ See [vLLM integration](integrate-vllm.md) for deployment options.
 
 Inferact conversion discovers the Backend tokenizer through `/v1/models` and the optional `/tokenizer_info`.
 When matching tokenizer files are available on the same host and raw-text and chat-template token-ID probes match
-the Backend exactly, conversion and Replay calibration use the local tokenizer. Append-stable templates use
-incremental counting; other templates are counted locally in full. Discovery or validation failure falls back to
+the Backend exactly, conversion and Replay calibration use the local tokenizer. Conversion may use incremental
+counting; runtime calibration always counts the full chat template. Discovery or validation failure falls back to
 `/tokenize`. vLLM exposes
 `/tokenizer_info` only when started with `--enable-tokenizer-info-endpoint`; enable it when the server overrides the
 model's chat template.
@@ -49,12 +49,40 @@ recording sources. The backend context window must accommodate the request targe
 | `replay.sample_seed` | Reproducible session selection and backend sampling seed. |
 | `replay.max_input_tokens` / `max_output_tokens` | Optional token caps; `null` preserves trace targets. |
 | `replay.context_adjustment_mode` | `strict` rejects non-append-only context; `adaptive` audits trims and context resets. |
+| `replay.trace_record_calibration_mode` | Inferact defaults to `current_turn`: pad/trim the newest user suffix. `audit` preserves source text and reports drift. |
 | `replay.request_timeout_seconds` | Per-request timeout. |
 
 For all fields, defaults, and constraints see the [Replay configuration
 model](../../../agentinfer/agentbench/replay/config.py)
 and [example YAML](../../../agentinfer/agentbench/configs/replay_benchmark.yaml).
 Run `vllm bench serve --agentinfer replay --help` to list supported CLI overrides.
+
+### Align input lengths while retaining live answers
+
+Inferact `trace_record` freezes sent messages, including old filler, and retains live assistant content and its
+separate `reasoning_content`. It pads the newest user text when below target, or trims only that text's suffix
+when over target. Trimming uses character boundaries; every candidate is counted with the full chat template.
+The historical trimming/reset rules of `context_adjustment_mode` do not apply to this path.
+
+Set these fields in an existing Inferact configuration for exact per-request input lengths:
+
+```yaml
+replay:
+  trace_record_calibration_mode: current_turn
+  prompt_calibration_tolerance_tokens: 0
+```
+
+If frozen history plus an empty user exceeds the budget, bounded suffix repair cannot meet the target, or the
+calibration changes the token prefix shared by the original and empty-user templates, the request fails before
+inference. Missing `usage.prompt_tokens` or a backend input count beyond tolerance also fails the request;
+dependent requests are skipped. History is never trimmed to force a fit. Nonzero tolerance permits small residuals
+and cannot guarantee identical totals across runs.
+
+Per-request calibration in `replay-execution.json` records `trimmed_current_user_tokens`,
+`trimmed_current_user_characters`, `preserved_prefix_tokens`, and `backend_input_residual_tokens`.
+Source-text trimming is separate from `trimmed_filler_tokens`. In `trace-record-validation.json`,
+`input_length_comparable` is true only when all planned requests succeed and backend usage satisfies tolerance.
+This checks input lengths; it does not guarantee identical Prefix Cache hits or preserve the meaning of trimmed text.
 
 ## Inspect and compare results
 

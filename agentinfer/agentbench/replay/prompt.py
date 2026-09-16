@@ -13,7 +13,7 @@ import asyncio
 import hashlib
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import httpx
@@ -51,6 +51,9 @@ class PromptCalibration:
     repair_attempts: int
     count_history: tuple[int, ...]
     adjustment: Literal["none", "pad", "trim", "trim_and_pad", "reset", "reset_and_pad"]
+    trimmed_current_user_tokens: int = 0
+    trimmed_current_user_characters: int = 0
+    preserved_prefix_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -110,6 +113,7 @@ class SyntheticPrompt:
 class PromptExchange:
     prompt: SyntheticPrompt
     assistant_content: str
+    assistant_reasoning_content: str | None = None
 
 
 class TokenizerClient:
@@ -155,8 +159,6 @@ class TokenizerClient:
             tools = payload.get("tools")
             assert isinstance(messages, list)
             assert tools is None or isinstance(tools, list)
-            if not prompt.system and not tools:
-                return await asyncio.to_thread(self.local_tokenizer.input_tokens, messages)
             tokens = await asyncio.to_thread(self.local_tokenizer.chat_token_ids, messages, tools=tools)
             return len(tokens)
         response = await self._post(
@@ -165,6 +167,23 @@ class TokenizerClient:
         )
         response.raise_for_status()
         return int(response.json()["count"])
+
+    async def prompt_token_ids(self, prompt: SyntheticPrompt) -> tuple[int, ...]:
+        """Encode the complete chat template for calibration prefix verification."""
+
+        if self.endpoint != "/v1/chat/completions":
+            raise ValueError("Prompt token IDs require /v1/chat/completions")
+        payload = prompt.tokenizer_payload(self.model, self.chat_template_kwargs)
+        if self.local_tokenizer is not None:
+            return await asyncio.to_thread(
+                self.local_tokenizer.chat_token_ids, payload["messages"], tools=payload.get("tools")
+            )
+        response = await self._post("/tokenize", json=payload)
+        response.raise_for_status()
+        tokens = response.json().get("tokens")
+        if not isinstance(tokens, list) or any(type(token) is not int for token in tokens):
+            raise ValueError("Backend /tokenize response has no integer tokens list")
+        return tuple(tokens)
 
     async def text_token_ids(self, text: str) -> tuple[int, ...]:
         if self.local_tokenizer is not None:
@@ -397,7 +416,7 @@ class PromptBuilder:
         node: ReplayPlanNode,
         context: PromptExchange | None,
     ) -> SyntheticPrompt:
-        """Rebuild an unmodified text turn and audit its input token count."""
+        """Append a live exchange and optionally calibrate only the newest user text."""
 
         assert self.trace_texts is not None
         reference = node.prompt_ref
@@ -410,11 +429,15 @@ class PromptBuilder:
         else:
             messages = list(context.prompt.messages)
             assistant: dict[str, object] = {"role": "assistant", "content": context.assistant_content}
+            if context.assistant_reasoning_content is not None:
+                assistant["reasoning_content"] = context.assistant_reasoning_content
             messages.extend((assistant, user_message))
             prompt = SyntheticPrompt("", (), tuple(messages))
 
         assert node.planned_input_tokens is not None
         count = await self.tokenizer.count(prompt)
+        if self.config.replay.trace_record_calibration_mode == "current_turn":
+            return await self._calibrate_current_turn(prompt, node, count)
         residual = count - node.planned_input_tokens
         tolerance = self.config.replay.prompt_calibration_tolerance_tokens
         if abs(residual) > tolerance:
@@ -443,6 +466,159 @@ class PromptBuilder:
             adjustment="none",
         )
         return SyntheticPrompt(prompt.system, prompt.tools, prompt.messages, calibration, prompt.extra_body)
+
+    async def _calibrate_current_turn(
+        self, prompt: SyntheticPrompt, node: ReplayPlanNode, initial_count: int
+    ) -> SyntheticPrompt:
+        """Fit the latest user suffix to the target, keeping all historical messages intact.
+
+        Prefix search shortens only the current source text at character boundaries.
+        Bounded suffix repair then attempts an exact full-template count. Every
+        accepted candidate is measured; histories that cannot fit fail explicitly.
+        """
+
+        assert node.planned_input_tokens is not None
+        target = node.planned_input_tokens
+        index = len(prompt.messages) - 1
+        original = prompt.messages[index]["content"]
+        assert prompt.messages[index]["role"] == "user" and isinstance(original, str)
+        candidate, count, kept = prompt, initial_count, original
+        history = [count]
+        original_ids: tuple[int, ...] | None = None
+        empty_ids: tuple[int, ...] | None = None
+        original_content_ids: tuple[int, ...] | None = None
+        if count != target:
+            # Derive a conservative unchanged token prefix from this exact history.
+            original_ids = await self.tokenizer.prompt_token_ids(prompt)
+            empty = self._replace_calibration_remainder(prompt, index, "")
+            empty_ids = await self.tokenizer.prompt_token_ids(empty)
+            if len(original_ids) != count:
+                raise ValueError(f"Tokenizer count/IDs disagree for {node.source_key}")
+        if count > target:
+            assert empty_ids is not None
+            empty_count = len(empty_ids)
+            history.append(empty_count)
+            if empty_count > target:
+                raise ValueError(
+                    f"Current-turn calibration unreachable for {node.source_key}: "
+                    f"frozen history with empty user needs {empty_count} tokens, target={target}; "
+                    "historical messages will not be trimmed"
+                )
+            candidate, count, kept = empty, empty_count, ""
+            # Use raw token counts only as a hint; verify the complete template.
+            low, high = 1, len(original) - 1
+            original_content_ids = await self.tokenizer.text_token_ids(original)
+            keep_tokens = max(0, len(original_content_ids) - (initial_count - target))
+            hint = await self.tokenizer.detokenize_tokens(original_content_ids[:keep_tokens])
+            # A sliced multi-byte token can decode to replacement characters. Only
+            # accept a literal source prefix, otherwise search character boundaries.
+            if hint and original.startswith(hint) and len(hint) < len(original):
+                trial = self._replace_calibration_remainder(prompt, index, hint)
+                trial_count = await self.tokenizer.count(trial)
+                history.append(trial_count)
+                if trial_count <= target:
+                    candidate, count, kept = trial, trial_count, hint
+                    low = len(hint) + 1
+                else:
+                    high = len(hint) - 1
+                if trial_count == target:
+                    low = high + 1
+            # Token counts need not be monotone; every accepted prefix is measured,
+            # and bounded suffix repair handles any remaining undershoot.
+            while low <= high:
+                middle = (low + high) // 2
+                text = original[:middle]
+                trial = self._replace_calibration_remainder(prompt, index, text)
+                trial_count = await self.tokenizer.count(trial)
+                history.append(trial_count)
+                if trial_count <= target:
+                    candidate, count, kept = trial, trial_count, text
+                    low = middle + 1
+                else:
+                    high = middle - 1
+        padding_base_count = count
+        attempts = requested = 0
+        if count < target:
+            candidate, count, attempts, requested, repair_history = await self._repair_calibration_suffix(
+                candidate,
+                index,
+                kept,
+                f"trace-record:{node.runtime_request_id}",
+                target,
+                count,
+                allow_shorter=True,
+            )
+            history.extend(repair_history)
+        if history[-1] != count:
+            history.append(count)
+        tolerance = self.config.replay.prompt_calibration_tolerance_tokens
+        if abs(count - target) > tolerance:
+            raise ValueError(
+                f"Current-turn calibration unreachable for {node.source_key}: "
+                f"final_tokens={count} target={target} tolerance={tolerance}; frozen history preserved"
+            )
+        preserved = None
+        if original_ids is not None:
+            assert empty_ids is not None
+            boundary_ids = empty_ids
+            if original_ids == empty_ids:
+                # An empty (or template-stripped) user must not lock the generation suffix.
+                boundary = self._replace_calibration_remainder(prompt, index, "AgentInfer boundary probe")
+                boundary_ids = await self.tokenizer.prompt_token_ids(boundary)
+            locked = 0
+            for left, right in zip(original_ids, boundary_ids, strict=False):
+                if left != right:
+                    break
+                locked += 1
+            final_ids = await self.tokenizer.prompt_token_ids(candidate)
+            if len(final_ids) != count or final_ids[:locked] != original_ids[:locked]:
+                raise ValueError(f"Current-turn calibration changed frozen token prefix for {node.source_key}")
+            preserved = 0
+            for left, right in zip(original_ids, final_ids, strict=False):
+                if left != right:
+                    break
+                preserved += 1
+        trimmed_characters = len(original) - len(kept)
+        trimmed_tokens = 0
+        if trimmed_characters:
+            assert original_content_ids is not None
+            trimmed_tokens = max(0, len(original_content_ids) - len(await self.tokenizer.text_token_ids(kept)))
+        padded = count > padding_base_count
+        adjustment = (
+            "trim_and_pad"
+            if trimmed_characters and padded
+            else ("trim" if trimmed_characters else "pad" if padded else "none")
+        )
+        calibration = PromptCalibration(
+            target_tokens=target,
+            initial_tokens=initial_count,
+            final_tokens=count,
+            added_filler_tokens=requested,
+            requested_filler_tokens=requested,
+            actual_prompt_token_gain=max(0, count - padding_base_count),
+            trimmed_filler_tokens=0,
+            residual_tokens=count - target,
+            target_met=count == target,
+            accepted_with_tolerance=count != target,
+            repair_attempts=attempts,
+            count_history=tuple(history),
+            adjustment=adjustment,
+            trimmed_current_user_tokens=trimmed_tokens,
+            trimmed_current_user_characters=trimmed_characters,
+            preserved_prefix_tokens=preserved,
+        )
+        logger.info(
+            "Current-turn calibration: source_key=%s initial=%d final=%d target=%d "
+            "trimmed_user_characters=%d padding_gain=%d preserved_prefix_tokens=%s",
+            node.source_key,
+            initial_count,
+            count,
+            target,
+            trimmed_characters,
+            calibration.actual_prompt_token_gain,
+            preserved,
+        )
+        return replace(candidate, calibration=calibration)
 
     async def _continuation_prompt(
         self,
@@ -529,6 +705,8 @@ class PromptBuilder:
         namespace: str,
         target: int,
         current_count: int,
+        *,
+        allow_shorter: bool = False,
     ) -> tuple[SyntheticPrompt, int, int, int, tuple[int, ...]]:
         """Find the closest deterministic request-private suffix.
 
@@ -538,6 +716,7 @@ class PromptBuilder:
         count, selected nominal filler size, and all candidate count results.
         Exact matches return immediately; otherwise an under-target candidate is
         preferred over an equally close over-target candidate.
+        ``allow_shorter`` also checks smaller fillers when a boundary adds tokens.
         """
 
         delta = target - current_count
@@ -550,8 +729,11 @@ class PromptBuilder:
         best_key = (abs(delta), current_count > target, 0, 0)
         attempts = 0
         count_history: list[int] = []
-        for extra_tokens in range(4):
+        offsets = (0, 1, -1, 2, -2, 3, -3) if allow_shorter else range(4)
+        for extra_tokens in offsets:
             requested_tokens = delta + extra_tokens
+            if requested_tokens <= 0:
+                continue
             for variant in range(8):
                 filler = await self.tokenizer.token_text(
                     f"{namespace}:repair:{variant}",
