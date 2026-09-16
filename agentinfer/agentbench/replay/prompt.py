@@ -479,6 +479,7 @@ class PromptBuilder:
 
         assert node.planned_input_tokens is not None
         target = node.planned_input_tokens
+        tolerance = self.config.replay.prompt_calibration_tolerance_tokens
         index = len(prompt.messages) - 1
         original = prompt.messages[index]["content"]
         assert prompt.messages[index]["role"] == "user" and isinstance(original, str)
@@ -498,7 +499,7 @@ class PromptBuilder:
             assert empty_ids is not None
             empty_count = len(empty_ids)
             history.append(empty_count)
-            if empty_count > target:
+            if empty_count > target + tolerance:
                 raise ValueError(
                     f"Current-turn calibration unreachable for {node.source_key}: "
                     f"frozen history with empty user needs {empty_count} tokens, target={target}; "
@@ -551,7 +552,6 @@ class PromptBuilder:
             history.extend(repair_history)
         if history[-1] != count:
             history.append(count)
-        tolerance = self.config.replay.prompt_calibration_tolerance_tokens
         if abs(count - target) > tolerance:
             raise ValueError(
                 f"Current-turn calibration unreachable for {node.source_key}: "

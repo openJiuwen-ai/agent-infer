@@ -96,6 +96,23 @@ def test_frozen_history_over_budget_fails_without_erasing_old_padding():
     assert prompt.messages[-1]["content"] == "new"
 
 
+def test_empty_current_user_can_retain_frozen_history_within_explicit_tolerance():
+    prompt = SyntheticPrompt(
+        "",
+        (),
+        (
+            {"role": "user", "content": "oldpp"},
+            {"role": "assistant", "content": "reply"},
+            {"role": "user", "content": "new"},
+        ),
+    )
+    result = calibrate(prompt, 9, tolerance=1)
+    assert result.messages[:-1] == prompt.messages[:-1]
+    assert result.messages[-1]["content"] == ""
+    assert result.calibration.final_tokens == 10
+    assert result.calibration.accepted_with_tolerance
+
+
 def test_padding_is_not_assumed_additive_at_text_boundary():
     class MergeTokenizer(TextTokenizer):
         async def prompt_token_ids(self, prompt):

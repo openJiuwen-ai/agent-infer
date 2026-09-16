@@ -72,8 +72,8 @@ replay:
   prompt_calibration_tolerance_tokens: 0
 ```
 
-If frozen history plus an empty user exceeds the budget, bounded suffix repair cannot meet the target, or the
-calibration changes the token prefix shared by the original and empty-user templates, the request fails before
+If frozen history plus an empty user exceeds the target plus tolerance, bounded suffix repair cannot satisfy tolerance,
+or calibration changes the token prefix shared by the original and empty-user templates, the request fails before
 inference. Missing `usage.prompt_tokens` or a backend input count beyond tolerance also fails the request;
 dependent requests are skipped. History is never trimmed to force a fit. Nonzero tolerance permits small residuals
 and cannot guarantee identical totals across runs.
