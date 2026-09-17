@@ -1,0 +1,19 @@
+[package]
+name = "agent_hint_affinity"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "WASM OnRequest plugin: copy agent_hint.session_id into session_params.session_id"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde_json = "1.0"
+wit-bindgen = "0.46"
+
+[profile.release]
+lto = true
+opt-level = "s"
+codegen-units = 1
+strip = "symbols"

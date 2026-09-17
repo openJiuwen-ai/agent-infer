@@ -7,7 +7,12 @@ a versioned section.
 
 ### Added
 
-- Added the AgentRouter native middleware patch for `agent_hint_affinity` / `agent_hint_token_offsets` under `agentinfer/agentrouter/patches` (apply onto upstream Router; do not vendor the full router tree).
+- Added the AgentRouter **WASM** `agent_hint_affinity` guest under
+  `agentinfer/agentrouter/agent_hint_affinity` (upstream Router `#251`
+  `--wasm-middleware` host; no vendored Router tree).
+- Kept the optional native middleware patch for `agent_hint_token_offsets`
+  under `agentinfer/agentrouter/patches` (affinity should use WASM instead of
+  native `agent_hint_affinity`).
 - Added mirrored Chinese and English documentation organized with the Diátaxis framework.
 
 ### Changed
