@@ -1,27 +1,4 @@
----
-title: AgentInfer serve flag
-kind: module
-status: draft
-primary_code_paths:
-  - agentinfer/agentcache/entrypoints/cli/serve_profile.py
-  - agentinfer/agentcache/entrypoints/cli/main.py
-related_code_paths:
-  - agentinfer/__init__.py
-  - agentinfer/agentcache/core/api_adapter.py
-  - agentinfer/agentcache/core/factory.py
-depends_on:
-  - vllm-runtime-integration.md
-validation_paths:
-  - tests/agentcache/entrypoints/**
-  - tests/agentbench/test_entrypoints.py
-upstream_refs:
-  - vLLM CLI entrypoints
-  - https://github.com/vllm-project/vllm-omni/blob/main/vllm_omni/entrypoints/cli/main.py
-  - https://github.com/vllm-project/vllm-omni/blob/main/vllm_omni/entrypoints/cli/serve.py
-last_reviewed: 2026-09-17
----
-
-## AgentInfer serve flag (`vllm serve MODEL --agentinfer`)
+# AgentInfer serve flag (`vllm serve MODEL --agentinfer`)
 
 ## Purpose and boundary
 
