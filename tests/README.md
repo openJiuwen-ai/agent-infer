@@ -5,6 +5,26 @@ test structure under `tests/agentcache/core/`.
 
 ## Test files
 
+### `tests/agentcache/entrypoints/test_serve_profile.py`
+
+Unit tests for the `vllm serve MODEL --agentinfer` takeover in
+`agentinfer/agentcache/entrypoints/cli/serve_profile.py` (upstream vLLM modules are stubbed).
+
+| Test | What it verifies |
+| ---- | ---------------- |
+| `test_bare_flag_pins_async_and_async_bridge` | Bare flag injects async scheduling, async bridge, middleware, and controller factory |
+| `test_explicit_async_choice_is_preserved_with_matching_bridge` | `--async-scheduling`/`--no-async-scheduling` are preserved and select the matching bridge |
+| `test_upstream_default_async_mode_uses_async_bridge_without_forcing` | Unset mode is pinned async so the bridge matches the engine |
+| `test_explicit_scheduler_cls_conflicts` | `--scheduler-cls` combined with `--agentinfer` is rejected |
+| `test_user_middleware_order_is_preserved_and_duplicates_removed` | User middleware runs first; duplicates are removed |
+| `test_user_additional_config_merges_with_user_priority` | `--additional-config` deep-merges with user priority |
+| `test_conflicting_controller_factory_is_rejected` | A different `agentcache.controller_factory` is rejected |
+| `test_identical_controller_factory_is_accepted` | The same `controller_factory` merges cleanly |
+| `test_invalid_additional_config_json_is_rejected` | Invalid or non-object JSON is rejected |
+| `test_run_agentinfer_serve_dispatches_enriched_namespace` | The enriched namespace reaches upstream serve with socket defaulting and the stderr transparency line |
+| `test_run_agentinfer_serve_preserves_existing_socket` | An existing `AGENTCACHE_VLLM_LIFECYCLE_SOCKET` is preserved |
+| `test_run_agentinfer_serve_requires_the_flag` | Takeover without `--agentinfer` is rejected |
+
 ### `tests/agentcache/core/test_agent_scheduler.py`
 
 Unit tests for `AgentAwareScheduler` resolution and the `EngineArgs` patch.

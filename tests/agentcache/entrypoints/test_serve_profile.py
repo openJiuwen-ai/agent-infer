@@ -1,0 +1,216 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
+import argparse
+import json
+import os
+import sys
+import types
+from typing import Any
+
+import pytest
+
+from agentinfer.agentcache.entrypoints.cli import serve_profile
+
+
+def _stub_parser() -> argparse.ArgumentParser:
+    """Serve parser stub with the upstream dests injection interacts with."""
+
+    parser = argparse.ArgumentParser(prog="vllm serve")
+    parser.add_argument("model_tag", nargs="?", default=None)
+    parser.add_argument("--scheduler-cls", dest="scheduler_cls", default=None)
+    parser.add_argument("--middleware", dest="middleware", action="append", type=str, default=[])
+    parser.add_argument("--additional-config", dest="additional_config", type=json.loads, default={})
+    parser.add_argument(
+        "--async-scheduling",
+        dest="async_scheduling",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    serve_profile.add_agentinfer_arguments(parser)
+    return parser
+
+
+def _parse(argv: list[str]) -> tuple[argparse.Namespace, set[str]]:
+    return serve_profile.parse_args_with_explicit_keys(_stub_parser(), argv)
+
+
+def _install_stub_vllm(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Install a stub vLLM surface exposing make_arg_parser and ServeSubcommand."""
+
+    recorded: dict[str, Any] = {}
+
+    def make_arg_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+        parser.add_argument("model_tag", nargs="?", default=None)
+        parser.add_argument("--port", type=int, default=None)
+        parser.add_argument("--scheduler-cls", dest="scheduler_cls", default=None)
+        parser.add_argument("--middleware", dest="middleware", action="append", type=str, default=[])
+        parser.add_argument("--additional-config", dest="additional_config", type=json.loads, default={})
+        parser.add_argument(
+            "--async-scheduling",
+            dest="async_scheduling",
+            action=argparse.BooleanOptionalAction,
+            default=None,
+        )
+        return parser
+
+    class ServeSubcommand:
+        def validate(self, args: argparse.Namespace) -> None:
+            recorded["validated"] = True
+
+        def cmd(self, args: argparse.Namespace) -> None:
+            recorded["namespace"] = args
+
+    cli_args = types.ModuleType("vllm.entrypoints.openai.cli_args")
+    cli_args.make_arg_parser = make_arg_parser
+    serve_mod = types.ModuleType("vllm.entrypoints.cli.serve")
+    serve_mod.ServeSubcommand = ServeSubcommand
+    for name, module in {
+        "vllm": types.ModuleType("vllm"),
+        "vllm.entrypoints": types.ModuleType("vllm.entrypoints"),
+        "vllm.entrypoints.openai": types.ModuleType("vllm.entrypoints.openai"),
+        "vllm.entrypoints.openai.cli_args": cli_args,
+        "vllm.entrypoints.cli": types.ModuleType("vllm.entrypoints.cli"),
+        "vllm.entrypoints.cli.serve": serve_mod,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    return recorded
+
+
+def test_bare_flag_pins_async_and_async_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(serve_profile.LIFECYCLE_SOCKET_ENV, raising=False)
+    namespace, _ = _parse(["MODEL", "--agentinfer"])
+    injected = serve_profile.inject_profile(namespace, set())
+
+    assert namespace.async_scheduling is True
+    assert namespace.scheduler_cls == serve_profile.ASYNC_SCHEDULER_CLS
+    assert namespace.middleware == list(serve_profile.DEFAULT_SERVE_PROFILE.middlewares)
+    assert namespace.additional_config == {"agentcache": {"controller_factory": serve_profile.CONTROLLER_FACTORY}}
+    assert injected["async_scheduling"] is True
+
+
+def test_explicit_async_choice_is_preserved_with_matching_bridge() -> None:
+    namespace, explicit = _parse(["MODEL", "--agentinfer", "--async-scheduling"])
+    serve_profile.inject_profile(namespace, explicit)
+    assert namespace.async_scheduling is True
+    assert namespace.scheduler_cls == serve_profile.ASYNC_SCHEDULER_CLS
+
+    namespace, explicit = _parse(["MODEL", "--agentinfer", "--no-async-scheduling"])
+    serve_profile.inject_profile(namespace, explicit)
+    assert namespace.async_scheduling is False
+    assert namespace.scheduler_cls == serve_profile.SYNC_SCHEDULER_CLS
+
+
+def test_upstream_default_async_mode_uses_async_bridge_without_forcing() -> None:
+    namespace, explicit = _parse(["MODEL", "--agentinfer"])
+    assert "async_scheduling" not in explicit
+    assert namespace.async_scheduling is None
+    serve_profile.inject_profile(namespace, explicit)
+    assert namespace.async_scheduling is True
+
+
+def test_explicit_scheduler_cls_conflicts(monkeypatch: pytest.MonkeyPatch) -> None:
+    namespace, explicit = _parse(["MODEL", "--agentinfer", "--scheduler-cls", "other.Other"])
+    with pytest.raises(serve_profile.AgentInferServeError, match="--scheduler-cls"):
+        serve_profile.inject_profile(namespace, explicit)
+
+
+def test_user_middleware_order_is_preserved_and_duplicates_removed() -> None:
+    namespace, explicit = _parse(
+        [
+            "MODEL",
+            "--agentinfer",
+            "--middleware",
+            "custom.Mid",
+            "--middleware",
+            serve_profile.IDENTITY_MIDDLEWARE,
+        ]
+    )
+    injected = serve_profile.inject_profile(namespace, explicit)
+
+    assert namespace.middleware == [
+        "custom.Mid",
+        serve_profile.IDENTITY_MIDDLEWARE,
+        serve_profile.LIFECYCLE_MIDDLEWARE,
+    ]
+    assert injected["middleware"] == [serve_profile.LIFECYCLE_MIDDLEWARE]
+
+
+def test_user_additional_config_merges_with_user_priority() -> None:
+    user_config = {
+        "other": {"flag": True},
+        "agentcache": {"observability": {"enabled": True}},
+    }
+    namespace, explicit = _parse(["MODEL", "--agentinfer", "--additional-config", json.dumps(user_config)])
+    serve_profile.inject_profile(namespace, explicit)
+
+    assert namespace.additional_config == {
+        "other": {"flag": True},
+        "agentcache": {
+            "controller_factory": serve_profile.CONTROLLER_FACTORY,
+            "observability": {"enabled": True},
+        },
+    }
+
+
+def test_conflicting_controller_factory_is_rejected() -> None:
+    user_config = {"agentcache": {"controller_factory": "custom.factory"}}
+    namespace, explicit = _parse(["MODEL", "--agentinfer", "--additional-config", json.dumps(user_config)])
+    with pytest.raises(serve_profile.AgentInferServeError, match="controller_factory"):
+        serve_profile.inject_profile(namespace, explicit)
+
+
+def test_identical_controller_factory_is_accepted() -> None:
+    user_config = {"agentcache": {"controller_factory": serve_profile.CONTROLLER_FACTORY}}
+    namespace, explicit = _parse(["MODEL", "--agentinfer", "--additional-config", json.dumps(user_config)])
+    serve_profile.inject_profile(namespace, explicit)
+    assert namespace.additional_config["agentcache"]["controller_factory"] == (serve_profile.CONTROLLER_FACTORY)
+
+
+def test_invalid_additional_config_json_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    namespace = argparse.Namespace(additional_config="{not json")
+    with pytest.raises(serve_profile.AgentInferServeError, match="invalid"):
+        serve_profile._merge_additional_config(namespace.additional_config, serve_profile.DEFAULT_SERVE_PROFILE)
+
+    namespace = argparse.Namespace(additional_config="[1, 2]")
+    with pytest.raises(serve_profile.AgentInferServeError, match="JSON object"):
+        serve_profile._merge_additional_config(namespace.additional_config, serve_profile.DEFAULT_SERVE_PROFILE)
+
+
+def test_run_agentinfer_serve_dispatches_enriched_namespace(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    recorded = _install_stub_vllm(monkeypatch)
+    monkeypatch.delenv(serve_profile.LIFECYCLE_SOCKET_ENV, raising=False)
+
+    exit_code = serve_profile.run_agentinfer_serve(
+        ["MODEL", "--agentinfer", "--port", "8001", "--middleware", "custom.Mid"]
+    )
+
+    assert exit_code == 0
+    assert recorded["validated"] is True
+    served = recorded["namespace"]
+    assert served.model_tag == "MODEL"
+    assert served.scheduler_cls == serve_profile.ASYNC_SCHEDULER_CLS
+    assert served.async_scheduling is True
+    assert served.middleware == ["custom.Mid", *serve_profile.DEFAULT_SERVE_PROFILE.middlewares]
+    assert served.additional_config == {"agentcache": {"controller_factory": serve_profile.CONTROLLER_FACTORY}}
+    assert os.environ[serve_profile.LIFECYCLE_SOCKET_ENV] == serve_profile.DEFAULT_LIFECYCLE_SOCKET
+    err = capsys.readouterr().err
+    assert "[agentinfer] --agentinfer injected:" in err
+    assert serve_profile.ASYNC_SCHEDULER_CLS in err
+
+
+def test_run_agentinfer_serve_preserves_existing_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_stub_vllm(monkeypatch)
+    monkeypatch.setenv(serve_profile.LIFECYCLE_SOCKET_ENV, "/tmp/custom.sock")
+
+    serve_profile.run_agentinfer_serve(["MODEL", "--agentinfer"])
+
+    assert os.environ[serve_profile.LIFECYCLE_SOCKET_ENV] == "/tmp/custom.sock"
+
+
+def test_run_agentinfer_serve_requires_the_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_stub_vllm(monkeypatch)
+    with pytest.raises(serve_profile.AgentInferServeError, match="--agentinfer"):
+        serve_profile.run_agentinfer_serve(["MODEL"])
