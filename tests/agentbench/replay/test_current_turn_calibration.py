@@ -193,3 +193,41 @@ def test_partial_token_decode_never_replaces_source_characters():
     result = calibrate(prompt, 2, PartialUnicodeTokenizer())
     assert result.messages[-1]["content"] == "中文"
     assert result.calibration.trimmed_current_user_characters == 2
+
+
+@pytest.mark.parametrize(
+    "short_count,empty_count,long_count",
+    [(5, 0, 4), (4, 0, 4), (5, 5, 4), (5, 0, 3)],
+    ids=["over-budget-short-prefix", "exact-short-prefix", "over-budget-empty-user", "longest-prefix-needs-padding"],
+)
+def test_nonmonotone_counts_keep_longest_fitting_source_prefix(short_count, empty_count, long_count):
+    class NonmonotoneTokenizer(TextTokenizer):
+        async def prompt_token_ids(self, prompt):
+            previous = tuple(ord(c) for message in prompt.messages[:-1] for c in message["content"])
+            text = prompt.messages[-1]["content"]
+            counts = {"": empty_count, "abc": short_count, "abcdef": long_count, "abcdefgh": 9}
+            count = long_count + 1 if text == "abcdefp" else counts.get(text, len(text))
+            # Empty-user template tokens differ from the source content tokens.
+            token_base = 1000 if text else 2000
+            return previous + tuple(token_base + index for index in range(count))
+
+    prompt = SyntheticPrompt(
+        "",
+        (),
+        (
+            {"role": "user", "content": "old"},
+            {"role": "assistant", "content": "reply", "reasoning_content": "preserved"},
+            {"role": "user", "content": "abcdefgh"},
+        ),
+    )
+    original = copy.deepcopy(prompt.messages)
+    result = calibrate(prompt, 12, NonmonotoneTokenizer())
+
+    assert prompt.messages == original
+    assert result.messages[:-1] == original[:-1]
+    assert result.messages[-1]["content"] == "abcdef" + ("p" if long_count == 3 else "")
+    assert result.calibration.final_tokens == 12
+    assert result.calibration.residual_tokens == 0
+    assert result.calibration.trimmed_current_user_characters == 2
+    assert result.calibration.trimmed_current_user_tokens == 2
+    assert result.calibration.adjustment == ("trim_and_pad" if long_count == 3 else "trim")

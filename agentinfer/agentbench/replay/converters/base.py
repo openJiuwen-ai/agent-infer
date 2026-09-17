@@ -39,7 +39,6 @@ class ReplayDatasetConverter(ABC):
     """Convert one source dataset into the engine-neutral Replay Trace IR."""
 
     name: str
-    version: str
 
     @abstractmethod
     def convert(self, source: Path, output_dir: Path) -> ConverterSummary:

@@ -28,7 +28,6 @@ from ..tokenizer_retry import TOKENIZER_REQUEST_MAX_ATTEMPTS, TOKENIZER_RETRY_BA
 from ..unified_trace_ir import write_trace_ir_manifest
 from .base import ConverterSummary, ReplayDatasetConverter
 
-_CONVERTER_VERSION = "agentinfer-codex-swebenchpro/v5"
 logger = logging.getLogger(__name__)
 
 
@@ -252,7 +251,6 @@ class CodexSwebenchProConverter(ReplayDatasetConverter):
     """
 
     name = "codex_swebenchpro"
-    version = _CONVERTER_VERSION
 
     def __init__(self, tokenizer: _TraceTokenizer) -> None:
         """Create a converter with an explicit token-accounting provider."""
@@ -348,7 +346,6 @@ class CodexSwebenchProConverter(ReplayDatasetConverter):
         write_trace_ir_manifest(
             output_dir,
             converter_name=self.name,
-            converter_version=self.version,
             source_path=source,
             summary=summary_payload,
         )

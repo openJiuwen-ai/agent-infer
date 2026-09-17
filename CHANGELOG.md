@@ -11,6 +11,10 @@ a versioned section.
 
 ### Changed
 
+- Inferact replay counts complete conversations with the configured chat template and its parameters, using a
+ validated local tokenizer when available. Current-turn calibration preserves historical messages and requires exact
+ input lengths; clipping checks prefixes from longest to shortest to handle nonmonotone token counts.
+- Converted Trace IR manifests identify the converter by name without a separate converter version label.
 - Reorganized the root README into project overview, core features, related documentation, requirements, installation,
  Quick Start, and license sections.
 - Refreshed release-package installation and made the explicit scheduler bridge, middleware, and Progress-TTL

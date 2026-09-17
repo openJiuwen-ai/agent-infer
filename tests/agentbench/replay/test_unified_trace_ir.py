@@ -22,7 +22,7 @@ from agentinfer.agentbench.replay.converters.codex_swebenchpro import (
 from agentinfer.agentbench.replay.planner import build_replay_plan
 from agentinfer.agentbench.replay.prompt import PromptBuilder, PromptExchange, SyntheticPrompt
 from agentinfer.agentbench.replay.runner import _prepare_replay_source, run_replay
-from agentinfer.agentbench.replay.unified_trace_ir import validate_trace_ir
+from agentinfer.agentbench.replay.unified_trace_ir import canonical_sha256, validate_trace_ir
 
 
 class _CharacterTokenizer:
@@ -119,6 +119,7 @@ def test_converter_writes_closed_trace_ir_contract_and_detects_tampering(
     assert trace_ir.root == output
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["schema_version"] == "2"
+    assert manifest["converter"] == {"name": "codex_swebenchpro"}
     assert "capabilities" not in manifest
     assert manifest["summary"]["source_records_consumed"] == 1
     assert manifest["summary"]["tokenizer_counting_mode"] == "custom"
@@ -135,6 +136,24 @@ def test_converter_writes_closed_trace_ir_contract_and_detects_tampering(
     }
     targets[tampered].write_text("changed", encoding="utf-8")
     with pytest.raises(ValueError, match="SHA256 mismatch"):
+        validate_trace_ir(output / "requests.jsonl", output / "texts")
+
+
+def test_trace_ir_accepts_legacy_converter_metadata_and_still_checks_its_digest(tmp_path: Path) -> None:
+    output, _, _ = _trace_ir(tmp_path)
+    manifest_path = output / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["converter"]["version"] = "legacy-converter"
+    del manifest["bundle_sha256"]
+    manifest["bundle_sha256"] = canonical_sha256(manifest)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    trace_ir = validate_trace_ir(output / "requests.jsonl", output / "texts")
+    assert trace_ir.root == output
+
+    del manifest["converter"]["version"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="bundle_sha256"):
         validate_trace_ir(output / "requests.jsonl", output / "texts")
 
 

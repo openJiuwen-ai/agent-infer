@@ -443,7 +443,8 @@ class PromptBuilder:
     ) -> SyntheticPrompt:
         """Fit the latest user suffix to the target, keeping all historical messages intact.
 
-        Prefix search shortens only the current source text at character boundaries.
+        Descending search keeps the longest source prefix that fits the target.
+        It checks character boundaries without assuming monotone token counts.
         Bounded suffix repair then attempts an exact full-template count. Every
         accepted candidate is measured; histories that cannot fit fail explicitly.
         """
@@ -469,44 +470,26 @@ class PromptBuilder:
             assert empty_ids is not None
             empty_count = len(empty_ids)
             history.append(empty_count)
-            if empty_count > target:
-                raise ValueError(
-                    f"Current-turn calibration unreachable for {node.source_key}: "
-                    f"frozen history with empty user needs {empty_count} tokens, target={target}; "
-                    "historical messages will not be trimmed"
-                )
-            candidate, count, kept = empty, empty_count, ""
-            # Use raw token counts only as a hint; verify the complete template.
-            low, high = 1, len(original) - 1
             original_content_ids = await self.tokenizer.text_token_ids(original)
-            keep_tokens = max(0, len(original_content_ids) - (initial_count - target))
-            hint = await self.tokenizer.detokenize_tokens(original_content_ids[:keep_tokens])
-            # A sliced multi-byte token can decode to replacement characters. Only
-            # accept a literal source prefix, otherwise search character boundaries.
-            if hint and original.startswith(hint) and len(hint) < len(original):
-                trial = self._replace_calibration_remainder(prompt, index, hint)
-                trial_count = await self.tokenizer.count(trial)
-                history.append(trial_count)
-                if trial_count <= target:
-                    candidate, count, kept = trial, trial_count, hint
-                    low = len(hint) + 1
-                else:
-                    high = len(hint) - 1
-                if trial_count == target:
-                    low = high + 1
-            # Token counts need not be monotone; every accepted prefix is measured,
-            # and bounded suffix repair handles any remaining undershoot.
-            while low <= high:
-                middle = (low + high) // 2
-                text = original[:middle]
+            # Counts can fall when a longer prefix changes tokenization or the
+            # chat template. Check every longer prefix before accepting a shorter
+            # one; neither a raw-token hint nor an over-budget empty user bounds
+            # the search. Character slices always preserve literal source text.
+            for length in range(len(original) - 1, -1, -1):
+                text = original[:length]
                 trial = self._replace_calibration_remainder(prompt, index, text)
-                trial_count = await self.tokenizer.count(trial)
+                trial_count = empty_count if length == 0 else await self.tokenizer.count(trial)
                 history.append(trial_count)
                 if trial_count <= target:
                     candidate, count, kept = trial, trial_count, text
-                    low = middle + 1
-                else:
-                    high = middle - 1
+                    break
+            else:
+                raise ValueError(
+                    f"Current-turn calibration unreachable for {node.source_key}: "
+                    f"no current-user prefix fits target={target}; "
+                    f"frozen history with empty user needs {empty_count} tokens; "
+                    "historical messages will not be trimmed"
+                )
         padding_base_count = count
         attempts = requested = 0
         if count < target:
