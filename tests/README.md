@@ -14,7 +14,7 @@ Unit tests for the `vllm serve MODEL --agentinfer` takeover in
 | ---- | ---------------- |
 | `test_bare_flag_pins_async_and_async_bridge` | Bare flag injects async scheduling, async bridge, middleware, and controller factory |
 | `test_explicit_async_choice_is_preserved_with_matching_bridge` | `--async-scheduling`/`--no-async-scheduling` are preserved and select the matching bridge |
-| `test_upstream_default_async_mode_uses_async_bridge_without_forcing` | Unset mode is pinned async so the bridge matches the engine |
+| `test_upstream_default_async_mode_uses_async_bridge_without_forcing` | Unset mode is pinned async so the agent-aware scheduler matches the engine |
 | `test_explicit_scheduler_cls_conflicts` | `--scheduler-cls` combined with `--agentinfer` is rejected |
 | `test_user_middleware_order_is_preserved_and_duplicates_removed` | User middleware runs first; duplicates are removed |
 | `test_user_additional_config_merges_with_user_priority` | `--additional-config` deep-merges with user priority |
@@ -32,7 +32,7 @@ GPU e2e tests for `vllm serve MODEL --agentinfer` through the installed
 
 | Test | What it verifies |
 | ---- | ---------------- |
-| `test_injection_banner_logged` | Server logs carry the `[agentinfer] --agentinfer injected:` banner with the async bridge and lifecycle middleware |
+| `test_injection_banner_logged` | Server logs carry the `[agentinfer] --agentinfer injected:` banner with the async agent-aware scheduler and lifecycle middleware |
 | `test_lifecycle_socket_bound` | The configured `AGENTCACHE_VLLM_LIFECYCLE_SOCKET` is bound while serving |
 | `test_completion` | A `/v1/completions` request round-trips through the serving path |
 | `test_chat_completion` | A `/v1/chat/completions` request round-trips through the serving path |

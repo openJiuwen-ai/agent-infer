@@ -8,7 +8,7 @@ a versioned section.
 ### Added
 
 - Added the `vllm serve MODEL --agentinfer` single-flag serving path: the delegating `vllm` console script takes over
-  serve parsing, injects the scheduler bridge (async or sync, following `--async-scheduling`/`--no-async-scheduling`),
+  serve parsing, injects the agent-aware scheduler (async or sync, following `--async-scheduling`/`--no-async-scheduling`),
   the identity and lifecycle middleware, and the Progress-TTL controller factory, then dispatches upstream vLLM. The
   lifecycle socket defaults when unset and conflicting `--scheduler-cls` or custom `agentcache.controller_factory`
   options exit with code 2. Explicit long-form commands remain supported. Verified end-to-end on vLLM 0.29 with a
@@ -21,7 +21,7 @@ a versioned section.
 
 - Reorganized the root README into project overview, core features, related documentation, requirements, installation,
  Quick Start, and license sections.
-- Refreshed release-package installation and made the explicit scheduler bridge, middleware, and Progress-TTL
+- Refreshed release-package installation and made the explicit agent-aware scheduler, middleware, and Progress-TTL
  controller the primary Quick Start path, based on PR #62.
 
 ## 0.1.0 — Initial Release

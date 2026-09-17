@@ -1,6 +1,6 @@
 # 快速开始
 
-本教程将安装 AgentInfer，并使用异步调度桥、API 中间件和内嵌 Progress-TTL 控制器启动 vLLM。请在
+本教程将安装 AgentInfer，并使用异步 Agent 感知调度器、API 中间件和内嵌 Progress-TTL 控制器启动 vLLM。请在
 Linux 或 WSL 2 中运行，并准备能够运行所选模型的 CUDA GPU。
 
 ## 1. 准备 vLLM 环境
@@ -49,8 +49,8 @@ vllm serve meta-llama/Llama-3.1-8B-Instruct --agentinfer
 在源码仓中，[`examples/serve-progress-ttl.sh`](../../../examples/serve-progress-ttl.sh) 会运行相同服务配置。
 需要更换默认模型时，设置 `MODEL=<model-name>`。
 
-模型名称仅作示例，可替换为 vLLM 支持的其他模型。调度桥跟随调度模式：异步调度使用
-`AgentCacheAsyncSchedulerBridge`，同步调度使用 `AgentCacheSyncSchedulerBridge`；异步调度被禁用时，异步桥会
+模型名称仅作示例，可替换为 vLLM 支持的其他模型。Agent 感知调度器跟随调度模式：异步调度使用
+`AgentCacheAsyncSchedulerBridge`，同步调度使用 `AgentCacheSyncSchedulerBridge`；异步调度被禁用时，异步版本会
 拒绝该配置。
 
 ## 4. 验证服务

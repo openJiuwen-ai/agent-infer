@@ -2,9 +2,9 @@
 
 本文记录 AgentInfer 与 vLLM 0.23.0 的公开集成接口。vLLM 自身 API 的完整参数以对应版本的 vLLM 文档为准。
 
-当前服务路径使用显式调度桥、API 中间件和内嵌 Progress-TTL 控制器。
+当前服务路径使用显式的 Agent 感知调度器、API 中间件和内嵌 Progress-TTL 控制器。
 
-## 调度桥
+## Agent 感知调度器
 
 导入模块：
 `agentinfer.agentcache.core.scheduler`
@@ -29,7 +29,7 @@ class AgentCacheSyncSchedulerBridge(vllm.v1.core.sched.scheduler.Scheduler):
     def __init__(self, *args, **kwargs) -> None: ...
 ```
 
-同步调度回退桥。vLLM 必须设置 `async_scheduling=false`，否则构造函数抛出 `ValueError`。控制器配置与异步桥
+同步回退版本。vLLM 必须设置 `async_scheduling=false`，否则构造函数抛出 `ValueError`。控制器配置与异步版本
 相同。
 
 ## API 中间件
@@ -70,7 +70,7 @@ def build_progress_ttl_controller(
 ) -> ProgramScheduler[Request, ProgressTTLGlobalFactors, ProgressTTLProgramFactors]: ...
 ```
 
-构建调度桥使用的内嵌 Progress-TTL 调度器。`settings` 是 `additional_config.agentcache` 映射，策略参数从
+构建 Agent 感知调度器使用的内嵌 Progress-TTL 调度器。`settings` 是 `additional_config.agentcache` 映射，策略参数从
 嵌套的 `progress_ttl` 对象读取。配置固定、已移除或未知的 Progress-TTL 字段时抛出 `ValueError`。
 
 ## 兼容接口

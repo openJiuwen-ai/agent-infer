@@ -45,9 +45,8 @@ Start the AgentInfer serving path with a single flag:
 vllm serve meta-llama/Llama-3.1-8B-Instruct --agentinfer
 ```
 
-The flag takes over serve parsing, injects async scheduling, the async scheduler bridge, both API middleware
-components, and the Progress-TTL controller factory, then dispatches upstream vLLM normally. The scheduler bridge
-follows the scheduling mode: pass `--no-async-scheduling` to serve synchronously with `AgentCacheSyncSchedulerBridge`.
+The flag takes over serve parsing, then dispatches upstream vLLM normally. The agent-aware scheduler follows the
+scheduling mode: pass `--no-async-scheduling` to serve synchronously with `AgentCacheSyncSchedulerBridge`.
 When `AGENTCACHE_VLLM_LIFECYCLE_SOCKET` is unset it defaults to `/tmp/agentinfer-vllm-lifecycle.sock`; export a
 distinct socket per server instance on one host. The shim prints an `[agentinfer]` line to stderr showing the injected
 options, and `--agentinfer` cannot be combined with `--scheduler-cls` or a custom `agentcache.controller_factory`.
@@ -116,8 +115,8 @@ The policy rejects removed legacy keys instead of silently ignoring them. Replac
 AgentInfer installs a delegating `vllm` console script:
 
 - Explicit `vllm bench serve --agentinfer` commands enter AgentBench.
-- `vllm serve MODEL --agentinfer` activates the AgentInfer serving path described above; the scheduler bridge follows
-  the explicit `--async-scheduling`/`--no-async-scheduling` choice.
+- `vllm serve MODEL --agentinfer` activates the AgentInfer serving path described above; the agent-aware scheduler
+  follows the explicit `--async-scheduling`/`--no-async-scheduling` choice.
 - Other commands are delegated to upstream vLLM with AgentInfer's default scheduler unless `--scheduler-cls` is set.
 - An explicit `--scheduler-cls` is preserved in delegated commands, as in the long-form serving command above.
 

@@ -3,9 +3,9 @@
 This document describes AgentInfer's public integration surface for vLLM 0.23.0. Refer to the matching vLLM
 documentation for the full upstream API.
 
-The current serving path uses an explicit scheduler bridge, API middleware, and the embedded Progress-TTL controller.
+The current serving path uses an explicit agent-aware scheduler, API middleware, and the embedded Progress-TTL controller.
 
-## Scheduler Bridges
+## Agent-Aware Schedulers
 
 Import module:
 `agentinfer.agentcache.core.scheduler`
@@ -32,8 +32,8 @@ class AgentCacheSyncSchedulerBridge(vllm.v1.core.sched.scheduler.Scheduler):
     def __init__(self, *args, **kwargs) -> None: ...
 ```
 
-The synchronous fallback bridge. vLLM must set `async_scheduling=false`; otherwise the constructor raises
-`ValueError`. Controller configuration is the same as for the async bridge.
+The synchronous fallback variant. vLLM must set `async_scheduling=false`; otherwise the constructor raises
+`ValueError`. Controller configuration is the same as for the async variant.
 
 ## API Middleware
 
@@ -74,7 +74,7 @@ def build_progress_ttl_controller(
 ) -> ProgramScheduler[Request, ProgressTTLGlobalFactors, ProgressTTLProgramFactors]: ...
 ```
 
-Builds the embedded Progress-TTL scheduler used by the bridges. `settings` is the
+Builds the embedded Progress-TTL scheduler used by the agent-aware schedulers. `settings` is the
 `additional_config.agentcache` mapping; policy values are read from its nested `progress_ttl` object. Fixed, removed,
 or unknown Progress-TTL fields raise `ValueError`.
 

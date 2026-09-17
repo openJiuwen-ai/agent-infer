@@ -1,6 +1,6 @@
 # Quick Start
 
-This tutorial installs AgentInfer and starts vLLM with the async scheduler bridge, API middleware, and embedded
+This tutorial installs AgentInfer and starts vLLM with the async agent-aware scheduler, API middleware, and embedded
 Progress-TTL controller. Run it on Linux or WSL 2 with a CUDA GPU that supports the selected model.
 
 ## 1. Prepare the vLLM Environment
@@ -50,9 +50,9 @@ synchronous deployment, add `--no-async-scheduling` and the shim selects `AgentC
 From a source checkout, [`examples/serve-progress-ttl.sh`](../../../examples/serve-progress-ttl.sh) runs the same
 serving configuration. Override its default model with `MODEL=<model-name>` when needed.
 
-The model is illustrative and can be replaced with another model supported by vLLM. The scheduler bridge follows the
-scheduling mode: `AgentCacheAsyncSchedulerBridge` for async scheduling, `AgentCacheSyncSchedulerBridge` for sync
-scheduling; the async bridge rejects configurations with async scheduling disabled.
+The model is illustrative and can be replaced with another model supported by vLLM. The agent-aware scheduler follows
+the scheduling mode: `AgentCacheAsyncSchedulerBridge` for async scheduling, `AgentCacheSyncSchedulerBridge` for sync
+scheduling; the async variant rejects configurations with async scheduling disabled.
 
 ## 4. Verify the Service
 

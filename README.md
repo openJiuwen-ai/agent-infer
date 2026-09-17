@@ -6,7 +6,7 @@ AgentInfer manages caches and schedules agent workflow requests in or in front o
 
 ## Core Features
 
-- Provides async and sync scheduler bridges for explicit AgentInfer integration with vLLM.
+- Provides async and sync agent-aware schedulers for explicit AgentInfer integration with vLLM.
 - Transports agent identity and lifecycle observations through dedicated API middleware.
 - Retains, pauses, and resumes agent programs with the embedded Progress-TTL controller.
 - Supports deployment as an in-engine scheduler or as a request router in front of serving engines.

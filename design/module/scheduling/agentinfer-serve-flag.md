@@ -108,7 +108,7 @@ sequenceDiagram
    options natively.
 4. **Namespace injection.** The profile's values are injected into the parsed namespace using the explicit-key rules
    in the reference section below. The scheduling mode is never forced: the user's explicit
-   `--async-scheduling`/`--no-async-scheduling` choice is preserved, and the scheduler bridge follows that choice —
+   `--async-scheduling`/`--no-async-scheduling` choice is preserved, and the agent-aware scheduler follows that choice —
    `AgentCacheAsyncSchedulerBridge` for async scheduling, `AgentCacheSyncSchedulerBridge` for sync scheduling.
    Middleware is appended after user entries, and the profile's `agentcache` config is deep-merged into any user
    `additional_config`. User values are never silently overwritten.
@@ -276,7 +276,7 @@ the flag; the documented socket-ownership rules in the how-to guide apply unchan
 - **CLI-INV-006:** Bench routing precedes serve takeover; `vllm bench serve --agentinfer` never triggers serve takeover.
 - **CLI-INV-007:** Explicit user values are detected through parser-level explicit-key tracking, never by guessing from
   defaults.
-- **CLI-INV-008:** The injected scheduler bridge always matches the effective scheduling mode; an explicit
+- **CLI-INV-008:** The injected agent-aware scheduler always matches the effective scheduling mode; an explicit
   `--async-scheduling`/`--no-async-scheduling` choice is preserved, and only an unset mode receives the documented
   async default.
 

@@ -21,7 +21,7 @@ AgentCacheAsyncSchedulerBridge <------------> Progress-TTL 控制器
 vLLM 原生 waiting / running / KV 状态
 ```
 
-当前服务路径显式组合调度桥、身份中间件、生命周期中间件和 Progress-TTL 控制器。控制器决定已识别的智能体
+当前服务路径显式组合 Agent 感知调度器、身份中间件、生命周期中间件和 Progress-TTL 控制器。控制器决定已识别的智能体
 请求何时进入 vLLM 原生等待队列。
 
 ## 显式服务路径
@@ -36,9 +36,9 @@ vLLM 原生 waiting / running / KV 状态
 - `build_progress_ttl_controller` 根据 `additional_config.agentcache` 构建内嵌调度策略。
 
 生命周期中间件要求设置 `AGENTCACHE_VLLM_LIFECYCLE_SOCKET`。除非
-`additional_config.agentcache.lifecycle_socket_path` 显式覆盖，调度桥会从环境读取同一路径。
+`additional_config.agentcache.lifecycle_socket_path` 显式覆盖，Agent 感知调度器会从环境读取同一路径。
 
-## Progress-TTL 调度桥
+## Progress-TTL Agent 感知调度器
 
 `AgentCacheAsyncSchedulerBridge` 和 `AgentCacheSyncSchedulerBridge` 通过组合辅助对象连接 vLLM 与
 `EmbeddedSchedulerController`。控制器负责：
@@ -54,7 +54,7 @@ vLLM 继续拥有原生等待和运行集合、请求完成语义、模型执行
 
 ## 生命周期边界
 
-API 中间件将响应完成后解析出的工作流生命周期写入 Unix socket。每个调度桥在准入或策略周期前排空本地
+API 中间件将响应完成后解析出的工作流生命周期写入 Unix socket。每个 Agent 感知调度器在准入或策略周期前排空本地
 receiver，并将事件交给控制器。socket 可以通过 `additional_config.agentcache.lifecycle_socket_path` 或
 `AGENTCACHE_VLLM_LIFECYCLE_SOCKET` 配置。
 
@@ -67,7 +67,7 @@ AgentInfer 会安装一个 `vllm` 控制台脚本。显式的 `vllm bench serve 
 选择旧版 `AgentAwareScheduler`，显式调度器则保持不变。
 
 `AgentAwareScheduler`、`AgentAwareQueue` 和 `agentinfer.LLM` 仍作为兼容 FCFS 的扩展接口保留，但不会启用
-Progress-TTL 控制器。当前部署应显式配置相应调度桥、中间件和控制器工厂。
+Progress-TTL 控制器。当前部署应显式配置相应 Agent 感知调度器、中间件和控制器工厂。
 
 ## 基准子系统
 

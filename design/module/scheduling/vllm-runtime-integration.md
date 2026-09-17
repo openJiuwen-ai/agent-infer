@@ -122,7 +122,7 @@ flowchart TB
     IM[AgentInfer identity middleware]
     LM[AgentInfer lifecycle middleware]
     EC[vLLM EngineCore DP rank]
-    BR[AgentInfer scheduler bridge]
+    BR[AgentInfer agent-aware scheduler]
     PS[Program state machine and Progress-TTL]
     NS[vLLM native Scheduler]
 

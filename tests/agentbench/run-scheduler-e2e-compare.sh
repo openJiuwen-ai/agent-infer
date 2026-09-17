@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cold upstream async scheduler -> cold AgentInfer scheduler bridge -> compare.
+# Cold upstream async scheduler -> cold AgentInfer agent-aware scheduler -> compare.
 set -euo pipefail
 
 REPO=${REPO:?set REPO to the AgentInfer checkout}

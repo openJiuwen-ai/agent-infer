@@ -13,13 +13,13 @@ allowed-tools:
 # ac-integrate
 
 Wire AgentInfer AgentCache into a vLLM serving deployment using the current
-scheduler bridge and lifecycle middleware, version-check the engine, and
+agent-aware scheduler and lifecycle middleware, version-check the engine, and
 validate cache behavior from captured evidence.
 
 ## WHEN TO INVOKE
 
 - The user asks to "integrate AgentInfer with vLLM",
-  "plug AgentCache into my deployment", or "wire the scheduler bridge"
+  "plug AgentCache into my deployment", or "wire the agent-aware scheduler"
   for a serving engine.
 - A new engine integration is being added to the project's scripts and configs.
 
