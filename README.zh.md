@@ -50,8 +50,7 @@ python -m pip install agentinfer-0.1.0-py3-none-any.whl
 
 ## Quick Start
 
-使用单一参数启动 AgentInfer 服务路径。该参数会启用异步调度、AgentCache 异步调度桥、身份和生命周期中间件
-以及内嵌 Progress-TTL 控制器：
+使用单一参数启动 AgentInfer 服务路径：
 
 ```bash
 vllm serve meta-llama/Llama-3.1-8B-Instruct --agentinfer

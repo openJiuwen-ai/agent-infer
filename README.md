@@ -50,8 +50,7 @@ python -m pip install agentinfer-0.1.0-py3-none-any.whl
 
 ## Quick Start
 
-Start the AgentInfer serving path with a single flag. The flag enables async scheduling, the AgentCache
-async scheduler bridge, identity and lifecycle middleware, and the embedded Progress-TTL controller:
+Start the AgentInfer serving path with a single flag:
 
 ```bash
 vllm serve meta-llama/Llama-3.1-8B-Instruct --agentinfer
