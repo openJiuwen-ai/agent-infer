@@ -45,7 +45,8 @@ vllm serve meta-llama/Llama-3.1-8B-Instruct --agentinfer
 
 该参数接管 serve 解析，然后正常派发上游 vLLM。Agent 感知调度器跟随调度模式：传入 `--no-async-scheduling` 即以
 `AgentCacheSyncSchedulerBridge` 进行同步服务。未设置 `AGENTCACHE_VLLM_LIFECYCLE_SOCKET` 时默认为
-`/tmp/agentinfer-vllm-lifecycle.sock`；同一主机上的
+`/tmp/agentinfer-vllm-lifecycle.sock`；若 `--additional-config` 给出了 `agentcache.lifecycle_socket_path` 则以该值为准
+（两者冲突时会报错）；同一主机上的
 多个服务实例需分别导出不同的 socket。shim 会在 stderr 打印一条 `[agentinfer]` 行展示注入的参数；
 `--agentinfer` 不能与 `--scheduler-cls` 或自定义 `agentcache.controller_factory` 组合使用。
 

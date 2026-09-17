@@ -47,8 +47,9 @@ vllm serve meta-llama/Llama-3.1-8B-Instruct --agentinfer
 
 The flag takes over serve parsing, then dispatches upstream vLLM normally. The agent-aware scheduler follows the
 scheduling mode: pass `--no-async-scheduling` to serve synchronously with `AgentCacheSyncSchedulerBridge`.
-When `AGENTCACHE_VLLM_LIFECYCLE_SOCKET` is unset it defaults to `/tmp/agentinfer-vllm-lifecycle.sock`; export a
-distinct socket per server instance on one host. The shim prints an `[agentinfer]` line to stderr showing the injected
+When `AGENTCACHE_VLLM_LIFECYCLE_SOCKET` is unset it defaults to `/tmp/agentinfer-vllm-lifecycle.sock`, or to the
+`agentcache.lifecycle_socket_path` from `--additional-config` when one is given (conflicting values are rejected);
+export a distinct socket per server instance on one host. The shim prints an `[agentinfer]` line to stderr showing the injected
 options, and `--agentinfer` cannot be combined with `--scheduler-cls` or a custom `agentcache.controller_factory`.
 
 Append standard vLLM options such as tensor parallelism, port selection, model-specific tool parsing, and Prefix Cache

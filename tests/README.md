@@ -19,11 +19,16 @@ Unit tests for the `vllm serve MODEL --agentinfer` takeover in
 | `test_user_middleware_order_is_preserved_and_duplicates_removed` | User middleware runs first; duplicates are removed |
 | `test_user_additional_config_merges_with_user_priority` | `--additional-config` deep-merges with user priority |
 | `test_conflicting_controller_factory_is_rejected` | A different `agentcache.controller_factory` is rejected |
+| `test_null_controller_factory_is_rejected` | A JSON `null` `agentcache.controller_factory` is rejected instead of silently disabling the controller |
 | `test_identical_controller_factory_is_accepted` | The same `controller_factory` merges cleanly |
 | `test_invalid_additional_config_json_is_rejected` | Invalid or non-object JSON is rejected |
 | `test_run_agentinfer_serve_dispatches_enriched_namespace` | The enriched namespace reaches upstream serve with socket defaulting and the stderr transparency line |
 | `test_run_agentinfer_serve_preserves_existing_socket` | An existing `AGENTCACHE_VLLM_LIFECYCLE_SOCKET` is preserved |
 | `test_run_agentinfer_serve_requires_the_flag` | Takeover without `--agentinfer` is rejected |
+| `test_run_agentinfer_serve_applies_upstream_cli_env_setup` | The takeover invokes the upstream `cli_env_setup()` before parsing |
+| `test_lifecycle_socket_env_defaults_to_config_path` | An unset socket env defaults to `agentcache.lifecycle_socket_path` from `--additional-config` |
+| `test_lifecycle_socket_env_and_config_conflict_is_rejected` | An env socket conflicting with a config socket is rejected |
+| `test_transparency_line_omits_user_config_secrets` | The transparency line reports only injected `agentcache` keys, never arbitrary user config |
 
 ### `tests/agentcache/entrypoints/test_serve_flag_e2e.py`
 

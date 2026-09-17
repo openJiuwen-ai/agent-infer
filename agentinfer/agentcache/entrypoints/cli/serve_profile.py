@@ -144,8 +144,8 @@ def _merge_additional_config(current: Any, profile: ServeProfile) -> dict[str, A
     user_config = _coerce_additional_config(current)
     user_agentcache = user_config.get("agentcache")
     if isinstance(user_agentcache, dict):
-        user_factory = user_agentcache.get("controller_factory")
-        if user_factory is not None and user_factory != profile.agentcache_config.get("controller_factory"):
+        profile_factory = profile.agentcache_config.get("controller_factory")
+        if "controller_factory" in user_agentcache and user_agentcache["controller_factory"] != profile_factory:
             raise AgentInferServeError(
                 "--agentinfer cannot be combined with a custom agentcache.controller_factory; "
                 "use the explicit long-form command documented in docs/en/how-to/integrate-vllm.md."
@@ -208,7 +208,9 @@ def inject_profile(
     return injected
 
 
-def _print_transparency(injected: dict[str, Any], socket_defaulted: bool) -> None:
+def _print_transparency(
+    injected: dict[str, Any], socket_defaulted: bool, socket_value: str, socket_from_config: bool
+) -> None:
     parts = []
     if ASYNC_SCHEDULING_DEST in injected:
         parts.append("--async-scheduling")
@@ -217,13 +219,14 @@ def _print_transparency(injected: dict[str, Any], socket_defaulted: bool) -> Non
     for middleware in injected.get(MIDDLEWARE_DEST, []):
         parts.append(f"--middleware {middleware}")
     if ADDITIONAL_CONFIG_DEST in injected:
-        parts.append(f"--additional-config {json.dumps(injected[ADDITIONAL_CONFIG_DEST], sort_keys=True)}")
+        merged = injected[ADDITIONAL_CONFIG_DEST]
+        agentcache = merged.get("agentcache", {}) if isinstance(merged, dict) else {}
+        shown = {key: agentcache[key] for key in ("controller_factory", "lifecycle_socket_path") if key in agentcache}
+        parts.append(f"--additional-config.agentcache {json.dumps(shown, sort_keys=True)}")
     print(f"[agentinfer] --agentinfer injected: {' '.join(parts)}", file=sys.stderr)
     if socket_defaulted:
-        print(
-            f"[agentinfer] defaulting {LIFECYCLE_SOCKET_ENV}={DEFAULT_LIFECYCLE_SOCKET}",
-            file=sys.stderr,
-        )
+        source = " (from --additional-config agentcache.lifecycle_socket_path)" if socket_from_config else ""
+        print(f"[agentinfer] defaulting {LIFECYCLE_SOCKET_ENV}={socket_value}{source}", file=sys.stderr)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -254,6 +257,47 @@ def _import_make_arg_parser():
     return make_arg_parser
 
 
+def _setup_cli_env() -> None:
+    """Apply the upstream CLI's environment defaults, as the delegating entrypoint would."""
+
+    try:
+        from vllm.entrypoints.utils import cli_env_setup
+    except ImportError:
+        return
+    cli_env_setup()
+
+
+def _apply_lifecycle_socket_env(namespace: argparse.Namespace) -> tuple[bool, str, bool]:
+    """Export the lifecycle socket env the middleware needs, consistent with any config override.
+
+    Returns ``(defaulted, value, from_config)``: ``defaulted`` is False when the environment variable
+    was already set. The scheduler reads ``agentcache.lifecycle_socket_path`` first and the
+    environment second, while the middleware reads only the environment, so the two must agree.
+    """
+
+    config_socket: str | None = None
+    config = getattr(namespace, ADDITIONAL_CONFIG_DEST, None)
+    if isinstance(config, dict):
+        agentcache = config.get("agentcache")
+        if isinstance(agentcache, dict):
+            raw = agentcache.get("lifecycle_socket_path")
+            if raw is not None:
+                if not isinstance(raw, str) or not raw:
+                    raise AgentInferServeError("agentcache.lifecycle_socket_path must be a non-empty string")
+                config_socket = raw
+    configured = os.environ.get(LIFECYCLE_SOCKET_ENV)
+    if configured:
+        if config_socket is not None and config_socket != configured:
+            raise AgentInferServeError(
+                f"{LIFECYCLE_SOCKET_ENV}={configured} conflicts with --additional-config "
+                f"agentcache.lifecycle_socket_path={config_socket}; keep exactly one lifecycle socket path."
+            )
+        return False, configured, False
+    value = config_socket if config_socket is not None else DEFAULT_LIFECYCLE_SOCKET
+    os.environ.setdefault(LIFECYCLE_SOCKET_ENV, value)
+    return True, value, config_socket is not None
+
+
 def run_agentinfer_serve(serve_argv: list[str]) -> int:
     """Parse, inject, and serve an ``--agentinfer`` takeover command.
 
@@ -261,6 +305,7 @@ def run_agentinfer_serve(serve_argv: list[str]) -> int:
     :class:`AgentInferServeError` for usage conflicts; the caller maps it to exit code 2.
     """
 
+    _setup_cli_env()
     make_arg_parser = _import_make_arg_parser()
 
     parser = make_arg_parser(_build_parser())
@@ -270,9 +315,7 @@ def run_agentinfer_serve(serve_argv: list[str]) -> int:
         raise AgentInferServeError("--agentinfer is required for the AgentInfer serve takeover")
 
     injected = inject_profile(namespace, explicit_dests)
-    socket_defaulted = LIFECYCLE_SOCKET_ENV not in os.environ
-    if socket_defaulted:
-        os.environ.setdefault(LIFECYCLE_SOCKET_ENV, DEFAULT_LIFECYCLE_SOCKET)
-    _print_transparency(injected, socket_defaulted)
+    socket_defaulted, socket_value, socket_from_config = _apply_lifecycle_socket_env(namespace)
+    _print_transparency(injected, socket_defaulted, socket_value, socket_from_config)
     _dispatch_serve(namespace)
     return 0

@@ -113,10 +113,16 @@ sequenceDiagram
    Middleware is appended after user entries, and the profile's `agentcache` config is deep-merged into any user
    `additional_config`. User values are never silently overwritten.
 5. **Validation and environment.** Upstream `validate_parsed_serve_args` runs on the enriched namespace, exactly as the
-   upstream CLI would validate it. If `AGENTCACHE_VLLM_LIFECYCLE_SOCKET` is unset, the shim sets it to
-   `/tmp/agentinfer-vllm-lifecycle.sock`, because the lifecycle middleware refuses to start without it.
+    upstream CLI would validate it. Before parsing, the takeover applies the upstream CLI environment defaults via
+    `cli_env_setup()` (for example `VLLM_WORKER_MULTIPROC_METHOD=spawn`), because it replaces the upstream CLI
+    entrypoint. If `AGENTCACHE_VLLM_LIFECYCLE_SOCKET` is unset, the shim sets it to
+    `/tmp/agentinfer-vllm-lifecycle.sock`, or to the user's `agentcache.lifecycle_socket_path` when
+    `--additional-config` supplies one — the scheduler reads the config key first while the middleware reads only the
+    environment, so the two must agree. An environment value that conflicts with a config value is rejected.
 6. **Transparency.** The shim prints one `[agentinfer]`-prefixed line to stderr with the profile and the injected
-   values, so deployment logs always contain the reproducible effective configuration.
+    values, so deployment logs always contain the reproducible effective configuration. The line reports only the
+    injected `agentcache` keys (`controller_factory`, `lifecycle_socket_path`); arbitrary user `--additional-config`
+    values are never serialized because they may contain secrets.
 7. **Dispatch.** The enriched namespace is passed to the same upstream serve entrypoint the upstream CLI itself
    dispatches for `serve`. The AgentInfer flags are shim arguments and are not forwarded.
 
@@ -279,6 +285,15 @@ the flag; the documented socket-ownership rules in the how-to guide apply unchan
 - **CLI-INV-008:** The injected agent-aware scheduler always matches the effective scheduling mode; an explicit
   `--async-scheduling`/`--no-async-scheduling` choice is preserved, and only an unset mode receives the documented
   async default.
+- **CLI-INV-009:** A present `agentcache.controller_factory` that differs from the profile value — including JSON
+  `null` — is rejected instead of silently disabling the Progress-TTL controller.
+- **CLI-INV-010:** The lifecycle socket environment exported for the middleware always equals the path the scheduler
+  will use: a config `agentcache.lifecycle_socket_path` wins the default, and an environment value conflicting with
+  the config value is rejected.
+- **CLI-INV-011:** The transparency line never serializes arbitrary user `--additional-config` values; it reports only
+  the injected `agentcache` keys.
+- **CLI-INV-012:** The takeover applies the upstream CLI environment setup (`cli_env_setup()`) before parsing, so a
+  takeover launch matches the environment behavior of the upstream `vllm` CLI it replaces.
 
 ## Planned changes
 

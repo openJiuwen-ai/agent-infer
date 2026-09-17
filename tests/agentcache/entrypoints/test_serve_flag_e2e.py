@@ -95,7 +95,6 @@ def server(tmp_path_factory: pytest.TempPathFactory):
 
     vllm_bin = _vllm_bin()
     env = os.environ.copy()
-    env["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
     env.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
     env["AGENTCACHE_VLLM_LIFECYCLE_SOCKET"] = str(lifecycle_socket)
 

@@ -36,7 +36,7 @@ def _parse(argv: list[str]) -> tuple[argparse.Namespace, set[str]]:
 
 
 def _install_stub_vllm(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    """Install a stub vLLM surface exposing make_arg_parser and ServeSubcommand."""
+    """Install a stub vLLM surface exposing make_arg_parser, cli_env_setup, and ServeSubcommand."""
 
     recorded: dict[str, Any] = {}
 
@@ -54,6 +54,9 @@ def _install_stub_vllm(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         )
         return parser
 
+    def cli_env_setup() -> None:
+        recorded["cli_env_setup"] = True
+
     class ServeSubcommand:
         def validate(self, args: argparse.Namespace) -> None:
             recorded["validated"] = True
@@ -63,6 +66,8 @@ def _install_stub_vllm(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     cli_args = types.ModuleType("vllm.entrypoints.openai.cli_args")
     cli_args.make_arg_parser = make_arg_parser
+    entrypoints_utils = types.ModuleType("vllm.entrypoints.utils")
+    entrypoints_utils.cli_env_setup = cli_env_setup
     serve_mod = types.ModuleType("vllm.entrypoints.cli.serve")
     serve_mod.ServeSubcommand = ServeSubcommand
     for name, module in {
@@ -70,6 +75,7 @@ def _install_stub_vllm(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "vllm.entrypoints": types.ModuleType("vllm.entrypoints"),
         "vllm.entrypoints.openai": types.ModuleType("vllm.entrypoints.openai"),
         "vllm.entrypoints.openai.cli_args": cli_args,
+        "vllm.entrypoints.utils": entrypoints_utils,
         "vllm.entrypoints.cli": types.ModuleType("vllm.entrypoints.cli"),
         "vllm.entrypoints.cli.serve": serve_mod,
     }.items():
@@ -160,6 +166,13 @@ def test_conflicting_controller_factory_is_rejected() -> None:
         serve_profile.inject_profile(namespace, explicit)
 
 
+def test_null_controller_factory_is_rejected() -> None:
+    user_config = {"agentcache": {"controller_factory": None}}
+    namespace, explicit = _parse(["MODEL", "--agentinfer", "--additional-config", json.dumps(user_config)])
+    with pytest.raises(serve_profile.AgentInferServeError, match="controller_factory"):
+        serve_profile.inject_profile(namespace, explicit)
+
+
 def test_identical_controller_factory_is_accepted() -> None:
     user_config = {"agentcache": {"controller_factory": serve_profile.CONTROLLER_FACTORY}}
     namespace, explicit = _parse(["MODEL", "--agentinfer", "--additional-config", json.dumps(user_config)])
@@ -214,3 +227,54 @@ def test_run_agentinfer_serve_requires_the_flag(monkeypatch: pytest.MonkeyPatch)
     _install_stub_vllm(monkeypatch)
     with pytest.raises(serve_profile.AgentInferServeError, match="--agentinfer"):
         serve_profile.run_agentinfer_serve(["MODEL"])
+
+
+def test_run_agentinfer_serve_applies_upstream_cli_env_setup(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    recorded = _install_stub_vllm(monkeypatch)
+    monkeypatch.delenv(serve_profile.LIFECYCLE_SOCKET_ENV, raising=False)
+
+    serve_profile.run_agentinfer_serve(["MODEL", "--agentinfer"])
+
+    assert recorded["cli_env_setup"] is True
+
+
+def test_lifecycle_socket_env_defaults_to_config_path(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _install_stub_vllm(monkeypatch)
+    monkeypatch.delenv(serve_profile.LIFECYCLE_SOCKET_ENV, raising=False)
+    config_path = "/tmp/config-driven.sock"
+    user_config = {"agentcache": {"lifecycle_socket_path": config_path}}
+
+    serve_profile.run_agentinfer_serve(["MODEL", "--agentinfer", "--additional-config", json.dumps(user_config)])
+
+    assert os.environ[serve_profile.LIFECYCLE_SOCKET_ENV] == config_path
+    err = capsys.readouterr().err
+    assert f"defaulting {serve_profile.LIFECYCLE_SOCKET_ENV}={config_path}" in err
+    assert "from --additional-config" in err
+
+
+def test_lifecycle_socket_env_and_config_conflict_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_stub_vllm(monkeypatch)
+    monkeypatch.setenv(serve_profile.LIFECYCLE_SOCKET_ENV, "/tmp/env.sock")
+    user_config = {"agentcache": {"lifecycle_socket_path": "/tmp/config.sock"}}
+
+    with pytest.raises(serve_profile.AgentInferServeError, match="lifecycle socket"):
+        serve_profile.run_agentinfer_serve(["MODEL", "--agentinfer", "--additional-config", json.dumps(user_config)])
+
+
+def test_transparency_line_omits_user_config_secrets(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _install_stub_vllm(monkeypatch)
+    monkeypatch.delenv(serve_profile.LIFECYCLE_SOCKET_ENV, raising=False)
+    user_config = {"secret_backend": {"api_token": "sk-super-secret"}}
+
+    serve_profile.run_agentinfer_serve(["MODEL", "--agentinfer", "--additional-config", json.dumps(user_config)])
+
+    err = capsys.readouterr().err
+    assert "sk-super-secret" not in err
+    assert "secret_backend" not in err
+    assert serve_profile.CONTROLLER_FACTORY in err
