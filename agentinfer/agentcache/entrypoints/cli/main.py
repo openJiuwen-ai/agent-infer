@@ -6,8 +6,6 @@
 import sys
 from pathlib import Path
 
-AGENTINFER_FLAG = "--agentinfer"
-
 
 def _is_bench_delegation(argv: list[str]) -> bool:
     """Return whether argv requests the explicit AgentInfer benchmark path."""
@@ -28,7 +26,7 @@ def _serve_takeover_args(argv: list[str]) -> list[str] | None:
     if not rest or rest[0] != "serve":
         return None
     serve_args = rest[1:]
-    if any(arg == AGENTINFER_FLAG or arg.startswith(AGENTINFER_FLAG + "=") for arg in serve_args):
+    if any(arg == "--agentinfer" or arg.startswith("--agentinfer=") for arg in serve_args):
         return serve_args
     return None
 

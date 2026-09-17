@@ -50,8 +50,8 @@ python -m pip install agentinfer-0.1.0-py3-none-any.whl
 
 ## Quick Start
 
-使用单一参数启动 AgentInfer 服务路径（异步调度、AgentCache 异步调度桥、身份和生命周期中间件以及内嵌
-Progress-TTL 控制器）：
+使用单一参数启动 AgentInfer 服务路径。该参数会启用异步调度、AgentCache 异步调度桥、身份和生命周期中间件
+以及内嵌 Progress-TTL 控制器：
 
 ```bash
 vllm serve meta-llama/Llama-3.1-8B-Instruct --agentinfer
@@ -61,24 +61,9 @@ vllm serve meta-llama/Llama-3.1-8B-Instruct --agentinfer
 `/tmp/agentinfer-vllm-lifecycle.sock`；同一主机上的多个服务实例需分别导出不同的 socket。
 仓库中的等效示例位于 [`examples/serve-progress-ttl.sh`](examples/serve-progress-ttl.sh)。
 
-显式长格式命令仍然受支持：
-
-```bash
-export AGENTCACHE_VLLM_LIFECYCLE_SOCKET=/tmp/agentinfer-vllm-lifecycle.sock
-
-vllm serve meta-llama/Llama-3.1-8B-Instruct \
- --async-scheduling \
- --scheduler-cls agentinfer.agentcache.core.scheduler.AgentCacheAsyncSchedulerBridge \
- --middleware agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware \
- --middleware agentinfer.agentcache.core.api_adapter.AgentCacheLifecycleMiddleware \
- --additional-config \
- '{"agentcache":{"controller_factory":"agentinfer.agentcache.core.factory.build_progress_ttl_controller"}}'
-```
-
 安装后的 `vllm` 命令会将普通命令委托给上游 vLLM。显式的 `vllm bench serve --agentinfer` 命令进入
-AgentBench；`vllm serve MODEL --agentinfer` 激活 AgentInfer 服务路径（调度桥跟随
-`--async-scheduling`/`--no-async-scheduling` 的选择）；其他命令在未显式设置 `--scheduler-cls` 时使用
-AgentInfer 的默认调度器。标准服务参数见
+AgentBench；`vllm serve MODEL --agentinfer` 激活 AgentInfer 服务路径；其他命令在未显式设置 `--scheduler-cls`
+时使用 AgentInfer 的默认调度器。标准服务参数见
 [vLLM Quickstart](https://docs.vllm.ai/en/latest/getting_started/quickstart/)。
 
 ## License

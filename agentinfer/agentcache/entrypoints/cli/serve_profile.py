@@ -18,8 +18,6 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
-AGENTINFER_FLAG = "--agentinfer"
-
 ASYNC_SCHEDULER_CLS = "agentinfer.agentcache.core.scheduler.AgentCacheAsyncSchedulerBridge"
 SYNC_SCHEDULER_CLS = "agentinfer.agentcache.core.scheduler.AgentCacheSyncSchedulerBridge"
 IDENTITY_MIDDLEWARE = "agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware"
@@ -65,7 +63,7 @@ def add_agentinfer_arguments(parser: argparse.ArgumentParser) -> None:
         description="AgentInfer agent-aware serving additions (see the AgentInfer docs).",
     )
     group.add_argument(
-        AGENTINFER_FLAG,
+        "--agentinfer",
         action="store_true",
         default=False,
         help="Enable the AgentInfer Progress-TTL serving path: injects the AgentCache scheduler bridge "
@@ -259,7 +257,7 @@ def run_agentinfer_serve(serve_argv: list[str]) -> int:
     add_agentinfer_arguments(parser)
     namespace, explicit_dests = parse_args_with_explicit_keys(parser, serve_argv)
     if not getattr(namespace, "agentinfer", False):
-        raise AgentInferServeError(f"{AGENTINFER_FLAG} is required for the AgentInfer serve takeover")
+        raise AgentInferServeError("--agentinfer is required for the AgentInfer serve takeover")
 
     injected = inject_profile(namespace, explicit_dests)
     socket_defaulted = LIFECYCLE_SOCKET_ENV not in os.environ

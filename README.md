@@ -50,8 +50,8 @@ python -m pip install agentinfer-0.1.0-py3-none-any.whl
 
 ## Quick Start
 
-Start the AgentInfer serving path with a single flag (async scheduling, the AgentCache async scheduler
-bridge, identity and lifecycle middleware, and the embedded Progress-TTL controller):
+Start the AgentInfer serving path with a single flag. The flag enables async scheduling, the AgentCache
+async scheduler bridge, identity and lifecycle middleware, and the embedded Progress-TTL controller:
 
 ```bash
 vllm serve meta-llama/Llama-3.1-8B-Instruct --agentinfer
@@ -61,25 +61,10 @@ The lifecycle socket defaults to `/tmp/agentinfer-vllm-lifecycle.sock` when
 `AGENTCACHE_VLLM_LIFECYCLE_SOCKET` is unset; export a distinct socket per server instance on one host.
 The equivalent repository example is available at [`examples/serve-progress-ttl.sh`](examples/serve-progress-ttl.sh).
 
-The explicit long form remains supported:
-
-```bash
-export AGENTCACHE_VLLM_LIFECYCLE_SOCKET=/tmp/agentinfer-vllm-lifecycle.sock
-
-vllm serve meta-llama/Llama-3.1-8B-Instruct \
- --async-scheduling \
- --scheduler-cls agentinfer.agentcache.core.scheduler.AgentCacheAsyncSchedulerBridge \
- --middleware agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware \
- --middleware agentinfer.agentcache.core.api_adapter.AgentCacheLifecycleMiddleware \
- --additional-config \
- '{"agentcache":{"controller_factory":"agentinfer.agentcache.core.factory.build_progress_ttl_controller"}}'
-```
-
 The installed `vllm` command delegates ordinary commands to upstream vLLM. Explicit
 `vllm bench serve --agentinfer` commands enter AgentBench; `vllm serve MODEL --agentinfer` activates the
-AgentInfer serving path (the scheduler bridge follows `--async-scheduling`/`--no-async-scheduling`);
-other commands use AgentInfer's default scheduler unless `--scheduler-cls` is set explicitly. See the
-[vLLM Quickstart](https://docs.vllm.ai/en/latest/getting_started/quickstart/) for standard serving options.
+AgentInfer serving path; other commands use AgentInfer's default scheduler unless `--scheduler-cls` is set explicitly.
+See the [vLLM Quickstart](https://docs.vllm.ai/en/latest/getting_started/quickstart/) for standard serving options.
 
 ## License
 
