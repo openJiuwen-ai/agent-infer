@@ -11,7 +11,9 @@ a versioned section.
   serve parsing, injects the scheduler bridge (async or sync, following `--async-scheduling`/`--no-async-scheduling`),
   the identity and lifecycle middleware, and the Progress-TTL controller factory, then dispatches upstream vLLM. The
   lifecycle socket defaults when unset and conflicting `--scheduler-cls` or custom `agentcache.controller_factory`
-  options exit with code 2. Explicit long-form commands remain supported.
+  options exit with code 2. Explicit long-form commands remain supported. Verified end-to-end on vLLM 0.29 with a
+  GPU e2e test (`tests/agentcache/entrypoints/test_serve_flag_e2e.py`); the serve parser factory import, scheduler
+  `schedule()` pass-through, and prefix-lookup observer tolerate both current and older vLLM layouts.
 - Added the AgentRouter native middleware patch for `agent_hint_affinity` / `agent_hint_token_offsets` under `agentinfer/agentrouter/patches` (apply onto upstream Router; do not vendor the full router tree).
 - Added mirrored Chinese and English documentation organized with the Diátaxis framework.
 

@@ -244,6 +244,16 @@ def _dispatch_serve(namespace: argparse.Namespace) -> None:
     command.cmd(namespace)
 
 
+def _import_make_arg_parser():
+    """Resolve the upstream serve parser factory across vLLM layouts."""
+
+    try:
+        from vllm.entrypoints.launchers.cli_args import make_arg_parser
+    except ImportError:
+        from vllm.entrypoints.openai.cli_args import make_arg_parser
+    return make_arg_parser
+
+
 def run_agentinfer_serve(serve_argv: list[str]) -> int:
     """Parse, inject, and serve an ``--agentinfer`` takeover command.
 
@@ -251,7 +261,7 @@ def run_agentinfer_serve(serve_argv: list[str]) -> int:
     :class:`AgentInferServeError` for usage conflicts; the caller maps it to exit code 2.
     """
 
-    from vllm.entrypoints.openai.cli_args import make_arg_parser
+    make_arg_parser = _import_make_arg_parser()
 
     parser = make_arg_parser(_build_parser())
     add_agentinfer_arguments(parser)

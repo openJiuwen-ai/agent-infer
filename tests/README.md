@@ -25,6 +25,19 @@ Unit tests for the `vllm serve MODEL --agentinfer` takeover in
 | `test_run_agentinfer_serve_preserves_existing_socket` | An existing `AGENTCACHE_VLLM_LIFECYCLE_SOCKET` is preserved |
 | `test_run_agentinfer_serve_requires_the_flag` | Takeover without `--agentinfer` is rejected |
 
+### `tests/agentcache/entrypoints/test_serve_flag_e2e.py`
+
+GPU e2e tests for `vllm serve MODEL --agentinfer` through the installed
+`vllm` entrypoint (requires a vLLM environment; skip-marked as `gpu_test`).
+
+| Test | What it verifies |
+| ---- | ---------------- |
+| `test_injection_banner_logged` | Server logs carry the `[agentinfer] --agentinfer injected:` banner with the async bridge and lifecycle middleware |
+| `test_lifecycle_socket_bound` | The configured `AGENTCACHE_VLLM_LIFECYCLE_SOCKET` is bound while serving |
+| `test_completion` | A `/v1/completions` request round-trips through the serving path |
+| `test_chat_completion` | A `/v1/chat/completions` request round-trips through the serving path |
+| `test_conflicting_scheduler_cls_exits_before_engine_startup` | `--agentinfer --scheduler-cls ...` exits with code 2 before engine startup |
+
 ### `tests/agentcache/core/test_agent_scheduler.py`
 
 Unit tests for `AgentAwareScheduler` resolution and the `EngineArgs` patch.

@@ -313,12 +313,26 @@ vllm serve MODEL --agentinfer --help         # AgentInferConfig group visible
 vllm serve MODEL --agentinfer                # boot; curl http://127.0.0.1:8000/v1/models
 ```
 
+GPU e2e test in a real vLLM environment (skipped automatically when vLLM is absent; verified against
+vLLM 0.29.0 on L20X GPUs):
+
+```bash
+python -m pytest tests/agentcache/entrypoints/test_serve_flag_e2e.py -v
+```
+
 ## Compatibility notes
 
 The design depends on the existing console-script ownership and on vLLM 0.23.0 extension points that omni also relies
 on: `make_arg_parser`, `validate_parsed_serve_args`, and the serve dispatch entry. If a future vLLM release changes
 these shapes, or adds its own `--agentinfer` option, the parser extension needs a compatibility review while the long
 form continues to work regardless.
+
+Verified against vLLM 0.29.0 and hardened accordingly: the serve parser factory resolves across both
+`vllm.entrypoints.launchers.cli_args` (0.29+) and `vllm.entrypoints.openai.cli_args` (older layouts), the bridge
+`schedule()` forwards the positional `throttle_prefills` argument newer engines pass, and the prefix-lookup observer
+preserves the native `get_computed_blocks` tuple arity (2-tuple older, 3-tuple with `shared_prefix_boundary` in 0.29).
+FlashInfer JIT sampling kernels unavailable in some environments are bypassed in the e2e fixture via
+`VLLM_USE_FLASHINFER_SAMPLER=0` without changing served defaults.
 
 Two omni-derived watch items:
 

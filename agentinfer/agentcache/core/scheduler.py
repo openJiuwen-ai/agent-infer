@@ -354,14 +354,15 @@ class _VllmAdmissionHooks:
             return
 
         def observed_get_computed_blocks(request: Request):
-            computed_blocks, cached_tokens = native_get_computed_blocks(request)
+            computed = native_get_computed_blocks(request)
+            computed_blocks, cached_tokens = computed[0], computed[1]
             if request.request_id in self.tracked_native:
                 cached = max(0, int(cached_tokens))
                 self._local_prefix_observations[request.request_id] = (
                     cached,
                     self._ref_count_shared_tokens(computed_blocks, cached),
                 )
-            return computed_blocks, cached_tokens
+            return computed
 
         observed_get_computed_blocks._agentinfer_prefix_lookup_observer = True
         kv_cache_manager.get_computed_blocks = observed_get_computed_blocks
@@ -470,10 +471,10 @@ class AgentCacheAsyncSchedulerBridge(AsyncScheduler):
     def add_request(self, request: Request) -> None:
         self._agentcache.add_request(self, request, super().add_request)
 
-    def schedule(self):
+    def schedule(self, *args, **kwargs):
         if self._agentcache.controller is not None:
             self._agentcache.before_schedule(self, super().add_request)
-        output = super().schedule()
+        output = super().schedule(*args, **kwargs)
         self._agentcache.observe_prefix_cache(output)
         return output
 
@@ -515,10 +516,10 @@ class AgentCacheSyncSchedulerBridge(Scheduler):
     def add_request(self, request: Request) -> None:
         self._agentcache.add_request(self, request, super().add_request)
 
-    def schedule(self):
+    def schedule(self, *args, **kwargs):
         if self._agentcache.controller is not None:
             self._agentcache.before_schedule(self, super().add_request)
-        output = super().schedule()
+        output = super().schedule(*args, **kwargs)
         self._agentcache.observe_prefix_cache(output)
         return output
 
