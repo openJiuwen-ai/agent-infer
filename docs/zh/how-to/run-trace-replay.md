@@ -13,7 +13,8 @@ Replay 从请求 trace 恢复会话、Agent、请求依赖、间隔和 token 目
 
 Inferact 转换会从 `/v1/models` 和可选的 `/tokenizer_info` 发现后端 tokenizer。若同机存在对应
 tokenizer 文件，并且本地与后端的原始文本和聊天模板 token ID 探针完全一致，转换和回放校准会使用
-本地 tokenizer；转换可采用增量计数，运行期校准始终计算完整聊天模板。无法发现或验证
+本地 tokenizer；仅在加性探测通过且消息数为已探测的 1、3、5、9 时采用增量计数，其他长度及
+运行期校准始终计算完整聊天模板。无法发现或验证
 本地 tokenizer 时自动回退到 `/tokenize`。vLLM 需使用 `--enable-tokenizer-info-endpoint` 才会提供
 `/tokenizer_info`；服务端覆盖 chat template 时建议启用该端点。
 
@@ -58,9 +59,10 @@ Inferact `trace_record` 模式默认冻结已发送的历史消息（包括旧 f
 `context_adjustment_mode` 的历史裁剪和重置规则不适用于这一校准路径。
 
 Inferact 默认且始终要求每个成功请求的输入 token 数精确匹配计划，无需增加模式或容差配置。
-旧配置中的非零 `prompt_calibration_tolerance_tokens` 会在 Inferact 配置加载时归零。
+非零 `prompt_calibration_tolerance_tokens` 会在 Inferact 配置加载时报错。请删除旧配置中的非零设置，
+或显式设为零；合成提示词仍支持配置容差。
 
-若移空最新 user 后仍超出目标、有限次后缀修复无法精确命中目标，或 token ID 校验发现校准改变了
+若最新 user 没有任何前缀能满足目标上限、有限次后缀修复无法精确命中目标，或 token ID 校验发现校准改变了
 原始/空 user 两种模板共有的前缀，请求会在发送前失败。推理响应缺少 `usage.prompt_tokens` 或
 实际输入与目标不一致时，该请求也标记失败，依赖它的后续请求跳过。不会通过缩减历史来强行对齐。
 

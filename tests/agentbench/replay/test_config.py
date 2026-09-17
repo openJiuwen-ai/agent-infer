@@ -175,6 +175,31 @@ def test_inferact_requires_chat_completions_endpoint() -> None:
         ReplayBenchConfig.model_validate(payload)
 
 
+@pytest.mark.parametrize("tolerance", [None, 0, 1, 8])
+def test_inferact_rejects_nonzero_tolerance_instead_of_normalizing(tolerance) -> None:
+    replay = {
+        "trace_type": "inferact_codex_swebenchpro",
+        "trace_path": "source.json",
+        "prompt_shape": "trace_record",
+        "interval_mode": "lognormal",
+        "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
+    }
+    if tolerance is not None:
+        replay["prompt_calibration_tolerance_tokens"] = tolerance
+    if tolerance:
+        with pytest.raises(
+            ValidationError, match="inferact_codex_swebenchpro requires prompt_calibration_tolerance_tokens=0"
+        ):
+            ReplayBenchConfig.model_validate({"replay": replay})
+        assert replay["prompt_calibration_tolerance_tokens"] == tolerance
+        synthetic = ReplayBenchConfig.model_validate(
+            {"replay": {"trace_path": "source.jsonl", "prompt_calibration_tolerance_tokens": tolerance}}
+        )
+        assert synthetic.replay.prompt_calibration_tolerance_tokens == tolerance
+    else:
+        assert ReplayBenchConfig.model_validate({"replay": replay}).replay.prompt_calibration_tolerance_tokens == 0
+
+
 def test_trace_path_is_resolved_relative_to_yaml(tmp_path: Path) -> None:
     config_path = tmp_path / "config" / "replay.yaml"
     config_path.parent.mkdir()

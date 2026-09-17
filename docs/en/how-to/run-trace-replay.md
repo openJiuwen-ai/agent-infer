@@ -16,7 +16,8 @@ See [vLLM integration](integrate-vllm.md) for deployment options.
 Inferact conversion discovers the Backend tokenizer through `/v1/models` and the optional `/tokenizer_info`.
 When matching tokenizer files are available on the same host and raw-text and chat-template token-ID probes match
 the Backend exactly, conversion and Replay calibration use the local tokenizer. Conversion may use incremental
-counting; runtime calibration always counts the full chat template. Discovery or validation failure falls back to
+counting only for the probed message counts (1, 3, 5, and 9) when additivity probes pass; other lengths and runtime
+calibration always count the full chat template. Unavailable or incompatible local tokenizers fall back to
 `/tokenize`. vLLM exposes
 `/tokenizer_info` only when started with `--enable-tokenizer-info-endpoint`; enable it when the server overrides the
 model's chat template.
@@ -64,9 +65,10 @@ when over target. Trimming uses character boundaries; every candidate is counted
 The historical trimming/reset rules of `context_adjustment_mode` do not apply to this path.
 
 Inferact always requires exact per-request input lengths, with no additional mode or tolerance configuration.
-Legacy nonzero `prompt_calibration_tolerance_tokens` values are normalized to zero when loading Inferact configuration.
+Nonzero `prompt_calibration_tolerance_tokens` values are rejected when loading Inferact configuration. Remove a legacy
+nonzero setting or explicitly set it to zero; synthetic prompts retain their configurable tolerance.
 
-If frozen history plus an empty user exceeds the target, bounded suffix repair cannot reach the exact target,
+If no current-user prefix fits the target, bounded suffix repair cannot reach the exact target,
 or calibration changes the token prefix shared by the original and empty-user templates, the request fails before
 inference. Missing `usage.prompt_tokens` or a backend input count differing from the target also fails the request;
 dependent requests are skipped. History is never trimmed to force a fit.

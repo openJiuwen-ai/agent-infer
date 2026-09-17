@@ -18,6 +18,7 @@ from .config import ReplayBenchConfig
 logger = logging.getLogger(__name__)
 
 _PROBE_TEXT = "AgentInfer tokenizer probe: ASCII, 中文, newline\nend"
+_INCREMENTAL_MESSAGE_COUNTS = (1, 3, 5, 9)
 _PROBE_MESSAGES = [
     {"role": "user", "content": "AgentInfer template probe\nline two"},
     {"role": "assistant", "content": "probe response"},
@@ -137,7 +138,7 @@ class LocalTokenizerCounter:
         """Accept additive counting only when varied multi-turn probes are exact."""
 
         try:
-            for message_count in (1, 3, 5, 9):
+            for message_count in _INCREMENTAL_MESSAGE_COUNTS:
                 expected_offset = self._offset(message_count)
                 for variant in _ADDITIVITY_VARIANTS[1:]:
                     messages = self._probe_history(message_count, variant)
@@ -166,7 +167,12 @@ class LocalTokenizerCounter:
         )
 
     def input_tokens(self, messages: list[dict[str, object]]) -> int:
-        if self.incremental and self._is_alternating_text_history(messages):
+        # An offset computed for an unprobed length does not establish additivity.
+        if (
+            self.incremental
+            and len(messages) in _INCREMENTAL_MESSAGE_COUNTS
+            and self._is_alternating_text_history(messages)
+        ):
             return self._incremental_count(messages)
         return len(self.chat_token_ids(messages))
 

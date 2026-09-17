@@ -142,11 +142,15 @@ class _BackendTokenizer:
         )
         self._count_cache: dict[bytes, int] = {}
         self.tokenizer_operations = 0
-        self.local_tokenizer: LocalTokenizerCounter | None = discover_local_tokenizer(
-            config,
-            get_json=self._get_json,
-            backend_tokens=self._request_tokens,
-        )
+        try:
+            self.local_tokenizer: LocalTokenizerCounter | None = discover_local_tokenizer(
+                config,
+                get_json=self._get_json,
+                backend_tokens=self._request_tokens,
+            )
+        except Exception:
+            self.client.close()
+            raise
 
     def close(self) -> None:
         """Close the synchronous Backend HTTP client."""

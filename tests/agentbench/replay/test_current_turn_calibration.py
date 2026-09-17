@@ -231,3 +231,31 @@ def test_nonmonotone_counts_keep_longest_fitting_source_prefix(short_count, empt
     assert result.calibration.trimmed_current_user_characters == 2
     assert result.calibration.trimmed_current_user_tokens == 2
     assert result.calibration.adjustment == ("trim_and_pad" if long_count == 3 else "trim")
+
+
+@pytest.mark.parametrize("target,kept", [(2, "中文"), (0, "")])
+def test_prefix_search_can_be_used_without_suffix_repair(target, kept):
+    prompt = SyntheticPrompt("", (), ({"role": "user", "content": "中文测试"},))
+    builder = PromptBuilder(config(), TextTokenizer())
+    candidate, count, text, history = asyncio.run(builder._find_current_user_prefix(prompt, target, 0, "turn"))
+    assert candidate.messages[-1]["content"] == text == kept
+    assert count == target == history[-1]
+    assert prompt.messages[-1]["content"] == "中文测试"
+
+
+@pytest.mark.parametrize("old_text,count", [("old", 4), ("old", 5), ("new", 4)])
+def test_frozen_prefix_verification_independently_checks_tokens_and_count(old_text, count):
+    original = SyntheticPrompt("", (), ({"role": "user", "content": "old"}, {"role": "user", "content": "abc"}))
+    candidate = SyntheticPrompt("", (), ({"role": "user", "content": old_text}, {"role": "user", "content": "a"}))
+    builder = PromptBuilder(config(), TextTokenizer())
+
+    async def verify():
+        return await builder._verify_frozen_token_prefix(
+            original, candidate, tuple(map(ord, "oldabc")), tuple(map(ord, "old")), count, "turn"
+        )
+
+    if old_text == "old" and count == 4:
+        assert asyncio.run(verify()) == 4
+    else:
+        with pytest.raises(ValueError, match="changed frozen token prefix"):
+            asyncio.run(verify())

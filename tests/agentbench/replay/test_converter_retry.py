@@ -131,3 +131,26 @@ def test_conversion_does_not_retry_invalid_responses(backend, config, tmp_path, 
     assert backend["tokenize_calls"] == 1
     assert backend["delays"] == []
     assert all(c.is_closed for c in backend["clients"])
+
+
+@pytest.mark.parametrize("fail_path", ["/tokenizer_info", "/v1/models"])
+def test_discovery_invalid_url_closes_client(monkeypatch, config, fail_path):
+    clients = []
+    failure = httpx.InvalidURL("injected invalid discovery URL")
+    original_client = httpx.Client
+
+    def respond(request):
+        if request.url.path == fail_path:
+            raise failure
+        return httpx.Response(200, json={})
+
+    def client(**kwargs):
+        result = original_client(transport=httpx.MockTransport(respond), **kwargs)
+        clients.append(result)
+        return result
+
+    monkeypatch.setattr(codex_swebenchpro.httpx, "Client", client)
+    with pytest.raises(httpx.InvalidURL) as caught:
+        codex_swebenchpro.CodexSwebenchProConverter.from_backend(config)
+    assert caught.value is failure
+    assert len(clients) == 1 and clients[0].is_closed

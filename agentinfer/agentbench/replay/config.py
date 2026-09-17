@@ -138,8 +138,8 @@ class ReplayConfig(ReplayStrictModel):
                 raise ValueError("inferact_codex_swebenchpro requires prompt_shape=trace_record")
             if self.interval_mode != "lognormal":
                 raise ValueError("inferact_codex_swebenchpro requires interval_mode=lognormal")
-            # Accept older YAML files while enforcing exact Inferact accounting.
-            self.prompt_calibration_tolerance_tokens = 0
+            if self.prompt_calibration_tolerance_tokens != 0:
+                raise ValueError("inferact_codex_swebenchpro requires prompt_calibration_tolerance_tokens=0")
         if self.trace_type == "agentinfer" and self.prompt_shape == "trace_record":
             raise ValueError("agentinfer trace_type does not provide a unified trace_record IR")
         return self

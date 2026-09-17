@@ -4,6 +4,8 @@
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from agentinfer.agentbench.replay.config import ReplayBenchConfig
 from agentinfer.agentbench.replay.local_tokenizer import LocalTokenizerCounter, discover_local_tokenizer
 
@@ -69,6 +71,29 @@ def test_local_counter_selects_incremental_only_for_additive_template() -> None:
     assert additive.input_tokens(messages) == len(additive.chat_token_ids(messages))
     assert history_sensitive.incremental is False
     assert history_sensitive.input_tokens(messages) == len(history_sensitive.chat_token_ids(messages))
+
+
+@pytest.mark.parametrize("message_count", [7, 11, 13])
+def test_unprobed_history_lengths_use_full_template(message_count) -> None:
+    class LaterHistorySensitiveTokenizer(_HistorySensitiveTokenizer):
+        def apply_chat_template(self, messages, **kwargs):
+            if len(messages) == message_count:
+                return _HistorySensitiveTokenizer.apply_chat_template(self, messages, **kwargs)
+            return _AdditiveTokenizer.apply_chat_template(self, messages, **kwargs)
+
+    counter = LocalTokenizerCounter(LaterHistorySensitiveTokenizer(), {})
+    assert counter.incremental is True
+    messages = [
+        {
+            "role": "user" if index % 2 == 0 else "assistant",
+            "content": "ask" if index % 2 == 0 else "<think>hidden</think>answer",
+        }
+        for index in range(message_count)
+    ]
+    expected = len(counter.chat_token_ids(messages))
+    assert counter.input_tokens(messages) == expected
+    # Demonstrate that extrapolating the offset would produce a wrong target.
+    assert counter._incremental_count(messages) != expected
 
 
 def test_discovery_uses_backend_model_root_and_requires_matching_token_ids(monkeypatch, tmp_path) -> None:

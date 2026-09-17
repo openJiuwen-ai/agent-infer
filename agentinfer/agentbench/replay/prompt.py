@@ -471,25 +471,10 @@ class PromptBuilder:
             empty_count = len(empty_ids)
             history.append(empty_count)
             original_content_ids = await self.tokenizer.text_token_ids(original)
-            # Counts can fall when a longer prefix changes tokenization or the
-            # chat template. Check every longer prefix before accepting a shorter
-            # one; neither a raw-token hint nor an over-budget empty user bounds
-            # the search. Character slices always preserve literal source text.
-            for length in range(len(original) - 1, -1, -1):
-                text = original[:length]
-                trial = self._replace_calibration_remainder(prompt, index, text)
-                trial_count = empty_count if length == 0 else await self.tokenizer.count(trial)
-                history.append(trial_count)
-                if trial_count <= target:
-                    candidate, count, kept = trial, trial_count, text
-                    break
-            else:
-                raise ValueError(
-                    f"Current-turn calibration unreachable for {node.source_key}: "
-                    f"no current-user prefix fits target={target}; "
-                    f"frozen history with empty user needs {empty_count} tokens; "
-                    "historical messages will not be trimmed"
-                )
+            candidate, count, kept, search_history = await self._find_current_user_prefix(
+                prompt, target, empty_count, node.source_key
+            )
+            history.extend(search_history)
         padding_base_count = count
         attempts = requested = 0
         if count < target:
@@ -513,24 +498,9 @@ class PromptBuilder:
         preserved = None
         if original_ids is not None:
             assert empty_ids is not None
-            boundary_ids = empty_ids
-            if original_ids == empty_ids:
-                # An empty (or template-stripped) user must not lock the generation suffix.
-                boundary = self._replace_calibration_remainder(prompt, index, "AgentInfer boundary probe")
-                boundary_ids = await self.tokenizer.prompt_token_ids(boundary)
-            locked = 0
-            for left, right in zip(original_ids, boundary_ids, strict=False):
-                if left != right:
-                    break
-                locked += 1
-            final_ids = await self.tokenizer.prompt_token_ids(candidate)
-            if len(final_ids) != count or final_ids[:locked] != original_ids[:locked]:
-                raise ValueError(f"Current-turn calibration changed frozen token prefix for {node.source_key}")
-            preserved = 0
-            for left, right in zip(original_ids, final_ids, strict=False):
-                if left != right:
-                    break
-                preserved += 1
+            preserved = await self._verify_frozen_token_prefix(
+                prompt, candidate, original_ids, empty_ids, count, node.source_key
+            )
         trimmed_characters = len(original) - len(kept)
         trimmed_tokens = 0
         if trimmed_characters:
@@ -572,6 +542,66 @@ class PromptBuilder:
             preserved,
         )
         return replace(candidate, calibration=calibration)
+
+    async def _find_current_user_prefix(
+        self, prompt: SyntheticPrompt, target: int, empty_count: int, source_key: str
+    ) -> tuple[SyntheticPrompt, int, str, tuple[int, ...]]:
+        """Find the longest fitting strict prefix after the original exceeds target."""
+
+        index = len(prompt.messages) - 1
+        original = prompt.messages[index]["content"]
+        assert prompt.messages[index]["role"] == "user" and isinstance(original, str)
+        history: list[int] = []
+        # Counts can fall when a longer prefix changes tokenization or the
+        # chat template. Check every longer prefix before accepting a shorter
+        # one; neither a raw-token hint nor an over-budget empty user bounds
+        # the search. Character slices always preserve literal source text.
+        for length in range(len(original) - 1, -1, -1):
+            text = original[:length]
+            trial = self._replace_calibration_remainder(prompt, index, text)
+            trial_count = empty_count if length == 0 else await self.tokenizer.count(trial)
+            history.append(trial_count)
+            if trial_count <= target:
+                return trial, trial_count, text, tuple(history)
+        raise ValueError(
+            f"Current-turn calibration unreachable for {source_key}: "
+            f"no current-user prefix fits target={target}; "
+            f"frozen history with empty user needs {empty_count} tokens; "
+            "historical messages will not be trimmed"
+        )
+
+    async def _verify_frozen_token_prefix(
+        self,
+        original: SyntheticPrompt,
+        candidate: SyntheticPrompt,
+        original_ids: tuple[int, ...],
+        empty_ids: tuple[int, ...],
+        count: int,
+        source_key: str,
+    ) -> int:
+        """Validate the calibrated count and frozen tokens, returning the preserved length."""
+
+        boundary_ids = empty_ids
+        if original_ids == empty_ids:
+            # An empty (or template-stripped) user must not lock the generation suffix.
+            boundary = self._replace_calibration_remainder(
+                original, len(original.messages) - 1, "AgentInfer boundary probe"
+            )
+            boundary_ids = await self.tokenizer.prompt_token_ids(boundary)
+        locked = 0
+        for left, right in zip(original_ids, boundary_ids, strict=False):
+            if left != right:
+                break
+            locked += 1
+        final_ids = await self.tokenizer.prompt_token_ids(candidate)
+        if len(final_ids) != count or final_ids[:locked] != original_ids[:locked]:
+            raise ValueError(f"Current-turn calibration changed frozen token prefix for {source_key}")
+        preserved = 0
+        for left, right in zip(original_ids, final_ids, strict=False):
+            if left != right:
+                break
+            preserved += 1
+        return preserved
 
     async def _continuation_prompt(
         self,

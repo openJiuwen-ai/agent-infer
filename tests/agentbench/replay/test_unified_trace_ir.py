@@ -398,7 +398,7 @@ def test_trace_record_runner_rejects_backend_residuals_and_reports_them(
                 "prompt_shape": "trace_record",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
-                "prompt_calibration_tolerance_tokens": 1,
+                "prompt_calibration_tolerance_tokens": 0,
             },
         }
     )

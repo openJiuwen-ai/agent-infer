@@ -15,6 +15,8 @@ a versioned section.
  validated local tokenizer when available. Current-turn calibration preserves historical messages and requires exact
  input lengths; clipping checks prefixes from longest to shortest to handle nonmonotone token counts.
 - Converted Trace IR manifests identify the converter by name without a separate converter version label.
+- Inferact rejects nonzero calibration tolerance instead of silently normalizing it. Local incremental counting is
+ limited to probed message counts, and tokenizer discovery errors close the HTTP client before propagating.
 - Reorganized the root README into project overview, core features, related documentation, requirements, installation,
  Quick Start, and license sections.
 - Refreshed release-package installation and made the explicit scheduler bridge, middleware, and Progress-TTL

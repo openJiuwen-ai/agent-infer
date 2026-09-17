@@ -142,7 +142,7 @@ def test_trace_record_checks_wire_usage_and_preserves_both_stream_fields(tmp_pat
                     "prompt_shape": "trace_record",
                     "interval_mode": "lognormal",
                     "interval_lognormal": {"p50_seconds": 1, "p95_seconds": 2, "p99_seconds": 3},
-                    "prompt_calibration_tolerance_tokens": 8,
+                    "prompt_calibration_tolerance_tokens": 0,
                 },
             }
         )
