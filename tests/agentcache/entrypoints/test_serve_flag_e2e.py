@@ -37,9 +37,9 @@ def _vllm_bin() -> str:
     """Resolve the installed agentinfer vllm console script."""
 
     candidates = [
-        shutil.which("vllm"),
         os.path.join(os.path.dirname(sys.executable), "vllm"),
         os.path.join(sys.prefix, "bin", "vllm"),
+        shutil.which("vllm"),
     ]
     for candidate in candidates:
         if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):

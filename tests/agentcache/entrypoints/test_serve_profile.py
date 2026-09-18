@@ -173,6 +173,12 @@ def test_null_controller_factory_is_rejected() -> None:
         serve_profile.inject_profile(namespace, explicit)
 
 
+def test_non_object_agentcache_is_rejected() -> None:
+    namespace, explicit = _parse(["MODEL", "--agentinfer", "--additional-config", '{"agentcache": "on"}'])
+    with pytest.raises(serve_profile.AgentInferServeError, match="agentcache must be a JSON object"):
+        serve_profile.inject_profile(namespace, explicit)
+
+
 def test_identical_controller_factory_is_accepted() -> None:
     user_config = {"agentcache": {"controller_factory": serve_profile.CONTROLLER_FACTORY}}
     namespace, explicit = _parse(["MODEL", "--agentinfer", "--additional-config", json.dumps(user_config)])
@@ -263,6 +269,33 @@ def test_lifecycle_socket_env_and_config_conflict_is_rejected(monkeypatch: pytes
 
     with pytest.raises(serve_profile.AgentInferServeError, match="lifecycle socket"):
         serve_profile.run_agentinfer_serve(["MODEL", "--agentinfer", "--additional-config", json.dumps(user_config)])
+
+
+def test_empty_lifecycle_socket_env_is_treated_as_unset(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _install_stub_vllm(monkeypatch)
+    monkeypatch.setenv(serve_profile.LIFECYCLE_SOCKET_ENV, "")
+
+    serve_profile.run_agentinfer_serve(["MODEL", "--agentinfer"])
+
+    assert os.environ[serve_profile.LIFECYCLE_SOCKET_ENV] == serve_profile.DEFAULT_LIFECYCLE_SOCKET
+    err = capsys.readouterr().err
+    assert f"defaulting {serve_profile.LIFECYCLE_SOCKET_ENV}=" in err
+
+
+def test_dispatch_serve_reports_missing_subcommand_as_usage_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorded = _install_stub_vllm(monkeypatch)
+    monkeypatch.delitem(sys.modules, "vllm.entrypoints.cli.serve")
+    monkeypatch.setitem(
+        sys.modules,
+        "vllm.entrypoints.cli.serve",
+        types.ModuleType("vllm.entrypoints.cli.serve"),
+    )
+
+    with pytest.raises(serve_profile.AgentInferServeError, match="long-form"):
+        serve_profile.run_agentinfer_serve(["MODEL", "--agentinfer"])
+    assert "namespace" not in recorded
 
 
 def test_transparency_line_omits_user_config_secrets(

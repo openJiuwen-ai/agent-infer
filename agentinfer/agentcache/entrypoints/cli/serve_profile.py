@@ -143,6 +143,8 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 def _merge_additional_config(current: Any, profile: ServeProfile) -> dict[str, Any]:
     user_config = _coerce_additional_config(current)
     user_agentcache = user_config.get("agentcache")
+    if user_agentcache is not None and not isinstance(user_agentcache, dict):
+        raise AgentInferServeError("--additional-config agentcache must be a JSON object when --agentinfer is set.")
     if isinstance(user_agentcache, dict):
         profile_factory = profile.agentcache_config.get("controller_factory")
         if "controller_factory" in user_agentcache and user_agentcache["controller_factory"] != profile_factory:
@@ -240,7 +242,13 @@ def _build_parser() -> argparse.ArgumentParser:
 def _dispatch_serve(namespace: argparse.Namespace) -> None:
     """Validate and dispatch through the upstream CLI's own serve subcommand."""
 
-    from vllm.entrypoints.cli.serve import ServeSubcommand
+    try:
+        from vllm.entrypoints.cli.serve import ServeSubcommand
+    except ImportError as exc:
+        raise AgentInferServeError(
+            "the upstream vLLM serve subcommand is unavailable in this vLLM layout; use the explicit "
+            "long-form command documented in docs/en/how-to/integrate-vllm.md."
+        ) from exc
 
     command = ServeSubcommand()
     command.validate(namespace)
@@ -285,7 +293,7 @@ def _apply_lifecycle_socket_env(namespace: argparse.Namespace) -> tuple[bool, st
                 if not isinstance(raw, str) or not raw:
                     raise AgentInferServeError("agentcache.lifecycle_socket_path must be a non-empty string")
                 config_socket = raw
-    configured = os.environ.get(LIFECYCLE_SOCKET_ENV)
+    configured = os.environ.get(LIFECYCLE_SOCKET_ENV) or None
     if configured:
         if config_socket is not None and config_socket != configured:
             raise AgentInferServeError(
@@ -294,7 +302,7 @@ def _apply_lifecycle_socket_env(namespace: argparse.Namespace) -> tuple[bool, st
             )
         return False, configured, False
     value = config_socket if config_socket is not None else DEFAULT_LIFECYCLE_SOCKET
-    os.environ.setdefault(LIFECYCLE_SOCKET_ENV, value)
+    os.environ[LIFECYCLE_SOCKET_ENV] = value
     return True, value, config_socket is not None
 
 
