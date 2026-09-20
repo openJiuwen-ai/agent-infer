@@ -6,10 +6,14 @@ AgentInfer manages caches and schedules agent workflow requests in or in front o
 
 ## Core Features
 
-- **Semantic Router**: a programmable Mixture-of-Models router for heterogeneous LLM inference.
-- **Router**: a high-performance, lightweight router for large-scale vLLM deployments.
-- **Agent Cache**: vLLM plugins that manage request scheduling and Ascend NPU-native KV cache pooling and transfer.
-- **AgentBench**: benchmarks agentic workloads through real agent runs or trace-dataset replay.
+- **Semantic Router**: a programmable Mixture-of-Models router for heterogeneous LLM inference. It optimizes
+  multi-turn agent sessions through continuity-aware model selection, reducing disruptive and costly model switches.
+- **Router**: a high-performance, lightweight router for large-scale vLLM deployments, with agent-aware scheduling
+  policies and agent workflow modeling.
+- **Agent Cache**: vLLM plugins that manage request scheduling and Ascend NPU-native KV cache management, pooling,
+  and transfer under agentic workloads.
+- **AgentBench**: a benchmark for inference engines under agentic workloads, driven by real agent runs or
+  trace-dataset replay.
 
 ## Architecture
 
