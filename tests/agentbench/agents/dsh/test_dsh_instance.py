@@ -88,8 +88,9 @@ def test_bootstrap_writes_profile_policy_and_records_it_in_snapshot(tmp_path: Pa
     assert instance.hmr_stub_path.is_file()
     assert instance.hmr_stub_path.read_text(encoding="utf-8") == AGENTBENCH_HMR_STUB
     hmr_stub_name = str(instance.hmr_stub_path).replace("\\", "/")
-    assert "agentbench-hmr-stub" in patch
-    assert f"name: {hmr_stub_name}" in patch
+    assert "    - id: agentbench-hmr-stub\n" in patch
+    assert f"      name: {hmr_stub_name}\n" in patch
+    assert patch.index("agentbench-hmr-stub") < patch.index("agentbench-bridge")
     snapshot = json.loads(instance.snapshot_path.read_text(encoding="utf-8"))
     assert "agentbench-hmr-stub" in snapshot["policy_patch"]
     assert "agentbench-bridge" in snapshot["policy_patch"]
