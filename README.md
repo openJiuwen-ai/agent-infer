@@ -6,13 +6,10 @@ AgentInfer manages caches and schedules agent workflow requests in or in front o
 
 ## Core Features
 
-- **Semantic Router**: classifies incoming agent requests by workflow semantics before dispatch.
-- **Router**: routes requests in front of serving engines through API middleware that transports agent identity
-  and lifecycle observations, backed by a **native middleware patch** (not a vendored router tree) for
-  `agent_hint_affinity` / `agent_hint_token_offsets`; see [`agentinfer/agentrouter`](agentinfer/agentrouter/README.md).
-- **Agent Cache**: integrates with vLLM in-engine through async and sync agent-aware schedulers, and retains,
-  pauses, and resumes agent programs with the embedded Progress-TTL controller.
-- **AgentBench**: runs and compares reproducible agent workloads against vLLM deployments.
+- **Semantic Router**: a programmable Mixture-of-Models router for heterogeneous LLM inference.
+- **Router**: a high-performance, lightweight router for large-scale vLLM deployments.
+- **Agent Cache**: vLLM plugins that manage request scheduling and Ascend NPU-native KV cache pooling and transfer.
+- **AgentBench**: benchmarks agentic workloads through real agent runs or trace-dataset replay.
 
 ## Architecture
 

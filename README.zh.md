@@ -6,13 +6,10 @@ AgentInfer 为智能体工作流提供缓存管理和请求调度能力，可集
 
 ## 核心特性
 
-- **Semantic Router（语义路由）**：在请求分发前，按工作流语义对传入的智能体请求进行分类。
-- **Router（路由器）**：作为推理引擎前置路由器运行，通过 API 中间件传递智能体身份与生命周期观测，
-  并提供 `agent_hint_affinity` / `agent_hint_token_offsets` 的**原生 middleware 补丁**（不托管完整 router
-  源码）；见 [`agentinfer/agentrouter`](agentinfer/agentrouter/README.md)。
-- **Agent Cache（智能体缓存）**：通过异步与同步 Agent 感知调度器将 AgentInfer 以引擎内方式集成到 vLLM，
-  并使用内嵌 Progress-TTL 控制器保留、暂停和恢复智能体程序。
-- **AgentBench（基准测试）**：在 vLLM 部署上运行并比较可复现的智能体工作负载。
+- **Semantic Router（语义路由）**：面向异构 LLM 推理的可编程 Mixture-of-Models 路由器。
+- **Router（路由器）**：面向 vLLM 大规模部署的高性能、轻量级路由器。
+- **Agent Cache（智能体缓存）**：vLLM 插件，负责请求调度以及 Ascend NPU 原生 KV Cache 池化与传输。
+- **AgentBench（基准测试）**：通过真实智能体运行或轨迹数据集回放，对智能体工作负载进行基准测试。
 
 ## 架构
 
