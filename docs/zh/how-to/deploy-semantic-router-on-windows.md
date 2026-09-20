@@ -11,7 +11,8 @@
 > -*`
 > - 官方镜像 tar（6 个 × 双架构，或含 milvus 共 7 个）
 >
-> **部署运行不在本手册范围**：部署请配合同目录的 `vLLM-Semantic-Router build-and-deploy.md` 的 **§5–§9**（目录规划 / 一键启动 / 后端连接 / 端口 / 交付 / FAQ）。
+> **部署运行不在本手册范围**：部署请配合同目录的 [deploy-semantic-router.md](deploy-semantic-router.md) 的 **§5–§9**
+> （目录规划 / 一键启动 / 后端连接 / 端口 / 交付 / FAQ）。
 
 ---
 
@@ -34,7 +35,7 @@
 步骤 3  构建自建镜像 → router / dashboard / sim / CLI，amd64 + arm64（§4）
 步骤 4  拉官方镜像   → 6 镜像 × 双架构，用 skopeo 导出 tar（§5）
 步骤 5  全量打包     → docker save + skopeo 产物归档（§6）
-步骤 6  送到目标服务器 → 按 build-and-deploy.md §5–§9 部署
+步骤 6  送到目标服务器 → 按 deploy-semantic-router.md §5–§9 部署
 ```
 
 ---
@@ -422,8 +423,8 @@ ls -lhS
 
 ### 分发方式
 
-- **离线 tar 传**：整个 `$SR_BUILD/offline/` 目录打 zip 或 rsync / scp / U 盘拷到目标服务器 → 按 `build-and-deploy.md` §5.2 导入。
-- **推内部镜像仓库（Harbor 等）**：见 `build-and-deploy.md` §4.4。
+- **离线 tar 传**：整个 `$SR_BUILD/offline/` 目录打 zip 或 rsync / scp / U 盘拷到目标服务器 → 按 `deploy-semantic-router.md` §5.2 导入。
+- **推内部镜像仓库（Harbor 等）**：见 `deploy-semantic-router.md` §4.4。
 
 ---
 
@@ -432,7 +433,7 @@ ls -lhS
 本手册只完成了**构建阶段**。真正把 SR 跑起来、接入后端、配置端口、验收冒烟：
 
 ```text
-看同目录下的 vLLM-Semantic-Router-build-and-deploy.md
+看同目录下的 deploy-semantic-router.md
       阅读 §5（部署运行）
            §6（后端连接：直连 vLLM / 经 VR / 外部 API）
            §7（端口占用与修改 / 防火墙放行）

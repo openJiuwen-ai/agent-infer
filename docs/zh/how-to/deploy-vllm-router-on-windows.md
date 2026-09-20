@@ -1,12 +1,12 @@
 # vLLM Router — 在 Windows（+ WSL2）上编译构建手册
 
-**文档版本**：v1.0　｜　**对应代码**：SR tag `v0.1.15` (<https://github.com/vllm-project/router/releases/tag/v0.1.15>)
+**文档版本**：v1.0　｜　**对应代码**：VR tag `v0.1.15` (<https://github.com/vllm-project/router/releases/tag/v0.1.15>)
 
-**适用场景**：你的主力工作机是 Windows，但需要为 Linux 目标服务器（x86 Ubuntu 或 arm64 openEuler）构建 SR 的 Docker 镜像。
+**适用场景**：你的主力工作机是 Windows，但需要为 Linux 目标服务器（x86 Ubuntu 或 arm64 openEuler）构建 VR 的 Docker 镜像。
 
 **交付形态**：**Docker 镜像**
 
-**部署运行不在本手册范围**：见主文档 [vLLM-Router-build-and-deploy.md](vLLM-Router-build-and-deploy.md) 第 8、9 节。
+**部署运行不在本手册范围**：见主文档 [deploy-vllm-router.md](deploy-vllm-router.md) 第 8、9 节。
 
 ---
 
@@ -95,9 +95,11 @@ docker run --rm --privileged tonistiigi/binfmt --install arm64
 cd E:\your-path\router
 ```
 
-所需文件（仓库内已备好，与主文档一致）：
+所需文件（在 `router` 源码目录内准备，与主文档一致）：
 
-- `Dockerfile.static`、`.dockerignore`、`Cargo.toml`（含 hf-hub 改动）、`Cargo.lock`、`src/`
+- `Dockerfile.static`、`.dockerignore`：按主文档第 4、6 节创建
+- `Cargo.toml`：应用主文档第 5 节的 hf-hub 依赖改动
+- `Cargo.lock`、`src/`：上游源码自带
 
 ---
 

@@ -1,8 +1,8 @@
 # vLLM Router — Linux 编译与部署手册
 
-**文档版本**：v1.0　｜　**对应代码**：SR tag `v0.1.15` (<https://github.com/vllm-project/router/releases/tag/v0.1.15>)
+**文档版本**：v1.0　｜　**对应代码**：VR tag `v0.1.15` (<https://github.com/vllm-project/router/releases/tag/v0.1.15>)
 
-**适用读者**：负责在 Linux 服务器（x86 Ubuntu 22.04/24.04 或 arm64 openEuler 内核 6.6 / glibc ≤ 2.38）上构建、交付并部署自编译 SR 的工程师。
+**适用读者**：负责在 Linux 服务器（x86 Ubuntu 22.04/24.04 或 arm64 openEuler 内核 6.6 / glibc ≤ 2.38）上构建、交付并部署自编译 VR 的工程师。
 
 **交付形态**：**Docker 镜像**（唯一部署形态，目标服务器零 Python/Go/Rust 工具链依赖）+ 配置模板 + 本手册。
 
@@ -126,13 +126,24 @@ git clone --depth 1 --branch v0.1.15 https://github.com/vllm-project/router.git
 cd router
 ```
 
-然后应用本仓库根目录已准备好的两个文件（相对上游 v0.1.15 的**全部改动**，详见第 5 节说明）：
+然后在 `router` 目录内准备以下改动（相对上游 v0.1.15 的**全部改动**，详见第 5、6 节）：
 
-- `Dockerfile.static` —— 静态构建用的 Dockerfile
-- `.dockerignore` —— 缩小构建上下文
-- `Cargo.toml` 中的一行依赖改动（hf-hub 的 feature 调整）
+- `Dockerfile.static` —— 静态构建用的 Dockerfile，完整内容见第 6 节，直接在 `router` 目录下创建
+- `.dockerignore` —— 缩小构建上下文，完整内容见下
+- `Cargo.toml` 中的一行依赖改动（hf-hub 的 feature 调整），见第 5 节
 
-> 如果直接使用本仓库目录（已含上述改动），跳过 clone，把整个目录拷到构建机即可（.git 目录可删）。
+`.dockerignore` 完整内容：
+
+```text
+.git
+.github
+target
+dist
+docs
+examples
+tests
+*.md
+```
 
 ---
 
@@ -160,7 +171,7 @@ cd router
 
 ## 6. Dockerfile.static
 
-（文件已放在仓库根目录，此处为完整内容备查）
+（在 `router` 目录下按以下完整内容创建 `Dockerfile.static`）
 
 ```dockerfile
 # syntax=docker/dockerfile:1
@@ -226,7 +237,7 @@ CMD ["--host", "0.0.0.0", "--port", "30000"]
 
 ## 7. 构建命令
 
-> 如需在单台 Windows 电脑上同时构建 amd64 + arm64（buildx + QEMU，无需 Linux 构建机），参见 vLLM-Router build-on-windows.md。
+> 如需在单台 Windows 电脑上同时构建 amd64 + arm64（buildx + QEMU，无需 Linux 构建机），参见 [deploy-vllm-router-on-windows.md](deploy-vllm-router-on-windows.md)。
 
 ### 7.1 x86_64 镜像（在 x86 构建机上，源码目录内执行）
 

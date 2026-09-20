@@ -16,6 +16,10 @@ user documentation lives under [`docs/`](../docs/README.md).
 - [Skills design](superpowers/specs/agentcache-skills-design.md)
 - [Skills implementation plan](superpowers/plans/agentcache-skills-implementation.md)
 
+## CI/CD
+
+- [CI quality gate and release guide (DRAFT, zh)](ci-cd-quality-gate-setup-guide.md)
+
 ## Maintenance Records
 
 - [CI and unit-test fixes](ci-ut-fixes.md)
