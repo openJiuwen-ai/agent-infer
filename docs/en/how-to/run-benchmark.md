@@ -1,7 +1,7 @@
 # Run a Benchmark
 
-This guide compares a cold upstream vLLM async scheduler with the AgentInfer Progress-TTL scheduler bridge using the
-same Claude Code workload. BenchKit records both arms through the same Request Proxy to avoid observation-path bias.
+This guide compares a cold upstream vLLM async scheduler with the AgentInfer Progress-TTL agent-aware scheduler using
+the same Claude Code workload. BenchKit records both arms through the same Request Proxy to avoid observation-path bias.
 
 ## Prepare the Environment
 

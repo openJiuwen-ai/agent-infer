@@ -39,21 +39,36 @@ has stopped.
 
 ## Start the AgentInfer Serving Path
 
-Start vLLM with the async bridge, both API middleware components, and the Progress-TTL controller factory:
+Start the AgentInfer serving path with a single flag:
 
 ```bash
-vllm serve meta-llama/Llama-3.1-8B-Instruct \
-  --async-scheduling \
-  --scheduler-cls agentinfer.agentcache.core.scheduler.AgentCacheAsyncSchedulerBridge \
-  --middleware agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware \
-  --middleware agentinfer.agentcache.core.api_adapter.AgentCacheLifecycleMiddleware \
-  --additional-config \
-  '{"agentcache":{"controller_factory":"agentinfer.agentcache.core.factory.build_progress_ttl_controller"}}'
+vllm serve meta-llama/Llama-3.1-8B-Instruct --agentinfer
 ```
+
+The flag takes over serve parsing, then dispatches upstream vLLM normally. The agent-aware scheduler follows the
+scheduling mode: pass `--no-async-scheduling` to serve synchronously with `AgentCacheSyncSchedulerBridge`.
+When `AGENTCACHE_VLLM_LIFECYCLE_SOCKET` is unset it defaults to `/tmp/agentinfer-vllm-lifecycle.sock`, or to the
+`agentcache.lifecycle_socket_path` from `--additional-config` when one is given (conflicting values are rejected);
+export a distinct socket per server instance on one host. The shim prints an `[agentinfer]` line to stderr showing the injected
+options, and `--agentinfer` cannot be combined with `--scheduler-cls`.
 
 Append standard vLLM options such as tensor parallelism, port selection, model-specific tool parsing, and Prefix Cache
 configuration as required by the deployment. See the
 [vLLM Quickstart](https://docs.vllm.ai/en/latest/getting_started/quickstart/) for upstream options.
+
+The explicit long form remains supported and enables fine-grained control (for example omitting the lifecycle
+middleware). The scheduler bridge builds the embedded Progress-TTL controller directly from
+`additional_config.agentcache`; there is no controller factory setting:
+
+```bash
+export AGENTCACHE_VLLM_LIFECYCLE_SOCKET=/tmp/agentinfer-vllm-lifecycle.sock
+
+vllm serve meta-llama/Llama-3.1-8B-Instruct \
+  --async-scheduling \
+  --scheduler-cls agentinfer.agentcache.core.scheduler.AgentCacheAsyncSchedulerBridge \
+  --middleware agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware \
+  --middleware agentinfer.agentcache.core.api_adapter.AgentCacheLifecycleMiddleware
+```
 
 ### Configure Progress-TTL policy values
 
@@ -63,7 +78,6 @@ deployment-calibrated values and the work-ahead starvation bound introduced by t
 ```bash
 --additional-config '{
   "agentcache": {
-    "controller_factory": "agentinfer.agentcache.core.factory.build_progress_ttl_controller",
     "progress_ttl": {
       "ttl_min_seconds": 0.05,
       "ttl_max_seconds": 32,
@@ -100,11 +114,10 @@ The policy rejects removed legacy keys instead of silently ignoring them. Replac
 AgentInfer installs a delegating `vllm` console script:
 
 - Explicit `vllm bench serve --agentinfer` commands enter AgentBench.
-- Other commands are delegated to upstream vLLM with AgentInfer's default scheduler unless `--scheduler-cls` is set.
-- An explicit `--scheduler-cls` is preserved, as in the serving command above.
-
-The legacy `AgentAwareScheduler` and `agentinfer.LLM` compatibility surfaces remain available, but they do not enable
-the explicit Progress-TTL serving path shown here.
+- `vllm serve MODEL --agentinfer` activates the AgentInfer serving path described above; the agent-aware scheduler
+  follows the explicit `--async-scheduling`/`--no-async-scheduling` choice.
+- Other commands are delegated to upstream vLLM unchanged.
+- An explicit `--scheduler-cls` is preserved in delegated commands, as in the long-form serving command above.
 
 ## Verify the Integration
 

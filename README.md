@@ -6,17 +6,18 @@ AgentInfer manages caches and schedules agent workflow requests in or in front o
 
 ## Core Features
 
-- Provides async and sync scheduler bridges for explicit AgentInfer integration with vLLM.
+- Provides async and sync agent-aware schedulers for explicit AgentInfer integration with vLLM.
 - Transports agent identity and lifecycle observations through dedicated API middleware.
 - Retains, pauses, and resumes agent programs with the embedded Progress-TTL controller.
 - Supports deployment as an in-engine scheduler or as a request router in front of serving engines.
 - Includes AgentBench for running and comparing reproducible agent workloads against vLLM deployments.
+- Provides a Router **native middleware patch** (not a vendored router tree) for `agent_hint_affinity` / `agent_hint_token_offsets`; see [`agentinfer/agentrouter`](agentinfer/agentrouter/README.md).
 
 ## Related Documentation
 
 [Documentation](docs/README.md) · [Quick start](docs/en/tutorial/01-quick-start.md) ·
 [vLLM integration](docs/en/how-to/integrate-vllm.md) · [Benchmark guide](docs/en/how-to/run-benchmark.md) ·
-[Changelog](CHANGELOG.md)
+[AgentRouter middleware patch](agentinfer/agentrouter/README.md) · [Changelog](CHANGELOG.md)
 
 ## Requirements
 
@@ -49,27 +50,20 @@ python -m pip install agentinfer-0.1.0-py3-none-any.whl
 
 ## Quick Start
 
-Choose a local Unix socket for API lifecycle signals, then start vLLM with the AgentInfer async scheduler bridge,
-identity and lifecycle middleware, and embedded Progress-TTL controller:
+Start the AgentInfer serving path with a single flag:
 
 ```bash
-export AGENTCACHE_VLLM_LIFECYCLE_SOCKET=/tmp/agentinfer-vllm-lifecycle.sock
-
-vllm serve meta-llama/Llama-3.1-8B-Instruct \
- --async-scheduling \
- --scheduler-cls agentinfer.agentcache.core.scheduler.AgentCacheAsyncSchedulerBridge \
- --middleware agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware \
- --middleware agentinfer.agentcache.core.api_adapter.AgentCacheLifecycleMiddleware \
- --additional-config \
- '{"agentcache":{"controller_factory":"agentinfer.agentcache.core.factory.build_progress_ttl_controller"}}'
+vllm serve meta-llama/Llama-3.1-8B-Instruct --agentinfer
 ```
 
+The lifecycle socket defaults to `/tmp/agentinfer-vllm-lifecycle.sock` when
+`AGENTCACHE_VLLM_LIFECYCLE_SOCKET` is unset; export a distinct socket per server instance on one host.
 The equivalent repository example is available at [`examples/serve-progress-ttl.sh`](examples/serve-progress-ttl.sh).
 
 The installed `vllm` command delegates ordinary commands to upstream vLLM. Explicit
-`vllm bench serve --agentinfer` commands enter AgentBench; other commands use AgentInfer's default scheduler unless
-`--scheduler-cls` is set explicitly. See the
-[vLLM Quickstart](https://docs.vllm.ai/en/latest/getting_started/quickstart/) for standard serving options.
+`vllm bench serve --agentinfer` commands enter AgentBench; `vllm serve MODEL --agentinfer` activates the
+AgentInfer serving path; other commands are delegated unchanged.
+See the [vLLM Quickstart](https://docs.vllm.ai/en/latest/getting_started/quickstart/) for standard serving options.
 
 ## License
 

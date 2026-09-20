@@ -61,7 +61,6 @@
         "agentcache": {
           "observability": {"enabled": true, "log_interval_seconds": 5},
           "backend_id": "replay-local-auto-prefix",
-          "controller_factory": "agentinfer.agentcache.core.factory.build_progress_ttl_controller",
           "schedule_interval_seconds": 3,
           "progress_ttl": {
             "mode": "auto",

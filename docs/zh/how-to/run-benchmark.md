@@ -1,7 +1,7 @@
 # 运行基准测试
 
 本指南使用同一批 Claude Code 工作负载，对比冷启动的上游 vLLM 异步调度器和 AgentInfer
-Progress-TTL 调度桥。BenchKit 通过相同的 Request Proxy 记录两个实验组，避免观测路径差异。
+Progress-TTL Agent 感知调度器。BenchKit 通过相同的 Request Proxy 记录两个实验组，避免观测路径差异。
 
 ## 准备环境
 

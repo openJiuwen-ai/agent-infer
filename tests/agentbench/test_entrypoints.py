@@ -19,6 +19,40 @@ def test_only_explicit_agentinfer_benchmark_is_intercepted() -> None:
     assert cli_main._is_bench_delegation(["vllm", "bench", "serve", "--agentcache", "--config", "c"]) is False
 
 
+def test_serve_takeover_detection_scope() -> None:
+    assert cli_main._serve_takeover_args(["vllm", "serve", "MODEL", "--agentinfer"]) == ["MODEL", "--agentinfer"]
+    assert cli_main._serve_takeover_args(["vllm", "serve", "--agentinfer", "MODEL"]) == ["--agentinfer", "MODEL"]
+    assert cli_main._serve_takeover_args(["/usr/bin/vllm", "serve", "MODEL", "--agentinfer"]) == [
+        "MODEL",
+        "--agentinfer",
+    ]
+    assert cli_main._serve_takeover_args(["vllm", "serve", "MODEL"]) is None
+    assert cli_main._serve_takeover_args(["vllm", "bench", "serve", "--agentinfer"]) is None
+    assert cli_main._serve_takeover_args(["vllm", "serve", "MODEL", "--agentinferx"]) is None
+
+
+def test_serve_takeover_conflict_exits_with_code_2(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def make_arg_parser(parser):
+        parser.add_argument("model_tag", nargs="?", default=None)
+        parser.add_argument("--scheduler-cls", dest="scheduler_cls", default=None)
+        return parser
+
+    cli_args = types.ModuleType("vllm.entrypoints.openai.cli_args")
+    cli_args.make_arg_parser = make_arg_parser
+    for name, module in {
+        "vllm": types.ModuleType("vllm"),
+        "vllm.entrypoints": types.ModuleType("vllm.entrypoints"),
+        "vllm.entrypoints.openai": types.ModuleType("vllm.entrypoints.openai"),
+        "vllm.entrypoints.openai.cli_args": cli_args,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+
+    assert cli_main.main(["vllm", "serve", "MODEL", "--agentinfer", "--scheduler-cls", "other.Other"]) == 2
+    assert "--scheduler-cls" in capsys.readouterr().err
+
+
 def test_delegated_argv_normalizes_implicit_and_explicit_commands() -> None:
     implicit, metadata = _normalize_delegated_argv(["vllm", "bench", "serve", "--agentinfer", "--config", "c"])
     explicit, _ = _normalize_delegated_argv(["vllm", "bench", "serve", "--agentinfer", "compare"])

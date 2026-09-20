@@ -16,6 +16,7 @@ user documentation lives under [`docs/`](../docs/README.md).
 - [Program state machine](module/scheduling/program-state-machine.md)
 - [Progress-TTL scheduling](module/scheduling/progress-ttl-scheduling.md)
 - [vLLM runtime integration](module/scheduling/vllm-runtime-integration.md)
+- [AgentInfer serve flag](module/scheduling/agentinfer-serve-flag.md) (draft)
 
 ## AgentCache Skills
 

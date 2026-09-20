@@ -22,7 +22,7 @@ AgentCacheAsyncSchedulerBridge <------------> Progress-TTL controller
 native vLLM waiting / running / KV state
 ```
 
-The current serving path explicitly composes the scheduler bridge, identity middleware, lifecycle middleware, and
+The current serving path explicitly composes the agent-aware scheduler, identity middleware, lifecycle middleware, and
 Progress-TTL controller. The controller decides when identified agent requests enter vLLM's native waiting queue.
 
 ## Explicit Serving Path
@@ -37,10 +37,10 @@ Each configured component owns a distinct boundary:
   `async_scheduling=true`.
 - `build_progress_ttl_controller` constructs the embedded scheduling policy from `additional_config.agentcache`.
 
-The lifecycle middleware requires `AGENTCACHE_VLLM_LIFECYCLE_SOCKET`. The bridge reads the same socket path from the
-environment unless `additional_config.agentcache.lifecycle_socket_path` overrides it.
+The lifecycle middleware requires `AGENTCACHE_VLLM_LIFECYCLE_SOCKET`. The agent-aware scheduler reads the same socket
+path from the environment unless `additional_config.agentcache.lifecycle_socket_path` overrides it.
 
-## Progress-TTL Scheduler Bridges
+## Progress-TTL Agent-Aware Schedulers
 
 `AgentCacheAsyncSchedulerBridge` and `AgentCacheSyncSchedulerBridge` connect vLLM to an
 `EmbeddedSchedulerController` through a composed helper. The controller:
@@ -56,22 +56,18 @@ AgentInfer consumes supported capacity and Prefix Cache observations without cre
 
 ## Lifecycle Boundary
 
-API middleware writes workflow lifecycle facts parsed after response completion to a Unix socket. Each scheduler
-bridge drains its local receiver before admission or strategy work and passes events to the controller. Configure the
+API middleware writes workflow lifecycle facts parsed after response completion to a Unix socket. Each agent-aware
+scheduler drains its local receiver before admission or strategy work and passes events to the controller. Configure the
 socket through `additional_config.agentcache.lifecycle_socket_path` or `AGENTCACHE_VLLM_LIFECYCLE_SOCKET`.
 
 This boundary prevents the HTTP layer from mutating scheduler objects directly and lets multi-process vLLM
 deployments consume events for the matching data-parallel rank.
 
-## CLI Delegation and Compatibility
+## CLI Delegation
 
 AgentInfer installs a `vllm` console script. Explicit `vllm bench serve --agentinfer` commands enter AgentBench; other
-commands delegate unchanged to upstream vLLM. Importing the AgentInfer package patches `EngineArgs` once, so an unset
-`scheduler_cls` defaults to the legacy `AgentAwareScheduler`, while an explicit scheduler is preserved.
-
-`AgentAwareScheduler`, `AgentAwareQueue`, and `agentinfer.LLM` remain FCFS-compatible extension surfaces. They do not
-enable the Progress-TTL controller. Current deployments should explicitly configure the appropriate scheduler bridge,
-middleware, and controller factory.
+commands delegate unchanged to upstream vLLM. Deployments enable agent-aware scheduling explicitly through
+`vllm serve MODEL --agentinfer` or the long-form scheduler and middleware options.
 
 ## Benchmark Subsystem
 

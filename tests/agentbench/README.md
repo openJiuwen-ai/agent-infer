@@ -35,7 +35,7 @@ Other CI environments should install Node.js before pytest for the same coverage
 
 `run-baseline-smoke.sh` validates one externally started vLLM baseline.
 `run-scheduler-e2e-compare.sh` cold-compares the upstream async scheduler and
-AgentInfer scheduler bridge. `run-router-e2e-compare.sh` exercises the candidate
+AgentInfer agent-aware scheduler. `run-router-e2e-compare.sh` exercises the candidate
 through a transparent Router configured as its backend endpoint; it uses no
 AgentBench Router control protocol. Both comparison scripts require explicit
 `REPO`, `VENV`, and `MODEL` values; use `TENSOR_PARALLEL_SIZE` and

@@ -2,15 +2,16 @@
 
 ## TRIGGER
 
-Applies to any diff that adds or modifies `*.py` under `src/` or `tests/`.
+Applies to any diff that adds or modifies `*.py` under `agentinfer/` or `tests/`.
 
-## CRITERION T1: cache mutations have a test
+## CRITERION T1: behavior changes have focused tests
 
 - **Severity:** blocker
-- **Check:** Any new/changed code path that writes to, evicts from, or
-  invalidates the cache has at least one test exercising that behaviour.
-- **Fix:** Add a test under `tests/` that drives the mutation and asserts
-  the observable effect.
+- **Check:** Any new or changed cache mutation, scheduling/admission decision,
+  lifecycle transition, request adaptation, or benchmark orchestration path has
+  a focused test exercising its observable behavior.
+- **Fix:** Add a test under the matching suite in `tests/` that drives the changed
+  path and asserts the observable effect.
 
 ## CRITERION T2: tests do not depend on ordering
 

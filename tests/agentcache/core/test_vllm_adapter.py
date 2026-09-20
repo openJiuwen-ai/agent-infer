@@ -13,11 +13,11 @@ from vllm.v1.engine import EngineCoreEvent, EngineCoreEventType
 from agentinfer.agentcache.core.scheduler import (
     AgentCacheAsyncSchedulerBridge,
     _metadata_from_request,
-    _resolve_object,
     _VllmAdmissionHooks,
 )
 from agentinfer.scheduling.backend import DispatchTarget
 from agentinfer.scheduling.request_pool import RequestPool, RequestPoolEntry
+from agentinfer.scheduling.runtime import ProgramScheduler
 
 pytestmark = pytest.mark.cpu_test
 
@@ -81,21 +81,37 @@ class _Controller:
 
 
 def build_test_controller(backend_pool_info, settings):
-    """Factory resolved by the bridge exactly as an installed controller would be."""
+    """Test double installed in place of the direct ``build_progress_ttl_controller`` call."""
     assert settings["backend_id"] == "vllm-local"
     return _Controller()
 
 
-def test_resolve_object_reports_controller_factory_module_import() -> None:
-    with pytest.raises(ImportError, match=r"controller_factory='missing_agentinfer_package\.module\.factory'"):
-        _resolve_object("missing_agentinfer_package.module.factory")
+def _patch_controller_build():
+    """Patch the bridge's direct controller build to install the test double."""
+    return patch("agentinfer.agentcache.core.scheduler.build_progress_ttl_controller", build_test_controller)
 
 
-def test_resolve_object_reports_missing_controller_factory_attribute() -> None:
-    path = f"{__name__}.missing_factory"
+def test_async_bridge_builds_progress_ttl_controller_directly() -> None:
+    config = SimpleNamespace(
+        scheduler_config=SimpleNamespace(async_scheduling=True),
+        parallel_config=SimpleNamespace(data_parallel_index=0),
+        additional_config={"agentcache": {"backend_id": "vllm-local"}},
+    )
 
-    with pytest.raises(AttributeError, match=rf"controller_factory='{path}'"):
-        _resolve_object(path)
+    def initialize(scheduler, *args, **kwargs) -> None:
+        scheduler.waiting = []
+        scheduler.running = []
+        scheduler.skipped_waiting = []
+        scheduler.requests = {}
+        scheduler.kv_cache_manager = None
+
+    with (
+        patch.object(AsyncScheduler, "__init__", initialize),
+        patch.object(Scheduler, "get_request_counts", return_value=(0, 0)),
+    ):
+        bridge = AgentCacheAsyncSchedulerBridge(config, SimpleNamespace(num_blocks=10), object(), 16, 16)
+
+    assert isinstance(bridge._agentcache.controller, ProgramScheduler)
 
 
 def test_metadata_from_request_parses_claude_headers_without_extra_args() -> None:
@@ -135,7 +151,6 @@ def test_async_bridge_retains_then_releases_to_native_waiting() -> None:
         additional_config={
             "agentcache": {
                 "backend_id": "vllm-local",
-                "controller_factory": f"{__name__}.build_test_controller",
             }
         },
     )
@@ -161,6 +176,7 @@ def test_async_bridge_retains_then_releases_to_native_waiting() -> None:
         events=[],
     )
     with (
+        _patch_controller_build(),
         patch.object(AsyncScheduler, "__init__", initialize),
         patch.object(Scheduler, "add_request", native_add),
         patch.object(Scheduler, "get_request_counts", return_value=(0, 0)),
@@ -346,7 +362,6 @@ def test_async_bridge_reports_native_abort_as_completion_without_failure_semanti
         additional_config={
             "agentcache": {
                 "backend_id": "vllm-local",
-                "controller_factory": f"{__name__}.build_test_controller",
             }
         },
     )
@@ -359,6 +374,7 @@ def test_async_bridge_reports_native_abort_as_completion_without_failure_semanti
         scheduler.requests = {"request-1": native_request}
 
     with (
+        _patch_controller_build(),
         patch.object(AsyncScheduler, "__init__", initialize),
         patch.object(
             Scheduler,
