@@ -10,6 +10,7 @@ to the benchmark request proxy through an OpenAI-compatible provider route.
 """
 
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -17,6 +18,8 @@ import yaml
 
 from .bridge import AGENTBENCH_BRIDGE
 from .hmr_stub import AGENTBENCH_HMR_STUB
+
+logger = logging.getLogger(__name__)
 
 HOME_DIR_NAME = "dsh-home"
 SETTINGS_FILENAME = "settings.yaml"
@@ -104,10 +107,10 @@ class DshInstance:
         # row: that entry is already disabled, so a stub there never apply()s
         # and runProfile still loader.create()s the real HMR module.
         hmr_stub_name = str(self.hmr_stub_path).replace("\\", "/")
-        hmr_stub_patch = (
-            "\n- insert:\n"
-            "    - id: agentbench-hmr-stub\n"
-            f"      name: {hmr_stub_name}\n"
+        hmr_stub_patch = f"\n- insert:\n    - id: agentbench-hmr-stub\n      name: {hmr_stub_name}\n"
+        logger.debug(
+            "AgentBench HMR stub injected (plugin id=agentbench-hmr-stub, path=%s)",
+            hmr_stub_name,
         )
         bridge_name = str(self.bridge_path).replace("\\", "/")
         bridge_patch = (
