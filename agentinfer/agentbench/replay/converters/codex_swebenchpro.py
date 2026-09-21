@@ -23,11 +23,11 @@ from typing import Protocol
 import httpx
 
 from ..config import ReplayBenchConfig
+from ..local_tokenizer import LocalTokenizerCounter, discover_local_tokenizer
 from ..tokenizer_retry import TOKENIZER_REQUEST_MAX_ATTEMPTS, TOKENIZER_RETRY_BACKOFF_SECONDS
 from ..unified_trace_ir import write_trace_ir_manifest
 from .base import ConverterSummary, ReplayDatasetConverter
 
-_CONVERTER_VERSION = "agentinfer-codex-swebenchpro/v3"
 logger = logging.getLogger(__name__)
 
 
@@ -119,8 +119,8 @@ class _TraceTokenizer(Protocol):
 
         ...
 
-    def trace_turn_tokens(self, completed_tokens: int, human: str, assistant: str) -> tuple[int, int]:
-        """Return current input tokens and the updated completed transcript count."""
+    def input_tokens(self, messages: list[dict[str, str]]) -> int:
+        """Count one complete conversation using the Backend chat template."""
 
         ...
 
@@ -131,6 +131,7 @@ class _BackendTokenizer:
     def __init__(self, config: ReplayBenchConfig) -> None:
         self.model = config.backend.model
         self.base_url = config.backend.resolved_tokenizer_base_url.rstrip("/")
+        self.chat_template_kwargs = dict(config.backend.chat_template_kwargs)
         headers = {}
         if config.backend.api_key_env:
             headers["authorization"] = f"Bearer {os.environ[config.backend.api_key_env]}"
@@ -140,10 +141,14 @@ class _BackendTokenizer:
             trust_env=False,
         )
         self._count_cache: dict[bytes, int] = {}
+        self.tokenizer_operations = 0
         try:
-            self.generation_prefix_tokens = self._count("<|im_start|>assistant\n")
-            self._validate_chat_template()
-        except BaseException:
+            self.local_tokenizer: LocalTokenizerCounter | None = discover_local_tokenizer(
+                config,
+                get_json=self._get_json,
+                backend_tokens=self._request_tokens,
+            )
+        except Exception:
             self.client.close()
             raise
 
@@ -152,9 +157,10 @@ class _BackendTokenizer:
 
         self.client.close()
 
-    def _request_count(self, payload: dict[str, object]) -> int:
-        """Count tokens, retrying transport failures but not invalid responses."""
+    def _request(self, payload: dict[str, object]) -> dict[str, object]:
+        """Tokenize one payload, retrying transport failures but not invalid responses."""
 
+        self.tokenizer_operations += 1
         for attempt in range(1, TOKENIZER_REQUEST_MAX_ATTEMPTS + 1):
             try:
                 response = self.client.post(
@@ -176,6 +182,12 @@ class _BackendTokenizer:
                 time.sleep(delay)
         response.raise_for_status()
         response_body = response.json()
+        if not isinstance(response_body, dict):
+            raise ValueError("Backend /tokenize response must be an object")
+        return response_body
+
+    def _request_count(self, payload: dict[str, object]) -> int:
+        response_body = self._request(payload)
         count = response_body.get("count")
         if isinstance(count, int) and not isinstance(count, bool):
             return count
@@ -183,6 +195,22 @@ class _BackendTokenizer:
         if isinstance(tokens, list):
             return len(tokens)
         raise ValueError("Backend /tokenize response contains neither count nor tokens")
+
+    def _request_tokens(self, payload: dict[str, object]) -> tuple[int, ...] | None:
+        tokens = self._request(payload).get("tokens")
+        if not isinstance(tokens, list) or not all(isinstance(token, int) for token in tokens):
+            return None
+        return tuple(tokens)
+
+    def _get_json(self, url: str) -> dict[str, object] | None:
+        try:
+            response = self.client.get(url)
+            if response.status_code != 200:
+                return None
+            payload = response.json()
+            return payload if isinstance(payload, dict) else None
+        except (AttributeError, httpx.HTTPError, ValueError):
+            return None
 
     def _count(self, text: str) -> int:
         cache_key = hashlib.sha256(text.encode()).digest()
@@ -192,44 +220,31 @@ class _BackendTokenizer:
             self._count_cache[cache_key] = count
         return count
 
-    def _validate_chat_template(self) -> None:
-        messages = [
-            {"role": "user", "content": "agentinfer template probe"},
-            {"role": "assistant", "content": "probe response"},
-            {"role": "user", "content": "next probe"},
-        ]
-        complete_count = self._request_count(
-            {
-                "messages": messages,
-                "add_generation_prompt": True,
-            }
-        )
-        incremental_count = (
-            self._wire_chunk_tokens("user", "agentinfer template probe")
-            + self._wire_chunk_tokens("assistant", "probe response")
-            + self._wire_chunk_tokens("user", "next probe")
-            + self.generation_prefix_tokens
-        )
-        if complete_count != incremental_count:
-            raise ValueError(
-                "Backend tokenizer chat template is incompatible with the audited incremental Qwen ChatML layout"
-            )
-
-    def _wire_chunk_tokens(self, role: str, text: str) -> int:
-        return self._count(f"<|im_start|>{role}\n{text}<|im_end|>\n")
-
     def content_tokens(self, text: str) -> int:
-        """Count raw content through the Backend tokenizer endpoint."""
+        """Count raw content locally when validated, otherwise through the Backend."""
 
+        if self.local_tokenizer is not None:
+            return self.local_tokenizer.content_tokens(text)
         return self._count(text)
 
-    def trace_turn_tokens(self, completed_tokens: int, human: str, assistant: str) -> tuple[int, int]:
-        """Increment the audited Qwen ChatML transcript using Backend counts."""
+    def input_tokens(self, messages: list[dict[str, str]]) -> int:
+        """Count a conversation with the configured model's validated chat template."""
 
-        user_tokens = self._wire_chunk_tokens("user", human)
-        input_tokens = completed_tokens + user_tokens + self.generation_prefix_tokens
-        completed_tokens += user_tokens + self._wire_chunk_tokens("assistant", assistant)
-        return input_tokens, completed_tokens
+        if self.local_tokenizer is not None:
+            return self.local_tokenizer.input_tokens(list(messages))
+        payload: dict[str, object] = {
+            "messages": list(messages),
+            "add_generation_prompt": True,
+        }
+        if self.chat_template_kwargs:
+            payload["chat_template_kwargs"] = self.chat_template_kwargs
+        return self._request_count(payload)
+
+    @property
+    def counting_mode(self) -> str:
+        if self.local_tokenizer is None:
+            return "backend"
+        return "local_incremental" if self.local_tokenizer.incremental else "local_full_chat"
 
 
 class CodexSwebenchProConverter(ReplayDatasetConverter):
@@ -240,7 +255,6 @@ class CodexSwebenchProConverter(ReplayDatasetConverter):
     """
 
     name = "codex_swebenchpro"
-    version = _CONVERTER_VERSION
 
     def __init__(self, tokenizer: _TraceTokenizer) -> None:
         """Create a converter with an explicit token-accounting provider."""
@@ -283,7 +297,7 @@ class CodexSwebenchProConverter(ReplayDatasetConverter):
                 session_id = f"codex-session-{session_index:04d}"
                 session_dir = text_root / session_id
                 session_dir.mkdir()
-                completed_tokens = 0
+                messages: list[dict[str, str]] = []
                 for turn_index in range(len(conversations) // 2):
                     human = conversations[turn_index * 2]
                     assistant = conversations[turn_index * 2 + 1]
@@ -298,14 +312,12 @@ class CodexSwebenchProConverter(ReplayDatasetConverter):
 
                     text_path = session_dir / f"turn_{turn_index}.txt"
                     text_path.write_text(human_text, encoding="utf-8")
-                    input_tokens, completed_tokens = self.tokenizer.trace_turn_tokens(
-                        completed_tokens,
-                        human_text,
-                        assistant_text,
-                    )
+                    messages.append({"role": "user", "content": human_text})
+                    input_tokens = self.tokenizer.input_tokens(messages)
                     output_tokens = self.tokenizer.content_tokens(assistant_text)
                     if input_tokens <= 0 or output_tokens <= 0:
                         raise ValueError(f"{session_id} turn {turn_index} produced a non-positive token count")
+                    messages.append({"role": "assistant", "content": assistant_text})
                     synthetic = base_time + timedelta(microseconds=turn_index)
                     row = {
                         "request_id": f"{session_id}-turn-{turn_index:04d}",
@@ -332,11 +344,12 @@ class CodexSwebenchProConverter(ReplayDatasetConverter):
         summary_payload = {
             **summary.to_dict(),
             "source_records_consumed": session_count,
+            "tokenizer_counting_mode": getattr(self.tokenizer, "counting_mode", "custom"),
+            "tokenizer_operations": getattr(self.tokenizer, "tokenizer_operations", None),
         }
         write_trace_ir_manifest(
             output_dir,
             converter_name=self.name,
-            converter_version=self.version,
             source_path=source,
             summary=summary_payload,
         )

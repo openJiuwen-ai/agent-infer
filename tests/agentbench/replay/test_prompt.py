@@ -131,6 +131,68 @@ def test_tokenizer_count_does_not_retry_http_status_error() -> None:
     sleep.assert_not_awaited()
 
 
+def test_tokenizer_count_forwards_chat_template_kwargs() -> None:
+    captured: dict[str, object] = {}
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={"count": 12})
+
+    async def count() -> int:
+        config = ReplayBenchConfig.model_validate(
+            {
+                "backend": {
+                    "endpoint": "/v1/chat/completions",
+                    "chat_template_kwargs": {"enable_thinking": False, "clear_thinking": True},
+                },
+                "replay": {"trace_path": "source.jsonl"},
+            }
+        )
+        tokenizer = TokenizerClient(config)
+        await tokenizer.client.aclose()
+        tokenizer.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+        try:
+            return await tokenizer.count(SyntheticPrompt("", (), ({"role": "user", "content": "hello"},)))
+        finally:
+            await tokenizer.close()
+
+    assert asyncio.run(count()) == 12
+    assert captured["chat_template_kwargs"] == {"enable_thinking": False, "clear_thinking": True}
+
+
+def test_tokenizer_client_reuses_validated_local_counter() -> None:
+    calls: list[list[dict[str, object]]] = []
+
+    def chat_token_ids(messages: list[dict[str, object]], *, tools=None) -> tuple[int, ...]:
+        calls.append(messages)
+        return tuple(range(42))
+
+    local = SimpleNamespace(
+        chat_token_ids=chat_token_ids,
+        text_token_ids=lambda text: (1, 2),
+        detokenize_tokens=lambda tokens: "decoded",
+    )
+    config = ReplayBenchConfig.model_validate(
+        {
+            "backend": {"endpoint": "/v1/chat/completions", "model": "local-model"},
+            "replay": {"trace_path": "source.jsonl"},
+        }
+    )
+
+    async def exercise() -> tuple[int, tuple[int, ...], str]:
+        tokenizer = TokenizerClient(config, local)  # type: ignore[arg-type]
+        try:
+            count = await tokenizer.count(SyntheticPrompt("", (), ({"role": "user", "content": "hello"},)))
+            token_ids = await tokenizer.text_token_ids("text")
+            decoded = await tokenizer.detokenize_tokens([1, 2])
+            return count, token_ids, decoded
+        finally:
+            await tokenizer.close()
+
+    assert asyncio.run(exercise()) == (42, (1, 2), "decoded")
+    assert calls == [[{"role": "user", "content": "hello"}]]
+
+
 def test_lead_title_name_and_main_build_distinct_prompt_shapes() -> None:
     async def build() -> tuple[object, object, object]:
         builder = PromptBuilder(_config(), _Tokenizer())  # type: ignore[arg-type]

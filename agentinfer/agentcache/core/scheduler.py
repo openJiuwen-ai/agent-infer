@@ -1,15 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentCache project
-"""Packaged vLLM scheduler compatibility and explicit AgentCache admission bridges.
+"""Explicit AgentCache admission bridges for vLLM.
 
-The packaged ``AgentAwareScheduler`` preserves the existing FCFS-compatible extension point. Progress-TTL instead
-uses the explicit async or sync bridge and a composed helper, while native waiting/running/KV state and every
-token-level scheduling operation remain owned by vLLM.
+Progress-TTL uses the explicit async or sync bridge and a composed helper, while native waiting/running/KV state and
+every token-level scheduling operation remain owned by vLLM.
 """
 
 from __future__ import annotations
 
-import importlib
 import logging
 import math
 import os
@@ -23,7 +21,7 @@ from vllm.v1.engine import EngineCoreEventType
 from vllm.v1.request import Request, RequestStatus
 
 from agentinfer.agentcache.core.api_adapter import LIFECYCLE_SOCKET_ENV, UnixLifecycleReceiver
-from agentinfer.agentcache.core.request_queue import AgentAwareQueue
+from agentinfer.agentcache.core.controller import build_progress_ttl_controller
 from agentinfer.agentcache.core.vllm_logging import attach_agentinfer_to_vllm_logging
 from agentinfer.scheduling.backend import BackendInfo, BackendPoolInfo, DispatchTarget, DpRankInfo
 from agentinfer.scheduling.identity import AgentIdentity, JsonMapping, JsonObject, parse_agent_identity
@@ -31,15 +29,6 @@ from agentinfer.scheduling.lifecycle import ProgramLifecycle
 from agentinfer.scheduling.request_pool import RequestPoolEntry, RetainedRequestT
 
 logger = logging.getLogger(__name__)
-
-
-class AgentAwareScheduler(Scheduler):
-    """Preserve the packaged AgentAwareQueue scheduler extension point."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.waiting = AgentAwareQueue()
-        logger.warning("AgentAwareQueue initialized as waiting queue")
 
 
 class EmbeddedSchedulerController(Protocol[RetainedRequestT]):
@@ -103,9 +92,6 @@ class EmbeddedSchedulerController(Protocol[RetainedRequestT]):
         """Remove and return a request retained before native admission."""
 
 
-ControllerFactory = Callable[[BackendPoolInfo, JsonMapping], EmbeddedSchedulerController[Request]]
-
-
 class _VllmAdmissionHooks:
     """Composition helper shared by the two single-inheritance native bridges."""
 
@@ -137,27 +123,18 @@ class _VllmAdmissionHooks:
         self.tracked_native: set[str] = set()
         self._local_prefix_observations: dict[str, tuple[int, int]] = {}
         self._prefix_refresh_pending = False
-        self.controller: EmbeddedSchedulerController[Request] | None = None
+        self.controller = build_progress_ttl_controller(self.backend_pool_info(owner), settings)
+        self._install_prefix_lookup_observer(owner)
         self.lifecycle_receiver: UnixLifecycleReceiver | None = None
-        factory_path = settings.get("controller_factory")
-        if factory_path is not None:
-            if not isinstance(factory_path, str) or not factory_path:
-                raise ValueError("agentcache.controller_factory must be a non-empty import path")
-            factory = cast(ControllerFactory, _resolve_object(factory_path))
-            self.controller = factory(self.backend_pool_info(owner), settings)
-            self._install_prefix_lookup_observer(owner)
-            socket_path = settings.get("lifecycle_socket_path") or os.environ.get(LIFECYCLE_SOCKET_ENV)
-            if socket_path is not None:
-                if not isinstance(socket_path, str) or not socket_path:
-                    raise ValueError("agentcache.lifecycle_socket_path must be a non-empty string")
-                self.lifecycle_receiver = UnixLifecycleReceiver(socket_path, self.dp_rank)
+        socket_path = settings.get("lifecycle_socket_path") or os.environ.get(LIFECYCLE_SOCKET_ENV)
+        if socket_path is not None:
+            if not isinstance(socket_path, str) or not socket_path:
+                raise ValueError("agentcache.lifecycle_socket_path must be a non-empty string")
+            self.lifecycle_receiver = UnixLifecycleReceiver(socket_path, self.dp_rank)
 
     def add_request(self, owner: Scheduler, request: Request, native_add: Callable[[Request], None]) -> None:
         """Retain agentic work or pass compatibility traffic directly to vLLM."""
         self._drain_lifecycle_signals()
-        if self.controller is None:
-            native_add(request)
-            return
         metadata = _metadata_from_request(request)
         if metadata is None:
             native_add(request)
@@ -177,8 +154,6 @@ class _VllmAdmissionHooks:
     def before_schedule(self, owner: Scheduler, native_add: Callable[[Request], None]) -> None:
         """Run one AgentCache cycle and transfer admitted requests to native waiting."""
         self._drain_lifecycle_signals()
-        if self.controller is None:
-            return
         now = time.monotonic()
         self.controller.run_due_lightweight_checks(now)
         needs_cycle = self.controller.needs_schedule_cycle(now)
@@ -223,8 +198,6 @@ class _VllmAdmissionHooks:
         ``segment_share_tokens`` intentionally records all immediately reusable prefix tokens without attempting to
         distinguish residual self KV from another Program's shared prefix.
         """
-        if self.controller is None:
-            return
         kv_cache_manager = getattr(owner, "kv_cache_manager", None)
         prefix_lookup_enabled = getattr(kv_cache_manager, "prefix_cache_lookup_enabled", None)
         coordinator = getattr(kv_cache_manager, "coordinator", None)
@@ -253,8 +226,6 @@ class _VllmAdmissionHooks:
         token_counts_before_update: Mapping[str, tuple[int, int]],
     ) -> None:
         """Publish token deltas and terminal facts after native state is consistent."""
-        if self.controller is None:
-            return
         completed_request = False
         for batch in outputs.values():
             for output in getattr(batch, "outputs", ()):
@@ -283,8 +254,6 @@ class _VllmAdmissionHooks:
 
     def observe_prefix_cache(self, scheduler_output: object) -> None:
         """Forward vLLM's post-prefix-lookup computed-token boundary without touching KV ownership."""
-        if self.controller is None:
-            return
         for request in getattr(scheduler_output, "scheduled_new_reqs", ()):
             request_id = str(getattr(request, "req_id", ""))
             if request_id in self.tracked_native:
@@ -303,8 +272,6 @@ class _VllmAdmissionHooks:
 
     def cancel_retained(self, request_ids: str | Iterable[str] | None) -> list[tuple[str, int]]:
         """Cancel attempts that have not entered native vLLM yet."""
-        if self.controller is None:
-            return []
         normalized = (
             self.controller.retained_request_ids
             if request_ids is None
@@ -335,12 +302,11 @@ class _VllmAdmissionHooks:
             if request_id in self.tracked_native
         }
         native = native_finish(normalized_request_ids, finished_status)
-        if self.controller is not None:
-            for request_id, _ in native:
-                if request_id in self.tracked_native:
-                    self.controller.on_request_completion(request_id, token_counts.get(request_id, 0))
-                    self.tracked_native.discard(request_id)
-                    self._local_prefix_observations.pop(request_id, None)
+        for request_id, _ in native:
+            if request_id in self.tracked_native:
+                self.controller.on_request_completion(request_id, token_counts.get(request_id, 0))
+                self.tracked_native.discard(request_id)
+                self._local_prefix_observations.pop(request_id, None)
         return retained + native
 
     def _install_prefix_lookup_observer(self, owner: Scheduler) -> None:
@@ -354,14 +320,15 @@ class _VllmAdmissionHooks:
             return
 
         def observed_get_computed_blocks(request: Request):
-            computed_blocks, cached_tokens = native_get_computed_blocks(request)
+            computed = native_get_computed_blocks(request)
+            computed_blocks, cached_tokens = computed[0], computed[1]
             if request.request_id in self.tracked_native:
                 cached = max(0, int(cached_tokens))
                 self._local_prefix_observations[request.request_id] = (
                     cached,
                     self._ref_count_shared_tokens(computed_blocks, cached),
                 )
-            return computed_blocks, cached_tokens
+            return computed
 
         observed_get_computed_blocks._agentinfer_prefix_lookup_observer = True
         kv_cache_manager.get_computed_blocks = observed_get_computed_blocks
@@ -382,8 +349,7 @@ class _VllmAdmissionHooks:
 
     def unfinished_count(self, native_count: int) -> int:
         """Merge retained and native liveness without exposing request objects to EngineCore."""
-        retained = self.controller.retained_request_count if self.controller is not None else 0
-        return native_count + retained
+        return native_count + self.controller.retained_request_count
 
     def backend_pool_info(self, owner: Scheduler) -> BackendPoolInfo:
         """Build rank-local logical KV-token and request-load facts from native vLLM state."""
@@ -443,7 +409,7 @@ class _VllmAdmissionHooks:
 
     def _drain_lifecycle_signals(self) -> None:
         """Apply API-derived lifecycle facts before any new admission or periodic decision."""
-        if self.controller is None or self.lifecycle_receiver is None:
+        if self.lifecycle_receiver is None:
             return
         for signal in self.lifecycle_receiver.receive():
             released = self.controller.on_response_completion(signal.program_id, signal.lifecycle)
@@ -470,16 +436,13 @@ class AgentCacheAsyncSchedulerBridge(AsyncScheduler):
     def add_request(self, request: Request) -> None:
         self._agentcache.add_request(self, request, super().add_request)
 
-    def schedule(self):
-        if self._agentcache.controller is not None:
-            self._agentcache.before_schedule(self, super().add_request)
-        output = super().schedule()
+    def schedule(self, *args, **kwargs):
+        self._agentcache.before_schedule(self, super().add_request)
+        output = super().schedule(*args, **kwargs)
         self._agentcache.observe_prefix_cache(output)
         return output
 
     def update_from_output(self, scheduler_output, model_runner_output):
-        if self._agentcache.controller is None:
-            return super().update_from_output(scheduler_output, model_runner_output)
         before = {
             request_id: (request.num_tokens, request.num_output_tokens)
             for request_id in model_runner_output.req_ids
@@ -490,13 +453,9 @@ class AgentCacheAsyncSchedulerBridge(AsyncScheduler):
         return outputs
 
     def finish_requests(self, request_ids, finished_status: RequestStatus):
-        if self._agentcache.controller is None:
-            return super().finish_requests(request_ids, finished_status)
         return self._agentcache.finish_requests(self, request_ids, finished_status, super().finish_requests)
 
     def get_num_unfinished_requests(self) -> int:
-        if self._agentcache.controller is None:
-            return super().get_num_unfinished_requests()
         return self._agentcache.unfinished_count(super().get_num_unfinished_requests())
 
 
@@ -515,16 +474,13 @@ class AgentCacheSyncSchedulerBridge(Scheduler):
     def add_request(self, request: Request) -> None:
         self._agentcache.add_request(self, request, super().add_request)
 
-    def schedule(self):
-        if self._agentcache.controller is not None:
-            self._agentcache.before_schedule(self, super().add_request)
-        output = super().schedule()
+    def schedule(self, *args, **kwargs):
+        self._agentcache.before_schedule(self, super().add_request)
+        output = super().schedule(*args, **kwargs)
         self._agentcache.observe_prefix_cache(output)
         return output
 
     def update_from_output(self, scheduler_output, model_runner_output):
-        if self._agentcache.controller is None:
-            return super().update_from_output(scheduler_output, model_runner_output)
         before = {
             request_id: (request.num_tokens, request.num_output_tokens)
             for request_id in model_runner_output.req_ids
@@ -535,13 +491,9 @@ class AgentCacheSyncSchedulerBridge(Scheduler):
         return outputs
 
     def finish_requests(self, request_ids, finished_status: RequestStatus):
-        if self._agentcache.controller is None:
-            return super().finish_requests(request_ids, finished_status)
         return self._agentcache.finish_requests(self, request_ids, finished_status, super().finish_requests)
 
     def get_num_unfinished_requests(self) -> int:
-        if self._agentcache.controller is None:
-            return super().get_num_unfinished_requests()
         return self._agentcache.unfinished_count(super().get_num_unfinished_requests())
 
 
@@ -554,20 +506,3 @@ def _metadata_from_request(request: Request) -> AgentIdentity | None:
         vllm_xargs=cast(JsonObject, extra_args) if isinstance(extra_args, dict) else None,
         headers=headers,
     )
-
-
-def _resolve_object(path: str) -> object:
-    """Resolve one explicit ``module.attribute`` factory path."""
-    module_name, separator, attribute = path.rpartition(".")
-    if not separator:
-        raise ValueError("controller_factory must use module.attribute form")
-    try:
-        module = importlib.import_module(module_name)
-    except ImportError as exc:
-        raise ImportError(
-            f"failed to import controller factory module {module_name!r} from controller_factory={path!r}"
-        ) from exc
-    try:
-        return getattr(module, attribute)
-    except AttributeError as exc:
-        raise AttributeError(f"controller_factory={path!r} does not define attribute {attribute!r}") from exc

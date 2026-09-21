@@ -11,6 +11,13 @@ Replay 从请求 trace 恢复会话、Agent、请求依赖、间隔和 token 目
 `agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware`，以传递身份和采样参数。
 具体服务参数见[接入 vLLM](integrate-vllm.md)。
 
+Inferact 转换会从 `/v1/models` 和可选的 `/tokenizer_info` 发现后端 tokenizer。若同机存在对应
+tokenizer 文件，并且本地与后端的原始文本和聊天模板 token ID 探针完全一致，转换和回放校准会使用
+本地 tokenizer；仅在加性探测通过且消息数为已探测的 1、3、5、9 时采用增量计数，其他长度及
+运行期校准始终计算完整聊天模板。无法发现或验证
+本地 tokenizer 时自动回退到 `/tokenize`。vLLM 需使用 `--enable-tokenizer-info-endpoint` 才会提供
+`/tokenizer_info`；服务端覆盖 chat template 时建议启用该端点。
+
 ## 回放内置样例
 
 在仓库根目录执行，使用实际后端模型名替换 `MODEL_NAME`：
@@ -43,6 +50,27 @@ vllm bench serve --agentinfer replay \
 完整字段、默认值和约束见[Replay 配置模型](../../../agentinfer/agentbench/replay/config.py)与
 [示例 YAML](../../../agentinfer/agentbench/configs/replay_benchmark.yaml)。运行
 `vllm bench serve --agentinfer replay --help` 查看支持的 CLI 覆盖参数。
+
+### 保留实时回答并对齐输入长度
+
+Inferact `trace_record` 模式默认冻结已发送的历史消息（包括旧 filler），并原样保留实时 assistant
+正文和独立的 `reasoning_content`。最新 user 消息不足目标长度时追加确定性 filler；超出目标时仅
+裁剪该条源文本的尾部，再重新分词修正边界误差。裁剪按字符边界进行，不删除历史消息。
+`context_adjustment_mode` 的历史裁剪和重置规则不适用于这一校准路径。
+
+Inferact 默认且始终要求每个成功请求的输入 token 数精确匹配计划，无需增加模式或容差配置。
+非零 `prompt_calibration_tolerance_tokens` 会在 Inferact 配置加载时报错。请删除旧配置中的非零设置，
+或显式设为零；合成提示词仍支持配置容差。
+
+若最新 user 没有任何前缀能满足目标上限、有限次后缀修复无法精确命中目标，或 token ID 校验发现校准改变了
+原始/空 user 两种模板共有的前缀，请求会在发送前失败。推理响应缺少 `usage.prompt_tokens` 或
+实际输入与目标不一致时，该请求也标记失败，依赖它的后续请求跳过。不会通过缩减历史来强行对齐。
+
+`replay-execution.json` 中每轮校准记录包含 `trimmed_current_user_tokens`、
+`trimmed_current_user_characters`、`preserved_prefix_tokens` 和 `backend_input_residual_tokens`。
+当前源文本的裁剪不会计入 `trimmed_filler_tokens`。
+`trace-record-validation.json` 的 `input_length_comparable` 只有在全部计划请求成功且后端 usage
+均精确匹配计划时才为真；这是输入长度检查，不能保证 Prefix Cache 命中一致或真实任务语义不受裁剪影响。
 
 ## 检查和比较结果
 

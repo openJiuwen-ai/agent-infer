@@ -29,6 +29,8 @@ class TransportResult:
     finished_clock: float
     status_code: int | None
     error: str | None
+    assistant_reasoning_content: str | None = None
+    input_tokens: int | None = None
 
 
 class ReplayTransport:
@@ -59,6 +61,7 @@ class ReplayTransport:
         ttft: float | None = None
         usage: dict[str, int] = {}
         content: list[str] = []
+        reasoning: list[str] | None = [] if self.config.replay.prompt_shape == "trace_record" else None
         try:
             async with self.client.stream(
                 "POST",
@@ -77,14 +80,28 @@ class ReplayTransport:
                         if not raw or raw == "[DONE]":
                             continue
                         payload = json.loads(raw)
-                        delta = self._observe(payload, usage)
-                        if delta:
+                        reasoning_size = len(reasoning) if reasoning is not None else 0
+                        delta = self._observe(payload, usage, reasoning)
+                        if delta or (reasoning is not None and len(reasoning) > reasoning_size):
                             if ttft is None:
                                 ttft = time.monotonic() - started_clock
+                        if delta:
                             content.append(delta)
         except (httpx.HTTPError, json.JSONDecodeError) as exc:
             error = f"{type(exc).__name__}: {exc}"
 
+        if (
+            error is None
+            and status_code is not None
+            and status_code < 400
+            and self.config.replay.prompt_shape == "trace_record"
+        ):
+            actual = usage.get("input_tokens")
+            target = node.planned_input_tokens
+            if actual is None:
+                error = "Current-turn input verification failed: Backend usage.prompt_tokens is missing"
+            elif actual != target:
+                error = f"Current-turn input verification failed: actual={actual} target={target}; exact count required"
         finished_clock = time.monotonic()
         success = status_code is not None and status_code < 400 and error is None
         self.writer.submit(
@@ -110,7 +127,15 @@ class ReplayTransport:
                 request_purpose=node.prompt_kind,
             )
         )
-        return TransportResult(success, "".join(content), finished_clock, status_code, error)
+        return TransportResult(
+            success,
+            "".join(content),
+            finished_clock,
+            status_code,
+            error,
+            "".join(reasoning) if reasoning else None,
+            usage.get("input_tokens"),
+        )
 
     def _headers(self, task: ReplayTaskPlan, node: ReplayPlanNode) -> dict[str, str]:
         headers = {
@@ -162,6 +187,8 @@ class ReplayTransport:
             }
             if prompt.tools:
                 body["tools"] = list(prompt.tools)
+            if self.config.backend.chat_template_kwargs:
+                body["chat_template_kwargs"] = dict(self.config.backend.chat_template_kwargs)
             return body
         body = {
             **prompt.anthropic_payload(self.config.backend.model),
@@ -178,7 +205,9 @@ class ReplayTransport:
         }
         return body
 
-    def _observe(self, payload: dict[str, object], usage: dict[str, int]) -> str:
+    def _observe(self, payload: dict[str, object], usage: dict[str, int], reasoning: list[str] | None = None) -> str:
+        """Collect usage and, for trace_record, keep reasoning separate from visible text."""
+
         raw_usage = payload.get("usage")
         if not isinstance(raw_usage, dict):
             message = payload.get("message")
@@ -192,6 +221,10 @@ class ReplayTransport:
             delta = choices[0].get("delta") if isinstance(choices[0], dict) else None
             if not isinstance(delta, dict):
                 return ""
+            if reasoning is not None:
+                if delta.get("reasoning_content"):
+                    reasoning.append(str(delta["reasoning_content"]))
+                return str(delta.get("content") or "")
             return str(delta.get("content") or delta.get("reasoning_content") or "")
         delta = payload.get("delta")
         if isinstance(delta, dict):

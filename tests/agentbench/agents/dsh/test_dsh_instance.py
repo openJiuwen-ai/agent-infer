@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from agentinfer.agentbench.agents.dsh.hmr_stub import AGENTBENCH_HMR_STUB
 from agentinfer.agentbench.agents.dsh.instance import DshInstance
 
 
@@ -84,8 +85,16 @@ def test_bootstrap_writes_profile_policy_and_records_it_in_snapshot(tmp_path: Pa
     patch = instance.policy_patch_path.read_text(encoding="utf-8")
     assert patch.startswith("- id: session-title-llm\n  disabled: true\n" + policy_patch)
     assert "forcePlanMode: false" in patch
+    assert instance.hmr_stub_path.is_file()
+    assert instance.hmr_stub_path.read_text(encoding="utf-8") == AGENTBENCH_HMR_STUB
+    hmr_stub_name = str(instance.hmr_stub_path).replace("\\", "/")
+    assert "    - id: agentbench-hmr-stub\n" in patch
+    assert f"      name: {hmr_stub_name}\n" in patch
+    assert patch.index("agentbench-hmr-stub") < patch.index("agentbench-bridge")
     snapshot = json.loads(instance.snapshot_path.read_text(encoding="utf-8"))
+    assert "agentbench-hmr-stub" in snapshot["policy_patch"]
     assert "agentbench-bridge" in snapshot["policy_patch"]
+    assert f"name: {hmr_stub_name}" in snapshot["policy_patch"]
 
 
 def test_bridge_mounts_lineage_for_every_profile(tmp_path: Path) -> None:

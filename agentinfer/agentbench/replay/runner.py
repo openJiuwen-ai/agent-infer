@@ -29,6 +29,7 @@ from .analyzer import analyze_replay_trace, replay_analysis_to_dict
 from .config import ReplayBenchConfig
 from .converters.codex_swebenchpro import CodexSwebenchProConverter
 from .executor import ReplayExecutor, ReplayTaskExecution
+from .local_tokenizer import LocalTokenizerCounter
 from .planner import ReplayPlan, build_replay_plan
 from .prompt import PromptBuilder, TokenizerClient
 from .transport import ReplayTransport
@@ -106,6 +107,11 @@ def _execution_metadata(
     request_nodes = [node for node in nodes if node.node_type == "request"]
     attempted_request_nodes = [node for node in request_nodes if node.actual_send_offset_seconds is not None]
     absolute_residuals = [abs(int(item.get("residual_tokens", 0))) for item in calibrations]
+    backend_residuals = [
+        abs(int(item["backend_input_residual_tokens"]))
+        for item in calibrations
+        if item.get("backend_input_residual_tokens") is not None
+    ]
     return {
         "workload_fingerprint": plan.workload_fingerprint,
         "planned_tasks": len(plan.tasks),
@@ -149,6 +155,13 @@ def _execution_metadata(
         "prompt_calibration_requests_over_tolerance": sum(value > tolerance_tokens for value in absolute_residuals),
         "requested_filler_tokens": sum(int(item.get("requested_filler_tokens", 0)) for item in calibrations),
         "actual_prompt_token_gain": sum(int(item.get("actual_prompt_token_gain", 0)) for item in calibrations),
+        "trimmed_current_user_tokens": sum(int(item.get("trimmed_current_user_tokens", 0)) for item in calibrations),
+        "trimmed_current_user_characters": sum(
+            int(item.get("trimmed_current_user_characters", 0)) for item in calibrations
+        ),
+        "backend_input_checked_requests": len(backend_residuals),
+        "backend_input_requests_over_tolerance": sum(value > tolerance_tokens for value in backend_residuals),
+        "backend_input_max_absolute_residual_tokens": max(backend_residuals, default=0),
         "trimmed_filler_tokens": sum(int(item.get("trimmed_filler_tokens", 0)) for item in adjustments),
     }
 
@@ -156,13 +169,13 @@ def _execution_metadata(
 def _prepare_replay_source(
     config: ReplayBenchConfig,
     output_dir: Path,
-) -> tuple[Path, UnifiedTraceIR | None, tuple[EvidenceCapture, ...]]:
+) -> tuple[Path, UnifiedTraceIR | None, tuple[EvidenceCapture, ...], LocalTokenizerCounter | None]:
     """Resolve the Analyzer input, validating converted IR once before returning it."""
 
     trace_type = config.replay.trace_type
     if trace_type == "agentinfer":
         logger.info("Using AgentInfer Replay trace directly: trace_path=%s", config.replay.trace_path)
-        return config.replay.trace_path, None, ()
+        return config.replay.trace_path, None, (), None
     if trace_type in {"agentX", "tracelab"}:
         raise NotImplementedError(f"trace_type={trace_type} is reserved for future integration")
 
@@ -177,6 +190,7 @@ def _prepare_replay_source(
     converter = CodexSwebenchProConverter.from_backend(config)
     try:
         summary = converter.convert(config.replay.trace_path, convert_dir)
+        local_tokenizer = getattr(converter.tokenizer, "local_tokenizer", None)
     finally:
         converter.close()
     trace_ir = validate_trace_ir(convert_dir / "requests.jsonl", convert_dir / "texts")
@@ -189,7 +203,7 @@ def _prepare_replay_source(
         time.monotonic() - started,
         trace_ir.bundle_sha256,
     )
-    return trace_ir.requests_path, trace_ir, captures
+    return trace_ir.requests_path, trace_ir, captures, local_tokenizer
 
 
 async def _run_replay(
@@ -219,7 +233,7 @@ async def _run_replay(
         write_text(requests_path, "")
         captures.append(_capture("request_trace", requests_path))
 
-        analysis_source, trace_ir, conversion_captures = _prepare_replay_source(config, output_dir)
+        analysis_source, trace_ir, conversion_captures, local_tokenizer = _prepare_replay_source(config, output_dir)
         captures.extend(conversion_captures)
 
         analysis = analyze_replay_trace(analysis_source)
@@ -254,7 +268,7 @@ async def _run_replay(
         writer = RequestTraceWriter(requests_path)
         await writer.start()
         writer_started = True
-        tokenizer = TokenizerClient(config)
+        tokenizer = TokenizerClient(config, local_tokenizer)
         transport = ReplayTransport(config, output_dir.name, writer)
         execution = ReplayExecutor(config, plan, PromptBuilder(config, tokenizer, trace_ir), transport).execute()
         if config.experiment.run_timeout_seconds:
@@ -299,7 +313,7 @@ async def _run_replay(
                     "schema_version": "1",
                     "workload_fingerprint": plan.workload_fingerprint,
                     "source_bundle_sha256": plan.source_bundle_sha256,
-                    "tolerance_tokens": config.replay.prompt_calibration_tolerance_tokens,
+                    "tolerance_tokens": 0,
                     "max_absolute_residual_tokens": execution_metadata[
                         "prompt_calibration_max_absolute_residual_tokens"
                     ],
@@ -308,7 +322,19 @@ async def _run_replay(
                     ],
                     "sum_absolute_residual_tokens": execution_metadata["prompt_calibration_absolute_residual_tokens"],
                     "requests_over_tolerance": execution_metadata["prompt_calibration_requests_over_tolerance"],
-                    "wire_fidelity": "content_order_and_token_length_not_byte_identical",
+                    "trimmed_current_user_tokens": execution_metadata["trimmed_current_user_tokens"],
+                    "trimmed_current_user_characters": execution_metadata["trimmed_current_user_characters"],
+                    "backend_input_checked_requests": execution_metadata["backend_input_checked_requests"],
+                    "backend_input_requests_over_tolerance": execution_metadata[
+                        "backend_input_requests_over_tolerance"
+                    ],
+                    "input_length_comparable": (
+                        execution_metadata["successful_requests"]
+                        == execution_metadata["planned_requests"]
+                        == execution_metadata["backend_input_checked_requests"]
+                        and execution_metadata["backend_input_requests_over_tolerance"] == 0
+                    ),
+                    "wire_fidelity": "frozen_history_current_user_suffix_calibrated",
                     "assistant_source": "live_backend_length_constrained",
                 },
             )

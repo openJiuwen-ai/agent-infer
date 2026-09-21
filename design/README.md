@@ -16,11 +16,16 @@ user documentation lives under [`docs/`](../docs/README.md).
 - [Program state machine](module/scheduling/program-state-machine.md)
 - [Progress-TTL scheduling](module/scheduling/progress-ttl-scheduling.md)
 - [vLLM runtime integration](module/scheduling/vllm-runtime-integration.md)
+- [AgentInfer serve flag](module/scheduling/agentinfer-serve-flag.md) (draft)
 
 ## AgentCache Skills
 
 - [Skills design](superpowers/specs/agentcache-skills-design.md)
 - [Skills implementation plan](superpowers/plans/agentcache-skills-implementation.md)
+
+## CI/CD
+
+- [CI quality gate and release guide (DRAFT, zh)](ci-cd-quality-gate-setup-guide.md)
 
 ## Maintenance Records
 

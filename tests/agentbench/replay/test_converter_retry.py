@@ -16,15 +16,26 @@ from agentinfer.agentbench.replay.runner import _prepare_replay_source
 @pytest.fixture
 def backend(monkeypatch):
     """Install a deterministic counting backend with controlled transport failures."""
-    state = {"calls": 0, "failures": 0, "trigger": None, "failure": None, "clients": [], "delays": []}
+    state = {
+        "calls": 0,
+        "tokenize_calls": 0,
+        "failures": 0,
+        "trigger": None,
+        "failure": None,
+        "clients": [],
+        "delays": [],
+    }
     client_class = httpx.Client
 
     def respond(request):
         state["calls"] += 1
+        if request.url.path == "/tokenize":
+            state["tokenize_calls"] += 1
         payload = json.loads(request.content)
         prompt = payload.get("prompt", "")
+        searchable_text = prompt or "".join(message["content"] for message in payload.get("messages", []))
         trigger = state["trigger"]
-        if state["failures"] and (trigger is None or trigger in prompt):
+        if state["failures"] and (trigger is None or trigger in searchable_text):
             state["failures"] -= 1
             failure = state["failure"]
             if isinstance(failure, httpx.Response):
@@ -43,6 +54,7 @@ def backend(monkeypatch):
         return result
 
     monkeypatch.setattr(codex_swebenchpro.httpx, "Client", client)
+    monkeypatch.setattr(codex_swebenchpro, "discover_local_tokenizer", lambda *args, **kwargs: None)
     monkeypatch.setattr(codex_swebenchpro.time, "sleep", state["delays"].append)
     return state
 
@@ -78,7 +90,7 @@ def config(tmp_path):
 
 @pytest.mark.parametrize("trigger", [None, "second"])
 def test_conversion_recovers_without_changing_artifacts(backend, config, tmp_path, trigger):
-    """A transient failure at initialization or mid-conversion preserves the entire IR."""
+    """A transient failure on the first request or mid-conversion preserves the entire IR."""
     _prepare_replay_source(config, tmp_path / "baseline")
     backend.update(failures=1, trigger=trigger)
     _prepare_replay_source(config, tmp_path / "recovered")
@@ -116,6 +128,29 @@ def test_conversion_does_not_retry_invalid_responses(backend, config, tmp_path, 
     backend.update(failures=1, failure=response)
     with pytest.raises(error):
         _prepare_replay_source(config, tmp_path / "invalid")
-    assert backend["calls"] == 1
+    assert backend["tokenize_calls"] == 1
     assert backend["delays"] == []
     assert all(c.is_closed for c in backend["clients"])
+
+
+@pytest.mark.parametrize("fail_path", ["/tokenizer_info", "/v1/models"])
+def test_discovery_invalid_url_closes_client(monkeypatch, config, fail_path):
+    clients = []
+    failure = httpx.InvalidURL("injected invalid discovery URL")
+    original_client = httpx.Client
+
+    def respond(request):
+        if request.url.path == fail_path:
+            raise failure
+        return httpx.Response(200, json={})
+
+    def client(**kwargs):
+        result = original_client(transport=httpx.MockTransport(respond), **kwargs)
+        clients.append(result)
+        return result
+
+    monkeypatch.setattr(codex_swebenchpro.httpx, "Client", client)
+    with pytest.raises(httpx.InvalidURL) as caught:
+        codex_swebenchpro.CodexSwebenchProConverter.from_backend(config)
+    assert caught.value is failure
+    assert len(clients) == 1 and clients[0].is_closed

@@ -6,7 +6,9 @@ Reference 和 Explanation；开发者内部设计稿位于仓根目录的 `desig
 ## 中文文档
 
 - **Tutorial**：[快速开始](zh/tutorial/01-quick-start.md)，适合首次安装和运行 AgentInfer。
-- **How-to**：[接入 vLLM](zh/how-to/integrate-vllm.md)和[运行基准测试](zh/how-to/run-benchmark.md)、[Trace Replay](zh/how-to/run-trace-replay.md)，
+- **How-to**：[接入 vLLM](zh/how-to/integrate-vllm.md)和[运行基准测试](zh/how-to/run-benchmark.md)、[Trace Replay](zh/how-to/run-trace-replay.md)、
+  [vLLM Router 构建与部署](zh/how-to/deploy-vllm-router.md)（Windows 构建见 [deploy-vllm-router-on-windows](zh/how-to/deploy-vllm-router-on-windows.md)）、
+  [Semantic Router 构建与部署](zh/how-to/deploy-semantic-router.md)（Windows 构建见 [deploy-semantic-router-on-windows](zh/how-to/deploy-semantic-router-on-windows.md)），
   用于完成具体任务。
 - **Integrations**：[AgentRouter WASM affinity + native 补丁](../agentinfer/agentrouter/README.md)。
 - **Reference**：[Python API](zh/reference/python-api.md)、[基准命令行](zh/reference/benchmark-cli.md)、

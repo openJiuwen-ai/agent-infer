@@ -239,7 +239,6 @@ def write_trace_ir_manifest(
     output_dir: Path,
     *,
     converter_name: str,
-    converter_version: str,
     source_path: Path,
     summary: dict[str, object],
 ) -> dict[str, object]:
@@ -263,7 +262,7 @@ def write_trace_ir_manifest(
 
     manifest_without_digest: dict[str, object] = {
         "schema_version": BUNDLE_SCHEMA_VERSION,
-        "converter": {"name": converter_name, "version": converter_version},
+        "converter": {"name": converter_name},
         "source": {
             "sha256": sha256_file(source_path),
             "bytes": source_path.stat().st_size,

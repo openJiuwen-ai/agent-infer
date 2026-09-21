@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentCache project
-"""Explicit controller factories referenced by vLLM ``additional_config``."""
+"""Embedded Progress-TTL controller construction from vLLM ``additional_config``."""
 
 from __future__ import annotations
 

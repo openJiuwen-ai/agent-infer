@@ -263,11 +263,24 @@ class ReplayExecutor:
         await asyncio.sleep(max(0, release_clock - time.monotonic()))
         sent_clock = time.monotonic()
         response = await self.transport.send(task, node, prompt)
-        exchange = PromptExchange(prompt, response.assistant_content) if response.success else None
+        exchange = (
+            PromptExchange(prompt, response.assistant_content, response.assistant_reasoning_content)
+            if response.success
+            else None
+        )
         completion_status = "success" if response.success else "failed"
         completions[node.source_key].set_result(
             _NodeCompletion(response.finished_clock, exchange, completion_status, response.error)
         )
+        calibration = asdict(prompt.calibration) if prompt.calibration is not None else None
+        if calibration is not None and self.config.replay.prompt_shape == "trace_record":
+            actual = response.input_tokens
+            calibration["backend_input_tokens"] = actual
+            calibration["backend_input_residual_tokens"] = (
+                actual - node.planned_input_tokens
+                if actual is not None and node.planned_input_tokens is not None
+                else None
+            )
         results.append(
             NodeExecution(
                 node.source_key,
@@ -280,6 +293,6 @@ class ReplayExecutor:
                 max(0, sent_clock - release_clock),
                 response.error,
                 getattr(node, "context_mode", "none"),
-                asdict(prompt.calibration) if prompt.calibration is not None else None,
+                calibration,
             )
         )

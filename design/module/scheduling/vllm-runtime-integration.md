@@ -7,8 +7,7 @@ owners:
 primary_code_paths:
   - agentinfer/agentcache/core/scheduler.py
   - agentinfer/agentcache/core/api_adapter.py
-  - agentinfer/agentcache/core/factory.py
-  - agentinfer/agentcache/core/request_queue.py
+  - agentinfer/agentcache/core/controller.py
   - agentinfer/agentcache/core/vllm_logging.py
 related_code_paths:
   - agentinfer/scheduling/**
@@ -57,7 +56,9 @@ source /path/to/vllm/.venv/bin/activate
 python -m pip install -e /path/to/AgentInfer
 ```
 
-The recommended async configuration is:
+The recommended single-flag configuration is `vllm serve MODEL --agentinfer`; the shim injects the explicit flags
+below and follows the `--async-scheduling`/`--no-async-scheduling` choice when selecting the bridge. The design
+contract for the flag is [AgentInfer serve flag](agentinfer-serve-flag.md). The explicit async configuration is:
 
 ```bash
 export AGENTCACHE_VLLM_LIFECYCLE_SOCKET=/tmp/agentinfer-vllm-lifecycle.sock
@@ -71,7 +72,6 @@ vllm serve MODEL \
   --enable-prompt-tokens-details \
   --additional-config '{
     "agentcache": {
-      "controller_factory": "agentinfer.agentcache.core.factory.build_progress_ttl_controller",
       "progress_ttl": {
         "mode": "on"
       },
@@ -108,9 +108,8 @@ The command-line options added for this integration have distinct responsibiliti
 | `--additional-config` | Supplies the `agentcache` adapter, policy, and observability namespaces. |
 | `AGENTCACHE_VLLM_LIFECYCLE_SOCKET` | Selects the API-side Unix datagram base path; the receiver uses a `.dpN` suffix. It is needed only with lifecycle middleware. |
 
-Do not select legacy `agentinfer.agentcache.core.scheduler.AgentAwareScheduler` for this configuration. It replaces
-vLLM's waiting queue and is not the Progress-TTL integration path. A native comparison whose environment imports
-AgentInfer should explicitly select `vllm.v1.core.sched.async_scheduler.AsyncScheduler`.
+A native comparison whose environment imports AgentInfer should explicitly select
+`vllm.v1.core.sched.async_scheduler.AsyncScheduler`.
 
 ## Architecture
 
@@ -120,7 +119,7 @@ flowchart TB
     IM[AgentInfer identity middleware]
     LM[AgentInfer lifecycle middleware]
     EC[vLLM EngineCore DP rank]
-    BR[AgentInfer scheduler bridge]
+    BR[AgentInfer agent-aware scheduler]
     PS[Program state machine and Progress-TTL]
     NS[vLLM native Scheduler]
 
@@ -288,7 +287,6 @@ All integration settings are under `additional_config.agentcache`.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `controller_factory` | unset | Enables Program scheduling by importing an explicit controller factory. Without it, the bridge is native pass-through. |
 | `backend_id` | `vllm-local` | Names the local backend in dispatch results. |
 | `lifecycle_socket_path` | environment value | Overrides the EngineCore receiver's lifecycle socket base path. The API middleware still reads `AGENTCACHE_VLLM_LIFECYCLE_SOCKET`. |
 | `schedule_interval_seconds` | `1.0` | Minimum interval between ordinary Program scheduling cycles; due TTL deadlines can trigger an earlier cycle. |
@@ -338,7 +336,7 @@ See [Core tuning parameters](progress_ttl_scheduling.md#core-tuning-parameters) 
 | `force_resume_timeout_min_seconds` / `force_resume_timeout_max_seconds` | `30` / `300` | Bounds the adaptive force-resume timeout; an incomplete throughput window uses the maximum. |
 | `paused_program_ttl_seconds` | `1800` | Releases a stale paused Program after this duration. |
 
-`decode_buffer_tokens` is fixed at 100 by the vLLM factory and is not an operator setting. Unknown fields, removed
+`decode_buffer_tokens` is fixed at 100 by the controller constructor and is not an operator setting. Unknown fields, removed
 fields, and implementation-fixed values are rejected instead of being silently ignored.
 
 ### Configuration migration
@@ -374,8 +372,7 @@ options.
 - **VI-INV-002:** Native vLLM scheduling, KV allocation, output update, and finish logic run in their original order.
 - **VI-INV-003:** A non-due AgentInfer check does not construct Program views or sort Programs on the vLLM schedule hot
   path.
-- **VI-INV-004:** Requests without Program identity and deployments without a controller factory preserve native
-  pass-through behavior.
+- **VI-INV-004:** Requests without Program identity preserve native pass-through behavior.
 - **VI-INV-005:** API lifecycle delivery is optional, non-blocking, and cannot fail the served request.
 - **VI-INV-006:** DP-rank identity comes from EngineCore parallel configuration; TP size and obsolete `num_ranks`
   configuration do not participate.

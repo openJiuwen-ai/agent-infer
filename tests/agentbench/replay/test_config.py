@@ -54,6 +54,25 @@ def test_tokenizer_url_follows_backend_until_explicitly_overridden() -> None:
     assert explicit.backend.resolved_tokenizer_base_url == "http://tokenizer"
 
 
+def test_backend_accepts_chat_template_kwargs() -> None:
+    config = ReplayBenchConfig.model_validate(
+        {
+            "backend": {
+                "chat_template_kwargs": {
+                    "enable_thinking": False,
+                    "clear_thinking": True,
+                }
+            },
+            "replay": {"trace_path": "source.jsonl"},
+        }
+    )
+
+    assert config.backend.chat_template_kwargs == {
+        "enable_thinking": False,
+        "clear_thinking": True,
+    }
+
+
 def test_replay_sample_yaml_loads() -> None:
     config = load_replay_config(Path("agentinfer/agentbench/configs/replay_benchmark.yaml"))
 
@@ -82,7 +101,8 @@ def test_replay_sample_yaml_loads() -> None:
     assert config.replay.context_adjustment_mode == "adaptive"
     assert config.replay.context_micro_trim_max_tokens == 64
     assert config.replay.context_micro_trim_max_ratio == 0.005
-    assert config.replay.prompt_calibration_tolerance_tokens == 1
+    assert config.replay.prompt_calibration_tolerance_tokens == 0
+    assert "trace_record_calibration_mode" not in type(config.replay).model_fields
     assert config.replay.context_micro_trim_limit(100) == 64
     assert config.replay.context_micro_trim_limit(20_000) == 100
 
@@ -153,6 +173,31 @@ def test_inferact_requires_chat_completions_endpoint() -> None:
     }
     with pytest.raises(ValidationError, match="backend.endpoint=/v1/chat/completions"):
         ReplayBenchConfig.model_validate(payload)
+
+
+@pytest.mark.parametrize("tolerance", [None, 0, 1, 8])
+def test_inferact_rejects_nonzero_tolerance_instead_of_normalizing(tolerance) -> None:
+    replay = {
+        "trace_type": "inferact_codex_swebenchpro",
+        "trace_path": "source.json",
+        "prompt_shape": "trace_record",
+        "interval_mode": "lognormal",
+        "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
+    }
+    if tolerance is not None:
+        replay["prompt_calibration_tolerance_tokens"] = tolerance
+    if tolerance:
+        with pytest.raises(
+            ValidationError, match="inferact_codex_swebenchpro requires prompt_calibration_tolerance_tokens=0"
+        ):
+            ReplayBenchConfig.model_validate({"replay": replay})
+        assert replay["prompt_calibration_tolerance_tokens"] == tolerance
+        synthetic = ReplayBenchConfig.model_validate(
+            {"replay": {"trace_path": "source.jsonl", "prompt_calibration_tolerance_tokens": tolerance}}
+        )
+        assert synthetic.replay.prompt_calibration_tolerance_tokens == tolerance
+    else:
+        assert ReplayBenchConfig.model_validate({"replay": replay}).replay.prompt_calibration_tolerance_tokens == 0
 
 
 def test_trace_path_is_resolved_relative_to_yaml(tmp_path: Path) -> None:

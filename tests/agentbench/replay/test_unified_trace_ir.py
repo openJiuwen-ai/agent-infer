@@ -22,7 +22,7 @@ from agentinfer.agentbench.replay.converters.codex_swebenchpro import (
 from agentinfer.agentbench.replay.planner import build_replay_plan
 from agentinfer.agentbench.replay.prompt import PromptBuilder, PromptExchange, SyntheticPrompt
 from agentinfer.agentbench.replay.runner import _prepare_replay_source, run_replay
-from agentinfer.agentbench.replay.unified_trace_ir import validate_trace_ir
+from agentinfer.agentbench.replay.unified_trace_ir import canonical_sha256, validate_trace_ir
 
 
 class _CharacterTokenizer:
@@ -32,12 +32,23 @@ class _CharacterTokenizer:
     def content_tokens(self, text: str) -> int:
         return len(text)
 
-    def trace_turn_tokens(self, completed_tokens: int, human: str, assistant: str) -> tuple[int, int]:
-        input_tokens = completed_tokens + len(human)
-        return input_tokens, completed_tokens + len(human) + len(assistant)
+    def input_tokens(self, messages: list[dict[str, str]]) -> int:
+        return sum(len(message["content"]) for message in messages)
 
 
 class _RuntimeCharacterTokenizer:
+    async def prompt_token_ids(self, prompt: SyntheticPrompt) -> tuple[int, ...]:
+        return tuple(ord(c) for message in prompt.messages for c in str(message["content"]))
+
+    async def text_token_ids(self, text: str) -> tuple[int, ...]:
+        return tuple(map(ord, text))
+
+    async def detokenize_tokens(self, tokens) -> str:
+        return "".join(map(chr, tokens))
+
+    async def token_text(self, namespace: str, count: int) -> str:
+        return "p" * count
+
     async def count(self, prompt: SyntheticPrompt) -> int:
         total = 0
         for message in prompt.messages:
@@ -108,8 +119,11 @@ def test_converter_writes_closed_trace_ir_contract_and_detects_tampering(
     assert trace_ir.root == output
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["schema_version"] == "2"
+    assert manifest["converter"] == {"name": "codex_swebenchpro"}
     assert "capabilities" not in manifest
     assert manifest["summary"]["source_records_consumed"] == 1
+    assert manifest["summary"]["tokenizer_counting_mode"] == "custom"
+    assert manifest["summary"]["tokenizer_operations"] is None
     assert len(manifest["texts"]) == 2
     rows = [json.loads(line) for line in (output / "requests.jsonl").read_text(encoding="utf-8").splitlines()]
     assert all(row["actor_id"] == row["actor_role"] == "lead" for row in rows)
@@ -122,6 +136,24 @@ def test_converter_writes_closed_trace_ir_contract_and_detects_tampering(
     }
     targets[tampered].write_text("changed", encoding="utf-8")
     with pytest.raises(ValueError, match="SHA256 mismatch"):
+        validate_trace_ir(output / "requests.jsonl", output / "texts")
+
+
+def test_trace_ir_accepts_legacy_converter_metadata_and_still_checks_its_digest(tmp_path: Path) -> None:
+    output, _, _ = _trace_ir(tmp_path)
+    manifest_path = output / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["converter"]["version"] = "legacy-converter"
+    del manifest["bundle_sha256"]
+    manifest["bundle_sha256"] = canonical_sha256(manifest)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    trace_ir = validate_trace_ir(output / "requests.jsonl", output / "texts")
+    assert trace_ir.root == output
+
+    del manifest["converter"]["version"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="bundle_sha256"):
         validate_trace_ir(output / "requests.jsonl", output / "texts")
 
 
@@ -192,7 +224,7 @@ def test_trace_record_uses_human_sidecar_and_live_length_aligned_assistant(tmp_p
     assert all(node.context_mode in {"independent", "append"} for node in task.requests)
 
 
-def test_trace_record_audits_large_live_assistant_residual_without_rewriting_text(tmp_path: Path) -> None:
+def test_trace_record_repairs_live_assistant_drift_by_default(tmp_path: Path) -> None:
     output, _, trace_ir = _trace_ir(tmp_path)
     config = ReplayBenchConfig.model_validate(
         {
@@ -210,21 +242,18 @@ def test_trace_record_audits_large_live_assistant_residual_without_rewriting_tex
     task = plan.tasks[0]
     first_node, second_node = task.requests
 
-    class DriftTokenizer(_RuntimeCharacterTokenizer):
-        async def count(self, prompt: SyntheticPrompt) -> int:
-            count = await super().count(prompt)
-            return count - 13 if len(prompt.messages) > 1 else count
-
     async def build_prompt() -> SyntheticPrompt:
-        builder = PromptBuilder(config, DriftTokenizer(), trace_ir)  # type: ignore[arg-type]
+        builder = PromptBuilder(config, _RuntimeCharacterTokenizer(), trace_ir)  # type: ignore[arg-type]
         first = await builder.build(task, first_node, None)
-        return await builder.build(task, second_node, PromptExchange(first, "AB"))
+        return await builder.build(task, second_node, PromptExchange(first, "A" * 15))
 
     prompt = asyncio.run(build_prompt())
 
-    assert prompt.messages[1] == {"role": "assistant", "content": "AB"}
+    assert prompt.messages[0] == {"role": "user", "content": "hello"}
+    assert prompt.messages[1] == {"role": "assistant", "content": "A" * 15}
     assert prompt.calibration is not None
-    assert prompt.calibration.residual_tokens == -13
+    assert prompt.calibration.residual_tokens == 0
+    assert prompt.calibration.trimmed_current_user_tokens == 13
     assert prompt.calibration.accepted_with_tolerance is False
 
 
@@ -316,17 +345,18 @@ def test_inferact_trace_is_validated_before_analysis(
             _prepare_replay_source(config, tmp_path / "result")
         return
 
-    analysis_source, trace_ir, captures = _prepare_replay_source(config, tmp_path / "result")
+    analysis_source, trace_ir, captures, local_tokenizer = _prepare_replay_source(config, tmp_path / "result")
 
     assert analysis_source == tmp_path / "result" / "convert_result" / "requests.jsonl"
     assert trace_ir is not None and trace_ir.root == tmp_path / "result" / "convert_result"
+    assert local_tokenizer is None
     assert {capture.source for capture in captures} == {"replay_conversion_manifest"}
 
 
-def test_trace_record_runner_reports_consistent_residual_metrics(
+def test_trace_record_runner_rejects_backend_residuals_and_reports_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Use the real Runner and HTTP adapters to audit signed residuals across artifacts."""
+    """Reject even a one-token backend mismatch and retain the evidence in summaries."""
 
     source = tmp_path / "source.json"
     source.write_text(
@@ -341,17 +371,20 @@ def test_trace_record_runner_reports_consistent_residual_metrics(
     residuals = iter((0, 1, -1, 2, -2))
 
     def respond(request: httpx.Request) -> httpx.Response:
-        """Return token counts at and beyond tolerance, plus length-constrained SSE."""
+        """Calibrate exactly, then return drifting backend usage."""
 
         if request.url.path == "/metrics":
             return httpx.Response(503)
         body = json.loads(request.content)
         if request.url.path == "/tokenize":
-            return httpx.Response(200, json={"count": 5 + next(residuals)})
+            return httpx.Response(200, json={"count": 5})
         assert request.url.path == "/v1/chat/completions"
         assert body["messages"] == [{"role": "user", "content": "hello"}]
         assert body["min_tokens"] == body["max_tokens"] == 2
-        chunk = {"choices": [{"delta": {"content": "AB"}}], "usage": {"prompt_tokens": 5, "completion_tokens": 2}}
+        chunk = {
+            "choices": [{"delta": {"content": "AB"}}],
+            "usage": {"prompt_tokens": 5 + next(residuals), "completion_tokens": 2},
+        }
         return httpx.Response(200, text=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n")
 
     client = httpx.AsyncClient
@@ -365,7 +398,7 @@ def test_trace_record_runner_reports_consistent_residual_metrics(
                 "prompt_shape": "trace_record",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
-                "prompt_calibration_tolerance_tokens": 1,
+                "prompt_calibration_tolerance_tokens": 0,
             },
         }
     )
@@ -382,15 +415,121 @@ def test_trace_record_runner_reports_consistent_residual_metrics(
     assert not (result / "replay-normalization.json").exists()
     assert "replay_normalization" not in {capture["source"] for capture in manifest["evidence"]}
     assert "replay_normalization" not in summary["source_health"]["sources"]
-    assert summary["requests"]["successful_requests"] == 5
+    assert summary["requests"]["successful_requests"] == 1
+    assert summary["requests"]["failed_requests"] == 4
     assert summary["execution"]["metadata"] == execution["summary"]
     assert (
-        validation["requests_over_tolerance"] == execution["summary"]["prompt_calibration_requests_over_tolerance"] == 2
+        validation["requests_over_tolerance"] == execution["summary"]["prompt_calibration_requests_over_tolerance"] == 0
     )
-    assert execution["summary"]["prompt_calibration_exact_requests"] == 1
-    assert execution["summary"]["prompt_calibration_tolerated_requests"] == 2
-    assert validation["max_absolute_residual_tokens"] == 2
-    assert validation["sum_absolute_residual_tokens"] == 6
+    assert execution["summary"]["prompt_calibration_exact_requests"] == 5
+    assert execution["summary"]["prompt_calibration_tolerated_requests"] == 0
+    assert validation["tolerance_tokens"] == 0
+    assert validation["input_length_comparable"] is False
+    assert validation["backend_input_requests_over_tolerance"] == 4
+    assert execution["summary"]["backend_input_max_absolute_residual_tokens"] == 2
+
+
+@pytest.mark.parametrize("bad_usage", [False, True])
+def test_current_turn_replay_repeats_targets_with_different_live_answers(tmp_path, monkeypatch, bad_usage):
+    """Run 8 tasks at concurrency 4 twice, preserving history with pad/trim in both orders."""
+    source = tmp_path / "source.json"
+    source.write_text(
+        json.dumps(
+            [
+                {
+                    "conversations": [
+                        {"from": "human", "value": "hello"},
+                        {"from": "gpt", "value": "xy"},
+                        {"from": "human", "value": "abcdefghij"},
+                        {"from": "gpt", "value": "xy"},
+                        {"from": "human", "value": "klmnopqrst"},
+                        {"from": "gpt", "value": "xy"},
+                    ]
+                }
+            ]
+            * 8
+        )
+    )
+    monkeypatch.setattr(
+        CodexSwebenchProConverter, "from_backend", classmethod(lambda cls, config: cls(_CharacterTokenizer()))
+    )
+    client = httpx.AsyncClient
+    totals = []
+    adjustments = []
+    for run_index, replies in enumerate([["A", "BBBB", "ZZ"], ["CCCC", "D", "ZZ"]]):
+        captured = {}
+
+        def respond(request, replies=replies, captured=captured):
+            if request.url.path == "/metrics":
+                return httpx.Response(503)
+            body = json.loads(request.content)
+            if request.url.path == "/detokenize":
+                return httpx.Response(200, json={"prompt": "".join(map(chr, body["tokens"]))})
+            text = body.get("prompt")
+            if text is None:
+                text = "".join(message["content"] for message in body["messages"])
+            count = len(text)
+            if request.url.path == "/tokenize":
+                return httpx.Response(200, json={"count": count, "tokens": list(map(ord, text))})
+            assert request.url.path == "/v1/chat/completions"
+            session = captured.setdefault(request.headers["x-claude-code-session-id"], [])
+            index = len(session)
+            assert count == [5, 17, 29][index]
+            if session:
+                assert body["messages"][:-2] == session[-1]["messages"]
+                assert body["messages"][-2] == {
+                    "role": "assistant",
+                    "content": replies[index - 1],
+                    "reasoning_content": "thought",
+                }
+            session.append(body)
+            chunk = {
+                "choices": [{"delta": {"content": replies[index], "reasoning_content": "thought"}}],
+                "usage": {"prompt_tokens": count + int(bad_usage), "completion_tokens": 2},
+            }
+            return httpx.Response(200, text=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n")
+
+        monkeypatch.setattr(
+            httpx,
+            "AsyncClient",
+            lambda handler=respond, **kwargs: client(transport=httpx.MockTransport(handler), **kwargs),
+        )
+        config = ReplayBenchConfig.model_validate(
+            {
+                "experiment": {"task_num": 8, "max_concurrency": 4, "result_dir": tmp_path / f"run-{run_index}"},
+                "replay": {
+                    "trace_type": "inferact_codex_swebenchpro",
+                    "trace_path": source,
+                    "prompt_shape": "trace_record",
+                    "interval_mode": "lognormal",
+                    "interval_lognormal": {"p50_seconds": 0.002, "p95_seconds": 0.03, "p99_seconds": 0.09},
+                },
+            }
+        )
+        result = run_replay(config)
+        summary = json.loads((result / "summary.json").read_text())
+        validation = json.loads((result / "trace-record-validation.json").read_text())
+        if bad_usage:
+            assert summary["tasks"]["failed"] == 8
+            assert summary["requests"]["successful_requests"] == 0
+            assert summary["requests"]["failed_requests"] == 8
+            assert summary["execution"]["metadata"]["dependency_skipped_requests"] == 16
+            assert validation["input_length_comparable"] is False
+            assert validation["backend_input_requests_over_tolerance"] == 8
+            continue
+        assert summary["requests"]["successful_requests"] == 24
+        assert summary["tasks"]["completed"] == 8
+        assert summary["tasks"]["failed"] == 0
+        assert validation["input_length_comparable"] is True
+        assert validation["requests_over_tolerance"] == 0
+        assert validation["backend_input_checked_requests"] == 24
+        assert validation["trimmed_current_user_characters"] == 16
+        assert summary["execution"]["metadata"]["trimmed_filler_tokens"] == 0
+        adjustments.append(summary["execution"]["metadata"]["prompt_calibration_adjustments"])
+        totals.append(summary["requests"]["input_tokens"])
+    if not bad_usage:
+        assert totals == [408, 408]
+        assert all(item["pad"] == item["trim"] == 8 for item in adjustments)
 
 
 @pytest.mark.parametrize("trace_type", ["agentX", "tracelab"])
@@ -401,8 +540,8 @@ def test_reserved_trace_types_fail_explicitly(tmp_path: Path, trace_type: str) -
         _prepare_replay_source(config, tmp_path / "result")
 
 
-def test_runtime_converter_uses_configured_backend_tokenizer(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[str, str]] = []
+def test_runtime_converter_uses_configured_backend_chat_template(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
 
     class Response:
         def __init__(self, count: int) -> None:
@@ -419,18 +558,8 @@ def test_runtime_converter_uses_configured_backend_tokenizer(monkeypatch: pytest
             pass
 
         def post(self, url: str, json: dict[str, object]) -> Response:
-            if "prompt" in json:
-                prompt = str(json["prompt"])
-            else:
-                prompt = (
-                    "".join(
-                        f"<|im_start|>{message['role']}\n{message['content']}<|im_end|>\n"
-                        for message in json["messages"]
-                    )
-                    + "<|im_start|>assistant\n"
-                )
-            calls.append((url, prompt))
-            return Response(len(prompt))
+            calls.append((url, json))
+            return Response(37)
 
         def close(self) -> None:
             pass
@@ -441,6 +570,8 @@ def test_runtime_converter_uses_configured_backend_tokenizer(monkeypatch: pytest
             "backend": {
                 "base_url": "http://backend",
                 "tokenizer_base_url": "http://tokenizer",
+                "model": "example/custom-chat-model",
+                "chat_template_kwargs": {"enable_thinking": False},
             },
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
@@ -453,15 +584,32 @@ def test_runtime_converter_uses_configured_backend_tokenizer(monkeypatch: pytest
     )
 
     converter = CodexSwebenchProConverter.from_backend(config)
-    input_tokens, completed_tokens = converter.tokenizer.trace_turn_tokens(0, "human", "assistant")
+    messages = [
+        {"role": "user", "content": "human"},
+        {"role": "assistant", "content": "assistant"},
+        {"role": "user", "content": "next"},
+    ]
+    input_tokens = converter.tokenizer.input_tokens(messages)
     converter.close()
 
-    assert input_tokens > 0 and completed_tokens > input_tokens
-    assert calls and all(url == "http://tokenizer/tokenize" for url, _ in calls)
+    assert input_tokens == 37
+    assert calls == [
+        (
+            "http://tokenizer/tokenize",
+            {
+                "model": "example/custom-chat-model",
+                "messages": messages,
+                "add_generation_prompt": True,
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
+        )
+    ]
 
 
-def test_runtime_converter_rejects_incompatible_chat_template(monkeypatch: pytest.MonkeyPatch) -> None:
-    closed = False
+def test_runtime_converter_counts_each_turn_with_full_backend_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    message_calls: list[list[dict[str, str]]] = []
 
     class Response:
         def __init__(self, count: int) -> None:
@@ -478,28 +626,50 @@ def test_runtime_converter_rejects_incompatible_chat_template(monkeypatch: pytes
             pass
 
         def post(self, url: str, json: dict[str, object]) -> Response:
-            return Response(1 if "messages" in json else len(str(json["prompt"])))
+            if "messages" in json:
+                messages = json["messages"]
+                assert isinstance(messages, list)
+                message_calls.append([dict(message) for message in messages])
+                return Response(100 + len(messages))
+            return Response(len(str(json["prompt"])))
 
         def close(self) -> None:
-            nonlocal closed
-            closed = True
+            pass
 
     monkeypatch.setattr("agentinfer.agentbench.replay.converters.codex_swebenchpro.httpx.Client", Client)
-    config = ReplayBenchConfig.model_validate(
-        {
-            "replay": {
-                "trace_type": "inferact_codex_swebenchpro",
-                "trace_path": "source.json",
-                "prompt_shape": "trace_record",
-                "interval_mode": "lognormal",
-                "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
-            }
-        }
+    source = tmp_path / "source.json"
+    source.write_text(
+        json.dumps(
+            [
+                {
+                    "conversations": [
+                        {"from": "human", "value": "first"},
+                        {"from": "gpt", "value": "answer"},
+                        {"from": "human", "value": "second"},
+                        {"from": "gpt", "value": "done"},
+                    ]
+                }
+            ]
+        ),
+        encoding="utf-8",
     )
+    config = ReplayBenchConfig.model_validate({"replay": {"trace_path": source}})
+    converter = CodexSwebenchProConverter.from_backend(config)
+    converter.convert(source, tmp_path / "output")
+    converter.close()
 
-    with pytest.raises(ValueError, match="incompatible"):
-        CodexSwebenchProConverter.from_backend(config)
-    assert closed is True
+    assert message_calls == [
+        [{"role": "user", "content": "first"}],
+        [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "answer"},
+            {"role": "user", "content": "second"},
+        ],
+    ]
+    rows = [
+        json.loads(line) for line in (tmp_path / "output" / "requests.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["input_tokens"] for row in rows] == [101, 103]
 
 
 def test_converter_rejects_empty_source(tmp_path: Path) -> None:

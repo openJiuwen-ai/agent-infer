@@ -37,20 +37,34 @@ export AGENTCACHE_VLLM_LIFECYCLE_SOCKET=/tmp/agentinfer-vllm-lifecycle.sock
 
 ## 启动 AgentInfer 服务路径
 
-使用异步调度桥、两个 API 中间件和 Progress-TTL 控制器工厂启动 vLLM：
+使用单一参数启动 AgentInfer 服务路径：
 
 ```bash
+vllm serve meta-llama/Llama-3.1-8B-Instruct --agentinfer
+```
+
+该参数接管 serve 解析，然后正常派发上游 vLLM。Agent 感知调度器跟随调度模式：传入 `--no-async-scheduling` 即以
+`AgentCacheSyncSchedulerBridge` 进行同步服务。未设置 `AGENTCACHE_VLLM_LIFECYCLE_SOCKET` 时默认为
+`/tmp/agentinfer-vllm-lifecycle.sock`；若 `--additional-config` 给出了 `agentcache.lifecycle_socket_path` 则以该值为准
+（两者冲突时会报错）；同一主机上的
+多个服务实例需分别导出不同的 socket。shim 会在 stderr 打印一条 `[agentinfer]` 行展示注入的参数；
+`--agentinfer` 不能与 `--scheduler-cls` 组合使用。
+
+根据部署需要追加张量并行、端口、模型专用工具解析和 Prefix Cache 等标准 vLLM 参数。上游参数见
+[vLLM Quickstart](https://docs.vllm.ai/en/latest/getting_started/quickstart/)。
+
+显式长格式命令仍然受支持，适合需要精细控制的场景（例如省略生命周期中间件）。调度器桥接会直接根据
+`additional_config.agentcache` 构建内嵌 Progress-TTL 控制器，不存在控制器工厂配置项：
+
+```bash
+export AGENTCACHE_VLLM_LIFECYCLE_SOCKET=/tmp/agentinfer-vllm-lifecycle.sock
+
 vllm serve meta-llama/Llama-3.1-8B-Instruct \
   --async-scheduling \
   --scheduler-cls agentinfer.agentcache.core.scheduler.AgentCacheAsyncSchedulerBridge \
   --middleware agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware \
-  --middleware agentinfer.agentcache.core.api_adapter.AgentCacheLifecycleMiddleware \
-  --additional-config \
-  '{"agentcache":{"controller_factory":"agentinfer.agentcache.core.factory.build_progress_ttl_controller"}}'
+  --middleware agentinfer.agentcache.core.api_adapter.AgentCacheLifecycleMiddleware
 ```
-
-根据部署需要追加张量并行、端口、模型专用工具解析和 Prefix Cache 等标准 vLLM 参数。上游参数见
-[vLLM Quickstart](https://docs.vllm.ai/en/latest/getting_started/quickstart/)。
 
 ### 配置 Progress-TTL 策略参数
 
@@ -59,7 +73,6 @@ vllm serve meta-llama/Llama-3.1-8B-Instruct \
 ```bash
 --additional-config '{
   "agentcache": {
-    "controller_factory": "agentinfer.agentcache.core.factory.build_progress_ttl_controller",
     "progress_ttl": {
       "ttl_min_seconds": 0.05,
       "ttl_max_seconds": 32,
@@ -95,11 +108,10 @@ deadline：用请求前方剩余轮数除以近期聚合请求吞吐，乘以 `f
 AgentInfer 会安装一个委托型 `vllm` 控制台脚本：
 
 - 显式的 `vllm bench serve --agentinfer` 命令进入 AgentBench。
-- 其他命令委托给上游 vLLM，未设置 `--scheduler-cls` 时使用 AgentInfer 默认调度器。
-- 显式传入的 `--scheduler-cls` 会被保留，如上面的服务启动命令所示。
-
-旧版 `AgentAwareScheduler` 和 `agentinfer.LLM` 兼容接口仍然可用，但不会启用这里展示的显式
-Progress-TTL 服务路径。
+- `vllm serve MODEL --agentinfer` 激活上文描述的 AgentInfer 服务路径；Agent 感知调度器跟随显式的
+  `--async-scheduling`/`--no-async-scheduling` 选择。
+- 其他命令原样委托给上游 vLLM。
+- 显式传入的 `--scheduler-cls` 会在委托命令中被保留，如上面的长格式服务启动命令所示。
 
 ## 验证接入
 

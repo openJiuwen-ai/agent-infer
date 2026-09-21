@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentCache project
-"""Tests for explicit vLLM controller factory policy settings."""
+"""Tests for the embedded vLLM Progress-TTL controller policy settings."""
 
 import pytest
 
-from agentinfer.agentcache.core.factory import build_progress_ttl_controller
+from agentinfer.agentcache.core.controller import build_progress_ttl_controller
 from agentinfer.scheduling.backend import BackendInfo, BackendPoolInfo, DpRankInfo
 from agentinfer.scheduling.progress_ttl import ProgressTTLMode
 
@@ -25,7 +25,7 @@ def backend() -> BackendPoolInfo:
     )
 
 
-def test_factory_applies_nested_progress_ttl_settings() -> None:
+def test_controller_applies_nested_progress_ttl_settings() -> None:
     controller = build_progress_ttl_controller(
         backend(),
         {
@@ -70,7 +70,7 @@ def test_factory_applies_nested_progress_ttl_settings() -> None:
     assert controller.strategy.config.paused_program_ttl_seconds == 600
 
 
-def test_factory_uses_two_l20_reference_defaults_without_policy_overrides() -> None:
+def test_controller_uses_two_l20_reference_defaults_without_policy_overrides() -> None:
     controller = build_progress_ttl_controller(backend(), {})
 
     assert controller.strategy.config.target_max_segment_rounds == 14
@@ -86,13 +86,25 @@ def test_factory_uses_two_l20_reference_defaults_without_policy_overrides() -> N
     assert controller._observability.log_interval_seconds == 5
 
 
-def test_factory_accepts_explicit_progress_ttl_mode() -> None:
+def test_controller_ignores_stale_controller_factory_setting() -> None:
+    controller = build_progress_ttl_controller(
+        backend(),
+        {
+            "controller_factory": "agentinfer.agentcache.core.factory.build_progress_ttl_controller",
+            "progress_ttl": {"ttl_min_seconds": 5},
+        },
+    )
+
+    assert controller.strategy.config.ttl_min_seconds == 5
+
+
+def test_controller_accepts_explicit_progress_ttl_mode() -> None:
     controller = build_progress_ttl_controller(backend(), {"progress_ttl": {"mode": "auto"}})
 
     assert controller.strategy.config.mode is ProgressTTLMode.AUTO
 
 
-def test_factory_applies_observability_controls() -> None:
+def test_controller_applies_observability_controls() -> None:
     controller = build_progress_ttl_controller(
         backend(),
         {"observability": {"enabled": True, "log_interval_seconds": 15}},
@@ -102,7 +114,7 @@ def test_factory_applies_observability_controls() -> None:
     assert controller._observability.log_interval_seconds == 15
 
 
-def test_factory_rejects_non_mapping_policy_settings() -> None:
+def test_controller_rejects_non_mapping_policy_settings() -> None:
     with pytest.raises(ValueError, match="must be an object"):
         build_progress_ttl_controller(backend(), {"progress_ttl": "invalid"})
 
@@ -115,7 +127,7 @@ def test_factory_rejects_non_mapping_policy_settings() -> None:
         ({"observability": {"log_interval_seconds": 0}}, "log_interval_seconds must be finite and positive"),
     ],
 )
-def test_factory_rejects_invalid_observability_controls(settings: object, message: str) -> None:
+def test_controller_rejects_invalid_observability_controls(settings: object, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         build_progress_ttl_controller(backend(), settings)
 
@@ -127,7 +139,7 @@ def test_factory_rejects_invalid_observability_controls(settings: object, messag
         "use_fixed_input_token_growth",
     ),
 )
-def test_factory_rejects_non_boolean_switches(setting: str) -> None:
+def test_controller_rejects_non_boolean_switches(setting: str) -> None:
     with pytest.raises(ValueError, match=f"{setting} must be a boolean"):
         build_progress_ttl_controller(backend(), {"progress_ttl": {setting: 1}})
 
@@ -136,7 +148,7 @@ def test_factory_rejects_non_boolean_switches(setting: str) -> None:
     "setting",
     ("decode_buffer_tokens",),
 )
-def test_factory_rejects_fixed_policy_settings(setting: str) -> None:
+def test_controller_rejects_fixed_policy_settings(setting: str) -> None:
     with pytest.raises(ValueError, match="fixed implementation values"):
         build_progress_ttl_controller(backend(), {"progress_ttl": {setting: 1}})
 
@@ -156,7 +168,7 @@ def test_factory_rejects_fixed_policy_settings(setting: str) -> None:
         "ttl_prefill_seconds_per_1k_uncached_tokens",
     ),
 )
-def test_factory_rejects_removed_policy_settings(setting: str) -> None:
+def test_controller_rejects_removed_policy_settings(setting: str) -> None:
     with pytest.raises(ValueError, match="were removed"):
         build_progress_ttl_controller(backend(), {"progress_ttl": {setting: 1}})
 
@@ -168,7 +180,7 @@ def test_factory_rejects_removed_policy_settings(setting: str) -> None:
         ({"zzz_unknown": 1, "aaa_unknown": 2}, "aaa_unknown, zzz_unknown"),
     ),
 )
-def test_factory_rejects_unknown_policy_settings(settings: dict[str, int], message: str) -> None:
+def test_controller_rejects_unknown_policy_settings(settings: dict[str, int], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         build_progress_ttl_controller(backend(), {"progress_ttl": settings})
 
@@ -177,12 +189,12 @@ def test_factory_rejects_unknown_policy_settings(settings: dict[str, int], messa
     "invalid_value",
     [pytest.param(float("inf"), id="infinity"), pytest.param(10**10000, id="overflowing-integer")],
 )
-def test_factory_rejects_non_finite_numeric_settings(invalid_value: int | float) -> None:
+def test_controller_rejects_non_finite_numeric_settings(invalid_value: int | float) -> None:
     with pytest.raises(ValueError, match="must be finite"):
         build_progress_ttl_controller(backend(), {"progress_ttl": {"ttl_min_seconds": invalid_value}})
 
 
-def test_benchmark_launcher_policy_is_supported_by_destination_factory() -> None:
+def test_benchmark_launcher_policy_is_supported_by_destination_controller_builder() -> None:
     """The migrated benchmark launcher must start with the retained scheduler."""
     import json
     import re

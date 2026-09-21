@@ -1,6 +1,6 @@
 # Quick Start
 
-This tutorial installs AgentInfer and starts vLLM with the async scheduler bridge, API middleware, and embedded
+This tutorial installs AgentInfer and starts vLLM with the async agent-aware scheduler, API middleware, and embedded
 Progress-TTL controller. Run it on Linux or WSL 2 with a CUDA GPU that supports the selected model.
 
 ## 1. Prepare the vLLM Environment
@@ -36,25 +36,23 @@ python -m pip install agentinfer-0.1.0-py3-none-any.whl
 
 ## 3. Start vLLM
 
-Choose an unused local Unix socket for lifecycle signals, then start vLLM with the current AgentInfer serving stack:
+Start vLLM with the current AgentInfer serving stack using a single flag:
 
 ```bash
-export AGENTCACHE_VLLM_LIFECYCLE_SOCKET=/tmp/agentinfer-vllm-lifecycle.sock
-
-vllm serve meta-llama/Llama-3.1-8B-Instruct \
- --async-scheduling \
- --scheduler-cls agentinfer.agentcache.core.scheduler.AgentCacheAsyncSchedulerBridge \
- --middleware agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware \
- --middleware agentinfer.agentcache.core.api_adapter.AgentCacheLifecycleMiddleware \
- --additional-config \
- '{"agentcache":{"controller_factory":"agentinfer.agentcache.core.factory.build_progress_ttl_controller"}}'
+vllm serve meta-llama/Llama-3.1-8B-Instruct --agentinfer
 ```
+
+The flag injects async scheduling, the `AgentCacheAsyncSchedulerBridge`, the identity and lifecycle middleware, and
+the Progress-TTL controller factory. The lifecycle socket defaults to `/tmp/agentinfer-vllm-lifecycle.sock` when
+`AGENTCACHE_VLLM_LIFECYCLE_SOCKET` is unset; export a distinct socket per server instance on one host. For a
+synchronous deployment, add `--no-async-scheduling` and the shim selects `AgentCacheSyncSchedulerBridge` instead.
 
 From a source checkout, [`examples/serve-progress-ttl.sh`](../../../examples/serve-progress-ttl.sh) runs the same
 serving configuration. Override its default model with `MODEL=<model-name>` when needed.
 
-The model is illustrative and can be replaced with another model supported by vLLM. Keep `--async-scheduling` when
-using `AgentCacheAsyncSchedulerBridge`; the bridge rejects configurations with async scheduling disabled.
+The model is illustrative and can be replaced with another model supported by vLLM. The agent-aware scheduler follows
+the scheduling mode: `AgentCacheAsyncSchedulerBridge` for async scheduling, `AgentCacheSyncSchedulerBridge` for sync
+scheduling; the async variant rejects configurations with async scheduling disabled.
 
 ## 4. Verify the Service
 

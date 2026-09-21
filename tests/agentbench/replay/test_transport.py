@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
+import pytest
 
 from agentinfer.agentbench.replay.config import ReplayBenchConfig
 from agentinfer.agentbench.replay.prompt import SyntheticPrompt
@@ -36,7 +37,11 @@ def test_chat_transport_streams_content_usage_and_plan_identity(tmp_path: Path) 
     async def send() -> tuple[object, dict[str, object]]:
         config = ReplayBenchConfig.model_validate(
             {
-                "backend": {"base_url": "http://backend", "endpoint": "/v1/chat/completions"},
+                "backend": {
+                    "base_url": "http://backend",
+                    "endpoint": "/v1/chat/completions",
+                    "chat_template_kwargs": {"enable_thinking": False, "clear_thinking": True},
+                },
                 "replay": {"trace_path": "source.jsonl"},
             }
         )
@@ -82,6 +87,7 @@ def test_chat_transport_streams_content_usage_and_plan_identity(tmp_path: Path) 
     assert result.assistant_content == "hello"
     assert body["min_tokens"] == body["max_tokens"] == 3
     assert body["seed"] == 7
+    assert body["chat_template_kwargs"] == {"enable_thinking": False, "clear_thinking": True}
     assert "tools" not in body
     assert facts[0].request_id == "request"
     assert facts[0].request_purpose == "lead_main"
@@ -121,3 +127,65 @@ def test_messages_transport_keeps_title_prompt_tool_free_and_bridges_sampling(tm
     assert body["tools"] == []
     sampling = body["metadata"]["_agentinfer_replay_sampling"]
     assert sampling == {"seed": 9, "min_tokens": 4, "ignore_eos": True}
+
+
+@pytest.mark.parametrize("actual,success", [(5, True), (6, False), (4, False), (None, False)])
+def test_trace_record_checks_wire_usage_and_preserves_both_stream_fields(tmp_path, actual, success):
+    """Even HTTP 200 must fail strict calibration on missing or different backend usage."""
+
+    async def send():
+        config = ReplayBenchConfig.model_validate(
+            {
+                "replay": {
+                    "trace_path": "source.json",
+                    "trace_type": "inferact_codex_swebenchpro",
+                    "prompt_shape": "trace_record",
+                    "interval_mode": "lognormal",
+                    "interval_lognormal": {"p50_seconds": 1, "p95_seconds": 2, "p99_seconds": 3},
+                    "prompt_calibration_tolerance_tokens": 0,
+                },
+            }
+        )
+        writer = RequestTraceWriter(tmp_path / "requests.jsonl")
+        assert config.replay.prompt_calibration_tolerance_tokens == 0
+        await writer.start()
+        transport = ReplayTransport(config, "run", writer)
+        await transport.client.aclose()
+
+        def handler(request):
+            data = {"choices": [{"delta": {"content": "answer", "reasoning_content": "thinking"}}]}
+            if actual is not None:
+                data["usage"] = {"prompt_tokens": actual, "completion_tokens": 2}
+            return httpx.Response(200, text=f"data: {json.dumps(data)}\n\ndata: [DONE]\n\n")
+
+        transport.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        node = SimpleNamespace(
+            runtime_request_id="request",
+            actor_id="lead",
+            actor_role="lead",
+            parent_actor_id=None,
+            prompt_kind="lead_main",
+            planned_input_tokens=5,
+            planned_output_tokens=2,
+            backend_sampling_seed=1,
+        )
+        try:
+            return await transport.send(
+                SimpleNamespace(runtime_session_id="session"),
+                node,
+                SyntheticPrompt("", (), ({"role": "user", "content": "hello"},)),
+            )
+        finally:
+            await transport.close()
+            await writer.close()
+
+    result = asyncio.run(send())
+    assert result.success == success
+    assert result.assistant_content == "answer"
+    assert result.assistant_reasoning_content == "thinking"
+    assert result.input_tokens == actual
+    facts = load_request_facts(tmp_path / "requests.jsonl")
+    assert facts[0].status == ("success" if success else "error")
+    assert facts[0].input_tokens == actual
+    if not success:
+        assert "input verification failed" in result.error

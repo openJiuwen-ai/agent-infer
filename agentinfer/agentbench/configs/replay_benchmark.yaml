@@ -17,6 +17,7 @@ backend:
   tokenizer_base_url: null             # null uses backend.base_url for /tokenize and /detokenize
   model: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8  # model used by Claude Code requests
   endpoint: /v1/messages               # e.g., Anthropic Messages endpoint
+  chat_template_kwargs: {}             # kwargs passed to the model chat template on OpenAI-compatible endpoints
   api_key_env: null                    # environment variable containing the API key; null = none
 
 # === Replay: configuration for trace replay ===
@@ -58,7 +59,7 @@ replay:
   context_adjustment_mode: adaptive
   context_micro_trim_max_tokens: 64
   context_micro_trim_max_ratio: 0.005
-  # Accept an audited residual only after deterministic exact-suffix repair fails; 0 keeps strict behavior.
-  prompt_calibration_tolerance_tokens: 1
+  # Exact by default. Inferact trace_record always requires zero residual.
+  prompt_calibration_tolerance_tokens: 0
   # Per-request Backend timeout in seconds.
   request_timeout_seconds: 3600

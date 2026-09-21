@@ -10,17 +10,22 @@ to the benchmark request proxy through an OpenAI-compatible provider route.
 """
 
 import json
+import logging
 import os
 from pathlib import Path
 
 import yaml
 
 from .bridge import AGENTBENCH_BRIDGE
+from .hmr_stub import AGENTBENCH_HMR_STUB
+
+logger = logging.getLogger(__name__)
 
 HOME_DIR_NAME = "dsh-home"
 SETTINGS_FILENAME = "settings.yaml"
 POLICY_PATCH_FILENAME = "agentbench.patch.yml"
 BRIDGE_FILENAME = "agentbench-bridge.mjs"
+HMR_STUB_FILENAME = "agentbench-hmr-stub.mjs"
 DEFAULT_CONTEXT_WINDOW = 262144
 DEFAULT_MAX_TOKENS = 8192
 
@@ -80,6 +85,7 @@ class DshInstance:
         self.settings_path = self.home_dir / SETTINGS_FILENAME
         self.policy_patch_path = self.home_dir / POLICY_PATCH_FILENAME
         self.bridge_path = self.home_dir / BRIDGE_FILENAME
+        self.hmr_stub_path = self.home_dir / HMR_STUB_FILENAME
         self.artifact_settings_path = artifact_dir / SETTINGS_FILENAME
         self.snapshot_path = artifact_dir / "dsh-settings-snapshot.json"
         self.settings = build_dsh_settings(api_base_url, model)
@@ -92,10 +98,20 @@ class DshInstance:
         serialized = yaml.safe_dump(self.settings, allow_unicode=True, sort_keys=False)
         self.settings_path.write_text(serialized, encoding="utf-8")
         self.bridge_path.write_text(AGENTBENCH_BRIDGE, encoding="utf-8")
+        self.hmr_stub_path.write_text(AGENTBENCH_HMR_STUB, encoding="utf-8")
         # An absolute-path `name:` makes the loader import this file as an
         # ESM module (file:// specifier); relative paths resolve against the
         # headless profile dir, which this task-local home is not. Forward
         # slashes keep the YAML scalar free of backslash escapes on Windows.
+        # Insert a new plugin id rather than rewriting the bundled `id: hmr`
+        # row: that entry is already disabled, so a stub there never apply()s
+        # and runProfile still loader.create()s the real HMR module.
+        hmr_stub_name = str(self.hmr_stub_path).replace("\\", "/")
+        hmr_stub_patch = f"\n- insert:\n    - id: agentbench-hmr-stub\n      name: {hmr_stub_name}\n"
+        logger.debug(
+            "AgentBench HMR stub injected (plugin id=agentbench-hmr-stub, path=%s)",
+            hmr_stub_name,
+        )
         bridge_name = str(self.bridge_path).replace("\\", "/")
         bridge_patch = (
             "\n- insert:\n"
@@ -105,7 +121,8 @@ class DshInstance:
             f"        forcePlanMode: {str(self.enforce_plan_mode).lower()}\n"
             f"        autoApprove: {str(self.enforce_plan_mode).lower()}\n"
         )
-        self.policy_patch_path.write_text(_TITLE_PATCH + self.policy_patch + bridge_patch, encoding="utf-8")
+        inserted_plugins = hmr_stub_patch + bridge_patch
+        self.policy_patch_path.write_text(_TITLE_PATCH + self.policy_patch + inserted_plugins, encoding="utf-8")
         self.artifact_settings_path.write_text(serialized, encoding="utf-8")
         environment = self.environment()
         snapshot = {
@@ -119,7 +136,7 @@ class DshInstance:
                     _ROOT_SESSION_ENV,
                 )
             },
-            "policy_patch": self.policy_patch + bridge_patch,
+            "policy_patch": self.policy_patch + inserted_plugins,
         }
         self.snapshot_path.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
 

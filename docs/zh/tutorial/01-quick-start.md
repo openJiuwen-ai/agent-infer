@@ -1,6 +1,6 @@
 # 快速开始
 
-本教程将安装 AgentInfer，并使用异步调度桥、API 中间件和内嵌 Progress-TTL 控制器启动 vLLM。请在
+本教程将安装 AgentInfer，并使用异步 Agent 感知调度器、API 中间件和内嵌 Progress-TTL 控制器启动 vLLM。请在
 Linux 或 WSL 2 中运行，并准备能够运行所选模型的 CUDA GPU。
 
 ## 1. 准备 vLLM 环境
@@ -35,25 +35,23 @@ python -m pip install agentinfer-0.1.0-py3-none-any.whl
 
 ## 3. 启动 vLLM
 
-选择一个未使用的本地 Unix socket 传递生命周期信号，然后使用当前 AgentInfer 服务栈启动 vLLM：
+使用单一参数启动带当前 AgentInfer 服务栈的 vLLM：
 
 ```bash
-export AGENTCACHE_VLLM_LIFECYCLE_SOCKET=/tmp/agentinfer-vllm-lifecycle.sock
-
-vllm serve meta-llama/Llama-3.1-8B-Instruct \
- --async-scheduling \
- --scheduler-cls agentinfer.agentcache.core.scheduler.AgentCacheAsyncSchedulerBridge \
- --middleware agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware \
- --middleware agentinfer.agentcache.core.api_adapter.AgentCacheLifecycleMiddleware \
- --additional-config \
- '{"agentcache":{"controller_factory":"agentinfer.agentcache.core.factory.build_progress_ttl_controller"}}'
+vllm serve meta-llama/Llama-3.1-8B-Instruct --agentinfer
 ```
+
+该参数会注入异步调度、`AgentCacheAsyncSchedulerBridge`、身份和生命周期中间件以及 Progress-TTL 控制器工厂。
+未设置 `AGENTCACHE_VLLM_LIFECYCLE_SOCKET` 时，生命周期 socket 默认为
+`/tmp/agentinfer-vllm-lifecycle.sock`；同一主机上的多个服务实例需分别导出不同的 socket。同步部署时添加
+`--no-async-scheduling`，shim 会改选 `AgentCacheSyncSchedulerBridge`。
 
 在源码仓中，[`examples/serve-progress-ttl.sh`](../../../examples/serve-progress-ttl.sh) 会运行相同服务配置。
 需要更换默认模型时，设置 `MODEL=<model-name>`。
 
-模型名称仅作示例，可替换为 vLLM 支持的其他模型。使用 `AgentCacheAsyncSchedulerBridge` 时必须保留
-`--async-scheduling`；异步调度被禁用时，调度桥会拒绝该配置。
+模型名称仅作示例，可替换为 vLLM 支持的其他模型。Agent 感知调度器跟随调度模式：异步调度使用
+`AgentCacheAsyncSchedulerBridge`，同步调度使用 `AgentCacheSyncSchedulerBridge`；异步调度被禁用时，异步版本会
+拒绝该配置。
 
 ## 4. 验证服务
 
