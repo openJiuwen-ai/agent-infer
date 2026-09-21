@@ -19,11 +19,13 @@ This plugin only rewrites JSON **body** fields; header mutations are unused.
 
 ## Behavior
 
-- `Continue` when rewrite is unnecessary or unsafe (existing non-empty
+- `Continue` when no rewrite is needed (already-normalized non-empty
   `session_params.session_id`, missing/empty `agent_hint.session_id`, or
   non-JSON body)
-- `Modify` when a non-empty `agent_hint.session_id` is copied into
-  `session_params.session_id`
+- `Modify` when a trimmed `agent_hint.session_id` is copied into
+  `session_params.session_id`, or when an existing session id only differs by
+  surrounding whitespace (both sides are trimmed so affinity keys match).
+  JSON `null` `session_params` is treated as missing.
 
 ## Build
 

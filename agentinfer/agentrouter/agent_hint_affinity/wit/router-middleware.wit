@@ -1,3 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+// Copied from vllm-project/router `wit/router-middleware.wit` (PR #251).
+// Upstream file has no separate copyright header; package id is
+// `vllm:router-middleware@0.1.0`.
+
 package vllm:router-middleware@0.1.0;
 
 interface types {

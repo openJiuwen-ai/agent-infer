@@ -1,5 +1,4 @@
 /target/
 /agent_hint_affinity.component.wasm
 *.wasm
-Cargo.lock
 !wit/**
