@@ -1,0 +1,30 @@
+# Trace Replay defaults for the reserved AgentX adapter.
+
+experiment:
+  task_num: null
+  max_concurrency: 1
+  task_timeout_seconds: 3600
+  run_timeout_seconds: null
+
+backend:
+  type: vllm
+  base_url: http://127.0.0.1:8000
+  metrics_url: null
+  tokenizer_base_url: null
+  model: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8
+  endpoint: /v1/chat/completions
+  chat_template_kwargs: {}
+  api_key_env: null
+
+replay:
+  trace_type: agentX
+  trace_path: null
+  trace_same_agent_gap_scale: 1.0
+  trace_same_agent_gap_offset_seconds: 0.0
+  interval_mode: trace
+  sample_seed: 0
+  context_adjustment_mode: strict
+  context_micro_trim_max_tokens: 64
+  context_micro_trim_max_ratio: 0.005
+  prompt_calibration_tolerance_tokens: 0
+  request_timeout_seconds: 3600

@@ -12,6 +12,15 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+ReplayTraceType = Literal["agentinfer", "inferact_codex_swebenchpro", "agentX", "tracelab"]
+
+_BUILTIN_REPLAY_CONFIGS: dict[str, str] = {
+    "agentinfer": "replay_agentinfer.yaml",
+    "inferact_codex_swebenchpro": "replay_inferact.yaml",
+    "tracelab": "replay_tracelab.yaml",
+    "agentX": "replay_agentX.yaml",
+}
+
 
 class ReplayStrictModel(BaseModel):
     """Reject unknown fields and non-finite numeric values."""
@@ -77,11 +86,15 @@ class ReplayIntervalLognormalConfig(ReplayStrictModel):
 class ReplayConfig(ReplayStrictModel):
     """Configure source analysis, sampling, timing, and synthetic prefixes."""
 
-    trace_type: Literal["agentinfer", "inferact_codex_swebenchpro", "agentX", "tracelab"] = Field(
+    trace_type: ReplayTraceType = Field(
         "agentinfer",
         json_schema_extra={"cli": True},
     )
-    trace_path: Path = Field(json_schema_extra={"cli": True})
+    trace_path: Path | None = Field(
+        None,
+        description="Local trace path; TraceLab downloads a pinned dataset snapshot when omitted.",
+        json_schema_extra={"cli": True},
+    )
     trace_same_agent_gap_scale: float = Field(
         1.0,
         ge=0,
@@ -133,6 +146,8 @@ class ReplayConfig(ReplayStrictModel):
 
     @model_validator(mode="after")
     def validate_replay_modes(self) -> ReplayConfig:
+        if self.trace_path is None and self.trace_type != "tracelab":
+            raise ValueError("trace_path may be null only when trace_type=tracelab")
         if self.interval_mode == "lognormal":
             if self.interval_lognormal is None:
                 raise ValueError("interval_mode=lognormal requires interval_lognormal anchors")
@@ -168,6 +183,8 @@ class ReplayBenchConfig(ReplayStrictModel):
     def validate_trace_backend(self) -> ReplayBenchConfig:
         """Reject trace adapters whose accounting does not match the wire endpoint."""
 
+        if self.replay.trace_path is None and self.experiment.task_num is None:
+            raise ValueError("TraceLab automatic dataset download requires experiment.task_num")
         if self.replay.trace_type == "inferact_codex_swebenchpro" and self.backend.endpoint != "/v1/chat/completions":
             raise ValueError("inferact_codex_swebenchpro requires backend.endpoint=/v1/chat/completions")
         if self.replay.trace_type == "tracelab" and self.backend.endpoint != "/v1/chat/completions":
@@ -175,25 +192,50 @@ class ReplayBenchConfig(ReplayStrictModel):
         return self
 
 
-def resolve_replay_config_paths(
-    config: ReplayBenchConfig,
-    base_dir: Path,
+def builtin_replay_config_path(trace_type: ReplayTraceType) -> Path:
+    """Return the packaged Replay template selected by a trace adapter."""
+
+    return Path(__file__).resolve().parents[1] / "configs" / _BUILTIN_REPLAY_CONFIGS[trace_type]
+
+
+def _resolve_yaml_paths(raw: dict[str, object], base_dir: Path) -> None:
+    """Resolve paths explicitly supplied by YAML before applying CLI overrides."""
+
+    for section, name in (("experiment", "result_dir"), ("replay", "trace_path")):
+        settings = raw.get(section)
+        if not isinstance(settings, dict):
+            continue
+        value = settings.get(name)
+        if value is None:
+            continue
+        if not isinstance(value, (str, Path)):
+            continue
+        path = Path(value)
+        if not path.is_absolute():
+            settings[name] = (base_dir / path).resolve()
+
+
+def _merge_replay_overrides(raw: dict[str, object], overrides: dict[str, dict[str, object]]) -> None:
+    """Merge already-normalized CLI values over one YAML payload."""
+
+    for section, values in overrides.items():
+        settings = raw.setdefault(section, {})
+        if not isinstance(settings, dict):
+            raise ValueError(f"Replay configuration section {section!r} must be an object")
+        settings.update(values)
+
+
+def load_replay_config(
+    path: Path,
+    *,
+    overrides: dict[str, dict[str, object]] | None = None,
 ) -> ReplayBenchConfig:
-    """Resolve YAML paths relative to the configuration file directory."""
-
-    for owner, name in (
-        (config.experiment, "result_dir"),
-        (config.replay, "trace_path"),
-    ):
-        value = getattr(owner, name)
-        if not value.is_absolute():
-            setattr(owner, name, (base_dir / value).resolve())
-    return config
-
-
-def load_replay_config(path: Path) -> ReplayBenchConfig:
-    """Load and resolve one Replay YAML configuration."""
+    """Load YAML, apply normalized CLI overrides, and validate the final Replay configuration."""
 
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    config = ReplayBenchConfig.model_validate(raw)
-    return resolve_replay_config_paths(config, path.resolve().parent)
+    if not isinstance(raw, dict):
+        raise ValueError("Replay configuration root must be an object")
+    _resolve_yaml_paths(raw, path.resolve().parent)
+    if overrides:
+        _merge_replay_overrides(raw, overrides)
+    return ReplayBenchConfig.model_validate(raw)

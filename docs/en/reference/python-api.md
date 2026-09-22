@@ -82,7 +82,10 @@ See [Integrate with vLLM](../how-to/integrate-vllm.md) for deployment steps and
 
 ## Replay Python entry points
 
-`agentinfer.agentbench.replay.config.load_replay_config(path: Path) -> ReplayBenchConfig`
+```python
+load_replay_config(path: Path, *, overrides: dict | None = None) -> ReplayBenchConfig
+```
+
 loads YAML and resolves paths relative to its directory. File errors raise `OSError`, malformed YAML raises
 `yaml.YAMLError`, and invalid configuration raises `pydantic.ValidationError`.
 
@@ -97,7 +100,9 @@ def run_replay(
 ```
 
 runs Replay synchronously and returns the artifact directory. `config` is resolved configuration; `cli_metadata`
-is optional invocation evidence. Reserved trace types raise `NotImplementedError`; execution errors propagate after
+is optional invocation evidence. A TraceLab configuration with a null `trace_path` first downloads the pinned
+dataset snapshot and caches the first `task_num` complete sessions. Reserved trace types raise `NotImplementedError`;
+execution errors propagate after
 failure artifacts are recorded. The synchronous entry uses `asyncio.run` and cannot run in a thread with an active
 event loop.
 

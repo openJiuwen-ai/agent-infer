@@ -12,18 +12,31 @@ The converter preserves source token counts, groups rounds by provider and sessi
 Input and output targets come from their total counts; prefix and appended counts are retained without checking their sum.
 Tool metadata is retained for auditing; source tools are not executed.
 
-Copy the example YAML to `/path/to/tracelab.yaml` and set `replay.prompt_calibration_tolerance_tokens: 0`
-before applying these CLI overrides:
+For a quick start, omit `--config`; Replay selects the packaged TraceLab template from `--trace-type`:
 
 ```bash
 vllm bench serve --agentinfer replay \
-  --config /path/to/tracelab.yaml \
-  --trace-type tracelab --trace-path /path/to/round_trace.jsonl \
-  --endpoint /v1/chat/completions \
+  --trace-type tracelab \
   --base-url http://127.0.0.1:8000 --model MODEL_NAME \
   --task-num 8 --max-concurrency 4 \
   --result-dir results/replay-tracelab-8x4
 ```
+
+Without `--config`, `--trace-type`, `--task-num`, `--max-concurrency`, `--base-url`, and `--model` are required.
+When TraceLab has `trace_path: null`, Replay downloads the pinned `v0.0.2` snapshot of `UW-SyFI/TraceLab` and
+extracts the first `task_num` complete sessions in first-seen source order. Every round belonging to those sessions is
+retained. The uncompressed JSONL is cached at
+`~/.cache/agentinfer/datasets/tracelab/v0.0.2/first-<task_num>-sessions.jsonl`, or below `XDG_CACHE_HOME` when set,
+and reused by later runs. Automatic download requires a non-null `task_num`. An explicit `--trace-path` always wins
+and disables download. With `--config`, all CLI overrides are optional and explicitly supplied overrides take precedence.
+YAML paths resolve relative to that file; CLI paths resolve relative to the current directory.
+
+| `--trace-type` | Packaged template |
+| --- | --- |
+| `agentinfer` | `replay_agentinfer.yaml` |
+| `inferact_codex_swebenchpro` | `replay_inferact.yaml` |
+| `tracelab` | `replay_tracelab.yaml` |
+| `agentX` | `replay_agentX.yaml` (reserved; execution is not implemented) |
 
 Replay uses the full input and output token targets from the trace.
 `prompt_calibration_tolerance_tokens` must be zero. Both `trace` and `lognormal` intervals are supported.
@@ -99,7 +112,7 @@ recording sources. The backend context window must accommodate the request targe
 | --- | --- |
 | `replay.trace_type: agentinfer` | AgentInfer `requests.jsonl` input; automatically selects `agentinfer_synthetic`. |
 | `replay.trace_type: inferact_codex_swebenchpro` | Raw Inferact JSON; automatically selects `inferact_synthetic`. Requires `interval_mode: lognormal`, zero calibration tolerance, and `/v1/chat/completions`. |
-| `replay.trace_type: tracelab` | Normalized, uncompressed JSONL; automatically selects `tracelab_synthetic`. Requires zero calibration tolerance and `/v1/chat/completions`. |
+| `replay.trace_type: tracelab` | Normalized, uncompressed JSONL; a null `trace_path` downloads and extracts the first `task_num` complete sessions. Automatically selects `tracelab_synthetic`. Requires zero calibration tolerance and `/v1/chat/completions`. |
 | `replay.trace_type: agentX` | Automatically selects `agentX_synthetic`; reserved, execution raises `NotImplementedError`. |
 | `replay.interval_mode` | `trace` preserves historical intervals; `lognormal` generates configured intervals. |
 | `replay.sample_seed` | Reproducible session selection and backend sampling seed. |

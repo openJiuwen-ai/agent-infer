@@ -33,6 +33,7 @@ from .executor import ReplayExecutor, ReplayTaskExecution
 from .local_tokenizer import LocalTokenizerCounter
 from .planner import ReplayPlan, build_replay_plan
 from .prompt import PromptBuilder, TokenizerClient
+from .tracelab_source import materialize_tracelab_source
 from .transport import ReplayTransport
 from .unified_trace_ir import UnifiedTraceIR, analyze_explicit_trace_ir, validate_trace_ir
 
@@ -199,9 +200,12 @@ def _prepare_replay_source(
     """Resolve the Analyzer input, validating converted IR once before returning it."""
 
     trace_type = config.replay.trace_type
+    trace_path = config.replay.trace_path
+    if trace_path is None:
+        raise ValueError("Replay trace_path was not resolved before source preparation")
     if trace_type == "agentinfer":
-        logger.info("Using AgentInfer Replay trace directly: trace_path=%s", config.replay.trace_path)
-        return config.replay.trace_path, None, (), None
+        logger.info("Using AgentInfer Replay trace directly: trace_path=%s", trace_path)
+        return trace_path, None, (), None
     if trace_type == "agentX":
         raise NotImplementedError(f"trace_type={trace_type} is reserved for future integration")
 
@@ -210,18 +214,18 @@ def _prepare_replay_source(
     logger.info(
         "Converting Replay trace: trace_type=%s trace_path=%s output_dir=%s",
         trace_type,
-        config.replay.trace_path,
+        trace_path,
         convert_dir,
     )
     if trace_type == "tracelab":
         converter = TraceLabConverter()
-        summary = converter.convert(config.replay.trace_path, convert_dir)
+        summary = converter.convert(trace_path, convert_dir)
         trace_ir = validate_trace_ir(convert_dir / "requests.jsonl")
         local_tokenizer = None
     else:
         converter = CodexSwebenchProConverter.from_backend(config)
         try:
-            summary = converter.convert(config.replay.trace_path, convert_dir)
+            summary = converter.convert(trace_path, convert_dir)
             local_tokenizer = getattr(converter.tokenizer, "local_tokenizer", None)
         finally:
             converter.close()
@@ -443,11 +447,29 @@ async def _run_replay(
         raise
 
 
+def _resolve_replay_source(config: ReplayBenchConfig) -> ReplayBenchConfig:
+    """Materialize an implicit TraceLab source and return an updated copy."""
+
+    if config.replay.trace_path is None:
+        task_num = config.experiment.task_num
+        if config.replay.trace_type != "tracelab" or task_num is None:
+            raise ValueError("unresolved Replay trace_path")
+        trace_path = materialize_tracelab_source(task_num)
+        logger.info(
+            "Using downloaded TraceLab dataset subset: task_num=%d trace_path=%s",
+            task_num,
+            trace_path,
+        )
+        replay = config.replay.model_copy(update={"trace_path": trace_path})
+        return config.model_copy(update={"replay": replay})
+    return config
+
+
 def run_replay(
     config: ReplayBenchConfig,
     *,
     cli_metadata: dict[str, object] | None = None,
 ) -> Path:
-    """Analyze a source trace and execute its deterministic Replay plan."""
+    """Resolve the trace, analyze it, and execute its deterministic Replay plan."""
 
-    return asyncio.run(_run_replay(config, cli_metadata))
+    return asyncio.run(_run_replay(_resolve_replay_source(config), cli_metadata))

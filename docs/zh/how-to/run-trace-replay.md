@@ -42,18 +42,33 @@ Converter 原样保留源 token 统计，按 Provider、Session 分组并按 rou
 输入/输出目标直接使用记录的总量，前缀与新增 token 数作为来源证据保留，不校验两者之和。
 工具元数据只用于来源审计，不会实际执行。
 
-先将示例 YAML 复制到 `/path/to/tracelab.yaml`，并设置 `replay.prompt_calibration_tolerance_tokens: 0`，
-然后使用以下 CLI 参数覆盖输入源和模型：
+快速启动时可省略 `--config`；Replay 根据 `--trace-type` 选择内置 TraceLab 模板：
 
 ```bash
 vllm bench serve --agentinfer replay \
-  --config /path/to/tracelab.yaml \
-  --trace-type tracelab --trace-path /path/to/round_trace.jsonl \
-  --endpoint /v1/chat/completions \
+  --trace-type tracelab \
   --base-url http://127.0.0.1:8000 --model MODEL_NAME \
   --task-num 8 --max-concurrency 4 \
   --result-dir results/replay-tracelab-8x4
 ```
+
+未提供 `--config` 时，必须显式提供 `--trace-type`、`--task-num`、`--max-concurrency`、`--base-url` 和
+`--model`。当 TraceLab 的 `trace_path: null` 时，Replay 自动下载固定版本 `v0.0.2` 的
+`UW-SyFI/TraceLab` 数据集，并按源文件中首次出现的顺序提取前 `task_num` 个完整 Session；同一 Session
+的全部 round 都会保留。生成的未压缩 JSONL 缓存于
+`~/.cache/agentinfer/datasets/tracelab/v0.0.2/first-<task_num>-sessions.jsonl`（设置
+`XDG_CACHE_HOME` 时使用该缓存根目录），后续运行直接复用。自动下载模式要求 `task_num` 非空。
+显式提供 `--trace-path` 时始终使用用户文件，不触发下载。
+提供 `--config` 时，其他 CLI 覆盖参数均为可选；显式覆盖参数优先于 YAML。
+YAML 路径相对于配置文件，
+CLI 路径相对于当前目录解析。
+
+| `--trace-type` | 内置模板 |
+| --- | --- |
+| `agentinfer` | `replay_agentinfer.yaml` |
+| `inferact_codex_swebenchpro` | `replay_inferact.yaml` |
+| `tracelab` | `replay_tracelab.yaml` |
+| `agentX` | `replay_agentX.yaml`（预留，尚未实现执行） |
 
 回放直接使用 trace 中完整的输入和输出 token 目标值。
 `prompt_calibration_tolerance_tokens` 必须为 `0`。支持 `trace` 和 `lognormal` 间隔模式。
@@ -92,7 +107,7 @@ Inferact 仍保留源 Human 文本及实时 Assistant 历史；超出校准容�
 | --- | --- |
 | `replay.trace_type: agentinfer` | 输入为 AgentInfer `requests.jsonl`；自动选择 `agentinfer_synthetic`。 |
 | `replay.trace_type: inferact_codex_swebenchpro` | 输入为 Inferact 原始 JSON；自动选择 `inferact_synthetic`，要求 `interval_mode: lognormal`、零校准容差和 `/v1/chat/completions`。 |
-| `replay.trace_type: tracelab` | 归一化、未压缩的 JSONL；自动选择 `tracelab_synthetic`，要求零校准容差和 `/v1/chat/completions`。 |
+| `replay.trace_type: tracelab` | 归一化、未压缩的 JSONL；`trace_path: null` 时自动下载并提取前 `task_num` 个完整 Session。自动选择 `tracelab_synthetic`，要求零校准容差和 `/v1/chat/completions`。 |
 | `replay.trace_type: agentX` | 自动选择 `agentX_synthetic`；为预留入口，执行时抛出 `NotImplementedError`。 |
 | `replay.interval_mode` | `trace` 保留历史间隔，`lognormal` 按配置的分布生成间隔。 |
 | `replay.sample_seed` | 可重复的会话抽样和后端采样种子。 |

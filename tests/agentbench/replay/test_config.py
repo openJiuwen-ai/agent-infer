@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from agentinfer.agentbench.replay.config import (
     ReplayBenchConfig,
+    builtin_replay_config_path,
     load_replay_config,
 )
 
@@ -107,6 +108,26 @@ def test_replay_sample_yaml_loads() -> None:
     assert config.replay.context_micro_trim_limit(20_000) == 100
 
 
+@pytest.mark.parametrize(
+    ("trace_type", "filename"),
+    [
+        ("agentinfer", "replay_agentinfer.yaml"),
+        ("inferact_codex_swebenchpro", "replay_inferact.yaml"),
+        ("tracelab", "replay_tracelab.yaml"),
+        ("agentX", "replay_agentX.yaml"),
+    ],
+)
+def test_builtin_replay_config_accepts_cli_trace_path(trace_type: str, filename: str, tmp_path: Path) -> None:
+    path = builtin_replay_config_path(trace_type)  # type: ignore[arg-type]
+    source = tmp_path / "source.jsonl"
+
+    config = load_replay_config(path, overrides={"replay": {"trace_path": source}})
+
+    assert path.name == filename
+    assert config.replay.trace_type == trace_type
+    assert config.replay.trace_path == source
+
+
 def test_replay_rejects_obsolete_router_config() -> None:
     with pytest.raises(ValidationError, match="router"):
         ReplayBenchConfig.model_validate(
@@ -121,6 +142,25 @@ def test_replay_defaults_to_agentinfer_shape() -> None:
     config = ReplayBenchConfig.model_validate({"replay": {"trace_path": "source.jsonl"}})
 
     assert config.replay.prompt_shape == "agentinfer_synthetic"
+
+
+def test_tracelab_allows_null_trace_path_when_task_num_is_set() -> None:
+    config = ReplayBenchConfig.model_validate(
+        {
+            "experiment": {"task_num": 3},
+            "replay": {"trace_type": "tracelab", "trace_path": None},
+        }
+    )
+
+    assert config.replay.trace_path is None
+
+
+def test_null_trace_path_requires_tracelab_and_task_num() -> None:
+    with pytest.raises(ValidationError, match="trace_path may be null only when trace_type=tracelab"):
+        ReplayBenchConfig.model_validate({"replay": {"trace_type": "agentinfer", "trace_path": None}})
+
+    with pytest.raises(ValidationError, match="automatic dataset download requires experiment.task_num"):
+        ReplayBenchConfig.model_validate({"replay": {"trace_type": "tracelab", "trace_path": None}})
 
 
 @pytest.mark.parametrize(

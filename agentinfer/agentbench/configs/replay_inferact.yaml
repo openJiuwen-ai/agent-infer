@@ -2,11 +2,10 @@
 
 # === Experiment: per-run execution limits ===
 experiment:
-  task_num: 4
-  result_dir: ../result_replay
-  max_concurrency: 2
+  task_num: null
+  max_concurrency: 1
   task_timeout_seconds: 3600
-  run_timeout_seconds: 7200
+  run_timeout_seconds: null
 
 
 # === Backend: upstream LLM ===
@@ -15,7 +14,7 @@ backend:
   base_url: http://127.0.0.1:8000      # vLLM Anthropic-compatible API base URL
   metrics_url: null                    # complete vLLM /metrics URL when base_url points to a Router
   tokenizer_base_url: null
-  model: glm-5                         # model used by Claude Code requests
+  model: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8
   endpoint: /v1/chat/completions       # e.g., Anthropic Messages endpoint
   api_key_env: null                    # environment variable containing the API key; null = none
   chat_template_kwargs:
@@ -27,7 +26,7 @@ replay:
   # Trace adapter: agentinfer | inferact_codex_swebenchpro | agentX | tracelab.
   trace_type: inferact_codex_swebenchpro
   # Source trace. Inferact conversion output is written under <result_dir>/convert_result/.
-  trace_path: /trace-file/codex_swebenchpro_first8.json
+  trace_path: null
   # Prompt shape is selected automatically from trace_type.
   # Inferact additionally requires interval_mode=lognormal,
   # and backend.endpoint=/v1/chat/completions.
