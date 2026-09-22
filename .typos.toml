@@ -1,0 +1,3 @@
+[default.extend-words]
+# Huawei Compute Architecture for Neural Networks: the Ascend runtime stack.
+CANN = "CANN"

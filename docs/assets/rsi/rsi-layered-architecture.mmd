@@ -1,0 +1,13 @@
+flowchart TB
+  app[应用与 Agents] --> harness[Harness：角色、DAG、会话与工具]
+  harness --> infer[AgentInfer：语义路由、请求路由、准入与缓存观测]
+  infer --> cuda[vLLM / CUDA]
+  infer --> ascend[vLLM-Ascend]
+  control[RSI Controller：唯一状态机、预算与恢复] -. 派发 .-> harness
+  control --> lab[隔离实验与独立裁决]
+  lab --> evidence[原始证据库]
+  evidence --> kb[分层知识库]
+  infer -. 运行观测 .-> evidence
+  kb -. 下一轮适用经验 .-> harness
+  lab -. 经门禁受控晋升 .-> infer
+  note[固定模型权重；两后端均未环境验证；真实适配后续接入]

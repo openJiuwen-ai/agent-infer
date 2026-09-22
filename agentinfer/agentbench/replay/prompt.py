@@ -486,6 +486,7 @@ class PromptBuilder:
                 target,
                 count,
                 allow_shorter=True,
+                use_literal_boundaries=True,
             )
             history.extend(repair_history)
         if history[-1] != count:
@@ -690,6 +691,7 @@ class PromptBuilder:
         current_count: int,
         *,
         allow_shorter: bool = False,
+        use_literal_boundaries: bool = False,
     ) -> tuple[SyntheticPrompt, int, int, int, tuple[int, ...]]:
         """Find the closest deterministic request-private suffix.
 
@@ -717,11 +719,23 @@ class PromptBuilder:
             requested_tokens = delta + extra_tokens
             if requested_tokens <= 0:
                 continue
+            fillers: list[str] = []
+            # A repeated token-derived filler can merge with the source suffix
+            # at a BPE boundary and add zero tokens.  These short deterministic
+            # suffixes provide a small set of independently tokenized repair
+            # boundaries without changing the frozen history.  They are only
+            # needed for the common one-token gap; larger gaps keep the normal
+            # token-derived repair path below.
             for variant in range(8):
-                filler = await self.tokenizer.token_text(
-                    f"{namespace}:repair:{variant}",
-                    requested_tokens,
+                fillers.append(
+                    await self.tokenizer.token_text(
+                        f"{namespace}:repair:{variant}",
+                        requested_tokens,
+                    )
                 )
+            if use_literal_boundaries and requested_tokens == 1:
+                fillers.extend((".", ",", ":", ";", "!", "?", "0", "…"))
+            for variant, filler in enumerate(fillers):
                 candidate = self._replace_calibration_remainder(prompt, index, content + filler)
                 candidate_count = await self.tokenizer.count(candidate)
                 attempts += 1

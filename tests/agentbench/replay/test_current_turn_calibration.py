@@ -125,6 +125,23 @@ def test_padding_is_not_assumed_additive_at_text_boundary():
     assert result.calibration.repair_attempts > 1
 
 
+def test_current_turn_repair_uses_literal_boundary_when_filler_merges():
+    class MergingFillerTokenizer(TextTokenizer):
+        async def token_text(self, namespace, count):
+            return " " * count
+
+        async def prompt_token_ids(self, prompt):
+            content = str(prompt.messages[-1]["content"])
+            return tuple(ord(char) for char in content.rstrip(" "))
+
+    prompt = SyntheticPrompt("", (), ({"role": "user", "content": "x"},))
+    result = calibrate(prompt, 2, MergingFillerTokenizer())
+
+    assert result.messages[-1]["content"] == "x."
+    assert result.calibration.final_tokens == 2
+    assert result.calibration.target_met is True
+
+
 @pytest.mark.parametrize("tolerance", [0, 1, 8])
 def test_unreachable_token_length_never_accepts_a_residual(tolerance):
     class EvenTokenizer(TextTokenizer):

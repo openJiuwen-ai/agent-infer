@@ -82,6 +82,9 @@ class ReplayConfig(ReplayStrictModel):
         json_schema_extra={"cli": True},
     )
     trace_path: Path = Field(json_schema_extra={"cli": True})
+    # Optional validated IR directory for repeated iterations. Its manifest
+    # must bind the cached bundle to trace_path before it is used.
+    converted_trace_path: Path | None = None
     trace_same_agent_gap_scale: float = Field(
         1.0,
         ge=0,
@@ -178,9 +181,10 @@ def resolve_replay_config_paths(
     for owner, name in (
         (config.experiment, "result_dir"),
         (config.replay, "trace_path"),
+        (config.replay, "converted_trace_path"),
     ):
         value = getattr(owner, name)
-        if not value.is_absolute():
+        if value is not None and not value.is_absolute():
             setattr(owner, name, (base_dir / value).resolve())
     return config
 

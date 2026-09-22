@@ -10,6 +10,7 @@ delegates source analysis, planning, Prompt construction, and graph execution.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import replace
@@ -33,7 +34,7 @@ from .local_tokenizer import LocalTokenizerCounter
 from .planner import ReplayPlan, build_replay_plan
 from .prompt import PromptBuilder, TokenizerClient
 from .transport import ReplayTransport
-from .unified_trace_ir import UnifiedTraceIR, validate_trace_ir
+from .unified_trace_ir import UnifiedTraceIR, sha256_file, validate_trace_ir
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +179,18 @@ def _prepare_replay_source(
         return config.replay.trace_path, None, (), None
     if trace_type in {"agentX", "tracelab"}:
         raise NotImplementedError(f"trace_type={trace_type} is reserved for future integration")
+
+    if config.replay.converted_trace_path is not None:
+        if trace_type != "inferact_codex_swebenchpro":
+            raise ValueError("converted_trace_path is supported only for inferact_codex_swebenchpro")
+        convert_dir = config.replay.converted_trace_path.resolve()
+        trace_ir = validate_trace_ir(convert_dir / "requests.jsonl", convert_dir / "texts")
+        manifest = json.loads(trace_ir.manifest_path.read_text(encoding="utf-8"))
+        source = manifest.get("source")
+        if not isinstance(source, dict) or source.get("sha256") != sha256_file(config.replay.trace_path):
+            raise ValueError("converted_trace_path is not bound to replay.trace_path")
+        logger.info("Using cached validated Replay conversion: output_dir=%s", convert_dir)
+        return trace_ir.requests_path, trace_ir, (_capture("replay_conversion_manifest", trace_ir.manifest_path),), None
 
     convert_dir = output_dir / "convert_result"
     started = time.monotonic()

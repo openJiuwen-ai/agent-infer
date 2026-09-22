@@ -31,7 +31,12 @@ Reference 和 Explanation；开发者内部设计稿位于仓根目录的 `desig
   [benchmark methodology](en/explanation/benchmark-methodology.md), and
   [internal design index](en/explanation/design-documents.md) for design rationale and system boundaries.
 
-## 贡献文档
+## RSI 离线原型 / Offline RSI prototype
+
+- 中文：[架构与稠密反馈](zh/explanation/rsi-architecture.md)、[运行指南](zh/how-to/run-rsi-demo.md)、[接口参考](zh/reference/rsi-api.md)。
+- English: [Architecture](en/explanation/rsi-architecture.md), [how-to](en/how-to/run-rsi-demo.md), [API](en/reference/rsi-api.md).
+
+## 文档贡献约定
 
 新增或修改功能时，请同步更新中文权威文档和对应英文文档。分类、命名和验证要求见
 [贡献指南](../CONTRIBUTING.md)。

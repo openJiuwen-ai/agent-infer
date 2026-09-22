@@ -1,0 +1,35 @@
+flowchart LR
+    subgraph W[Workload contract]
+        A[Codex CLI
+           read-only inspection] --> B[Inferact
+           codex_swebenchpro trace]
+        B --> C[AgentBench converter
+           tokenizer + Trace IR]
+        C --> D[Replay planner/executor
+           exact input targets]
+    end
+    subgraph S[Serving experiment]
+        D --> E[vLLM serving
+           Qwen3.8-27B · 4×B300]
+        E --> R[50-round profile sweep
+           10 controls × 5 repeats]
+        R --> F[Prometheus + request
+           raw evidence]
+    end
+    subgraph Q[Independent quality gate]
+        E --> G[GSM8K API evaluator
+           deterministic scoring]
+    end
+    subgraph L[Evidence and knowledge]
+        F --> H[RSI experiment ledger
+           append-only JSONL]
+        G --> H
+        H --> I[Read-only dashboard
+           per-round effect + gates]
+        H <--> K[Layered knowledge base
+           controls · runtime · kernels
+           evidence · promotion]
+    end
+    I --> J[PR comment
+       architecture + dashboard]
+    K --> J

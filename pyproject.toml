@@ -23,10 +23,11 @@ pythonpath = ["."]
 include = ["agentinfer*"]
 
 [tool.setuptools.package-data]
-agentinfer = ["agentbench/configs/*.yaml"]
+agentinfer = ["agentbench/configs/*.yaml", "rsi/dashboard/static/*.html"]
 
 [project.scripts]
 vllm = "agentinfer.agentcache.entrypoints.cli.main:main"
+agentinfer-rsi = "agentinfer.rsi.cli:main"
 
 [tool.ruff]
 target-version = "py310"

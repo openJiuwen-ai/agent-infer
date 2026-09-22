@@ -1,0 +1,20 @@
+flowchart LR
+  H[③可证伪假设] --> P[④⑤参考/差分/受控干预/消融+profile]
+  P --> F[⑥结构化 FeedbackRecord]
+  F --> L[④局部修正]
+  L --> P
+  L --> E[⑤集成与真实任务E2E]
+  E --> G{⑦独立裁决}
+  G -->|PASS| A[⑧激活恢复]
+  A --> O[⑨观察]
+  O --> K[⑩知识归档与晋升]
+  G -->|FAIL| H
+  G -->|INCONCLUSIVE：目标增量重测| P
+  G -. 当前脚手架重试均返回③ .-> H
+  O -->|异常| A
+  K --> N[①下一轮基线 / ②诊断]
+  N --> H
+  K -. scope匹配知识 .-> H
+  C[三类反馈：correctness / system_behavior / performance]
+  C -. 顺序由假设决定 .-> P
+  R[局部、便宜、及时、客观可验证；profile结果不作最终perf验收]

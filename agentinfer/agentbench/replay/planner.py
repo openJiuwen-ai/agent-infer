@@ -170,6 +170,7 @@ def _sha256_json(value: object) -> str:
 def _workload_config(config: ReplayBenchConfig) -> dict[str, object]:
     replay = config.replay.model_dump(mode="json")
     replay.pop("trace_path", None)
+    replay.pop("converted_trace_path", None)
     return {
         "task_num": config.experiment.task_num,
         "max_concurrency": config.experiment.max_concurrency,

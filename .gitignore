@@ -223,3 +223,6 @@ __marimo__/
 
 # opencode
 .opencode/
+
+# Local RSI demonstration state and generated experiment artifacts
+.rsi-demo/

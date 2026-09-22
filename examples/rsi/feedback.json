@@ -1,0 +1,59 @@
+{
+  "synthetic": true,
+  "description": "Synthetic offline demo only. No CUDA/NPU probe, benchmark, or real performance result was collected. This bundle intentionally evaluates to INCONCLUSIVE.",
+  "scope": {
+    "candidate_id": "demo-candidate-001",
+    "baseline_id": "demo-baseline-001",
+    "backend": "cuda",
+    "engine_version": "demo-pinned-vllm-commit",
+    "model_revision": "demo-pinned-model-revision",
+    "workload_id": "demo-fixed-workload"
+  },
+  "required_checks": ["compute-reference", "communication-overlap", "serving-holdout"],
+  "records": [
+    {
+      "check_id": "compute-reference",
+      "hypothesis_id": "demo-reduce-redundant-normalization",
+      "candidate_id": "demo-candidate-001",
+      "baseline_id": "demo-baseline-001",
+      "backend": "cuda",
+      "layer": "ops.compute",
+      "category": "correctness",
+      "verdict": "pass",
+      "metric": "mismatched_elements",
+      "value": 0,
+      "unit": "elements",
+      "scope": {
+        "engine_version": "demo-pinned-vllm-commit",
+        "model_revision": "demo-pinned-model-revision",
+        "workload_id": "demo-fixed-workload"
+      },
+      "diagnostic": false,
+      "evidence_refs": ["synthetic://illustration-not-real-evidence/compute-reference.json"],
+      "next_test": "Collect a real reference comparison on the pinned backend before accepting correctness.",
+      "synthetic": true
+    },
+    {
+      "check_id": "communication-overlap",
+      "hypothesis_id": "demo-reduce-transfer-blocking",
+      "candidate_id": "demo-candidate-001",
+      "baseline_id": "demo-baseline-001",
+      "backend": "cuda",
+      "layer": "ops.communication",
+      "category": "system_behavior",
+      "verdict": "unavailable",
+      "metric": "compute_transfer_overlap",
+      "value": null,
+      "unit": "ratio",
+      "scope": {
+        "engine_version": "demo-pinned-vllm-commit",
+        "model_revision": "demo-pinned-model-revision",
+        "workload_id": "demo-fixed-workload"
+      },
+      "diagnostic": true,
+      "evidence_refs": [],
+      "next_test": "Implement the timeline probe, then run compute-only, transfer-only, and combined controlled experiments.",
+      "synthetic": true
+    }
+  ]
+}
