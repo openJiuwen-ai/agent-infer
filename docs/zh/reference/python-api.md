@@ -78,7 +78,10 @@ def build_progress_ttl_controller(
 
 ## Replay Python 入口
 
-`agentinfer.agentbench.replay.config.load_replay_config(path: Path) -> ReplayBenchConfig`
+```python
+load_replay_config(path: Path, *, overrides: dict | None = None) -> ReplayBenchConfig
+```
+
 读取 YAML 并相对于文件目录解析路径。文件读取失败抛出 `OSError`，无效 YAML 抛出 `yaml.YAMLError`，
 配置不符合模型时抛出 `pydantic.ValidationError`。
 
@@ -93,6 +96,8 @@ def run_replay(
 ```
 
 同步运行回放并返回产物目录。`config` 是已解析配置，`cli_metadata` 是可选的调用证据；
+TraceLab 配置的 `trace_path` 为空时，会先下载固定版本数据集，并将前 `task_num` 个完整 Session 写入
+本地缓存后再运行；
 预留 trace 类型抛出 `NotImplementedError`，执行错误在记录失败产物后向调用方传播。
 该同步入口内部使用 `asyncio.run`，不能在已有事件循环的线程内调用。
 

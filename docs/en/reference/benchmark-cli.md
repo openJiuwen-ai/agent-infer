@@ -90,7 +90,15 @@ distribution plots.
 
 ```bash
 vllm bench serve --agentinfer replay --config agentinfer/agentbench/configs/replay_benchmark.yaml
+vllm bench serve --agentinfer replay \
+  --trace-type tracelab \
+  --task-num 8 --max-concurrency 4 \
+  --base-url http://127.0.0.1:8000 --model MODEL_NAME
 vllm bench serve --agentinfer replay --help
 ```
 
-Replay requires `--config` and accepts schema-derived overrides; see [Trace Replay](../how-to/run-trace-replay.md).
+With `--config`, all Replay overrides are optional. Without it, Replay selects a packaged template from
+`--trace-type` and requires `--trace-type`, `--task-num`, `--max-concurrency`, `--base-url`, and `--model`. Packaged
+TraceLab configurations with a null `trace_path` automatically download the pinned dataset and cache the first
+`task_num` complete sessions. An explicit `--trace-path` overrides that source. See
+[Trace Replay](../how-to/run-trace-replay.md).

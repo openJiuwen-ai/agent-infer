@@ -15,6 +15,35 @@ PromptKind = Literal["lead_title", "lead_name", "lead_main", "subagent_first", "
 
 
 @dataclass(frozen=True)
+class ReplayTimingEvidence:
+    """Describe the source events selected as request timing proxies."""
+
+    valid: bool
+    basis: str | None
+    reason: str | None
+    input_event_type: str | None
+    input_event_index: int | None
+    output_event_type: str | None
+    output_event_index: int | None
+
+
+@dataclass(frozen=True)
+class ReplaySourceEvidence:
+    """Retain dataset provenance without extending inference-only row models."""
+
+    provider: str
+    session_id: str
+    round_index: int
+    round_id: str | None
+    trace_key: str | None
+    model: str | None
+    newly_append_tokens: int
+    timing: ReplayTimingEvidence
+    tool_count: int
+    tool_error_count: int
+
+
+@dataclass(frozen=True)
 class ReplayRequest:
     """One historical request attempt with inferred Replay relationships."""
 
@@ -51,6 +80,7 @@ class ReplayRequest:
     ]
     same_agent_gap_seconds: float | None
     parallel_with: tuple[str, ...]
+    source_evidence: ReplaySourceEvidence | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Serialize timestamps and tuples for JSON artifacts."""

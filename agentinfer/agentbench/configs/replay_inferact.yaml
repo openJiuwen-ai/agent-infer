@@ -1,0 +1,41 @@
+# Trace Replay execution configuration.
+
+# === Experiment: per-run execution limits ===
+experiment:
+  task_num: null
+  max_concurrency: 1
+  task_timeout_seconds: 3600
+  run_timeout_seconds: null
+
+
+# === Backend: upstream LLM ===
+backend:
+  type: vllm                           # backend type; currently only vllm
+  base_url: http://127.0.0.1:8000      # vLLM Anthropic-compatible API base URL
+  metrics_url: null                    # complete vLLM /metrics URL when base_url points to a Router
+  tokenizer_base_url: null
+  model: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8
+  endpoint: /v1/chat/completions       # e.g., Anthropic Messages endpoint
+  api_key_env: null                    # environment variable containing the API key; null = none
+  chat_template_kwargs:
+    enable_thinking: false
+    clear_thinking: true
+
+# === Replay: configuration for trace replay ===
+replay:
+  # Trace adapter: agentinfer | inferact_codex_swebenchpro | agentX | tracelab.
+  trace_type: inferact_codex_swebenchpro
+  # Source trace. Inferact conversion output is written under <result_dir>/convert_result/.
+  trace_path: null
+  # Prompt shape is selected automatically from trace_type.
+  # Inferact additionally requires interval_mode=lognormal,
+  # and backend.endpoint=/v1/chat/completions.
+  # Seed for deterministic session sampling and Backend requests.
+  sample_seed: 0
+  interval_mode: lognormal
+  interval_lognormal:
+    p50_seconds: 2.0
+    p95_seconds: 30.0
+    p99_seconds: 90.0
+  request_timeout_seconds: 3600
+  prompt_calibration_tolerance_tokens: 0

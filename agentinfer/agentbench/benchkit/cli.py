@@ -15,7 +15,7 @@ from types import UnionType
 
 from pydantic import BaseModel
 
-from ..replay.config import ReplayBenchConfig, load_replay_config
+from ..replay.config import ReplayBenchConfig, ReplayTraceType, builtin_replay_config_path, load_replay_config
 from .config import AgentBenchConfig, load_config
 
 logger = logging.getLogger(__name__)
@@ -100,6 +100,13 @@ def _discover_overrides(
 
 _OVERRIDES = _discover_overrides()
 _REPLAY_OVERRIDES = _discover_overrides(ReplayBenchConfig)
+_REPLAY_REQUIRED_WITHOUT_CONFIG = (
+    ("trace_type", "--trace-type"),
+    ("task_num", "--task-num"),
+    ("max_concurrency", "--max-concurrency"),
+    ("base_url", "--base-url"),
+    ("model", "--model"),
+)
 
 
 def _resolve_cli_path(path: Path, *, allow_bare: bool = False) -> Path:
@@ -143,6 +150,19 @@ def _apply_schema_overrides(
     """Apply explicit CLI values and revalidate one complete schema."""
 
     payload = config.model_dump(mode="python")
+    normalized = _schema_override_payload(args, overrides)
+    for section, values in normalized.items():
+        payload[section].update(values)
+    return schema.model_validate(payload)
+
+
+def _schema_override_payload(
+    args: argparse.Namespace,
+    overrides: tuple[_Override, ...],
+) -> dict[str, dict[str, object]]:
+    """Return explicitly supplied CLI values grouped by configuration section."""
+
+    payload: dict[str, dict[str, object]] = {}
     for override in overrides:
         value = getattr(args, override.dest, None)
         if value is None:
@@ -152,8 +172,8 @@ def _apply_schema_overrides(
                 value,
                 allow_bare=override.section == "agent" and override.field == "executable",
             )
-        payload[override.section][override.field] = value
-    return schema.model_validate(payload)
+        payload.setdefault(override.section, {})[override.field] = value
+    return payload
 
 
 def _apply_cli_overrides(args: argparse.Namespace, config: AgentBenchConfig) -> AgentBenchConfig:
@@ -219,7 +239,7 @@ def _parser() -> argparse.ArgumentParser:
         "replay",
         help="Execute a deterministic Trace Replay workload",
     )
-    replay.add_argument("--config", type=Path, required=True)
+    replay.add_argument("--config", type=Path, default=None)
     _register_schema_args(replay, _REPLAY_OVERRIDES)
 
     summarize = commands.add_parser("summarize", help="Combine existing run summaries")
@@ -239,7 +259,12 @@ def main(argv: list[str] | None = None, *, cli_metadata: dict[str, object] | Non
     """Parse and dispatch one BenchKit command."""
 
     _configure_logging()
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
+    if args.command == "replay" and args.config is None:
+        missing = [flag for dest, flag in _REPLAY_REQUIRED_WITHOUT_CONFIG if getattr(args, dest) is None]
+        if missing:
+            parser.error(f"replay without --config requires: {', '.join(missing)}")
     metadata = dict(cli_metadata or {"entrypoint": "agentinfer-bench", "argv": argv or sys.argv[1:]})
     if args.command in {"replay", "run"}:
         if args.config is not None:
@@ -276,9 +301,13 @@ def _replay(args: argparse.Namespace, cli_metadata: dict[str, object]) -> None:
 
     from ..replay.runner import run_replay
 
-    config = _apply_replay_cli_overrides(
-        args,
-        load_replay_config(args.config),
+    config_path = args.config
+    if config_path is None:
+        config_path = builtin_replay_config_path(typing.cast(ReplayTraceType, args.trace_type))
+        cli_metadata["builtin_config"] = config_path.name
+    config = load_replay_config(
+        config_path,
+        overrides=_schema_override_payload(args, _REPLAY_OVERRIDES),
     )
     run_dir = run_replay(config, cli_metadata=cli_metadata)
     logger.info("Replay result: %s", run_dir)

@@ -10,6 +10,7 @@ import pytest
 
 from agentinfer.agentbench.benchkit.cli import (
     _apply_cli_overrides,
+    _apply_replay_cli_overrides,
     _parser,
     _prepare,
     _resolve_cli_path,
@@ -17,6 +18,7 @@ from agentinfer.agentbench.benchkit.cli import (
     main,
 )
 from agentinfer.agentbench.benchkit.config import AgentBenchConfig, load_config
+from agentinfer.agentbench.replay.config import ReplayBenchConfig
 
 
 def _config(path: Path) -> None:
@@ -32,6 +34,41 @@ def test_schema_overrides_metrics_url(tmp_path: Path) -> None:
 
     args = parser.parse_args(["run", "--config", "c.yaml", "--metrics-url", "http://vllm:8000/metrics"])
     assert _apply_cli_overrides(args, config).backend.metrics_url == "http://vllm:8000/metrics"
+
+
+@pytest.mark.parametrize(
+    ("trace_type", "shape"),
+    [
+        ("inferact_codex_swebenchpro", "inferact_synthetic"),
+        ("agentinfer", "agentinfer_synthetic"),
+        ("tracelab", "tracelab_synthetic"),
+        ("agentX", "agentX_synthetic"),
+    ],
+)
+def test_replay_cli_derives_prompt_shape_after_trace_type_override(trace_type: str, shape: str) -> None:
+    config = ReplayBenchConfig.model_validate(
+        {
+            "replay": {
+                "trace_path": "source.json",
+                "interval_mode": "lognormal",
+                "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
+            }
+        }
+    )
+    args = _parser().parse_args(["replay", "--config", "replay.yaml", "--trace-type", trace_type])
+
+    overridden = _apply_replay_cli_overrides(args, config)
+
+    assert overridden.replay.trace_type == trace_type
+    assert overridden.replay.prompt_shape == shape
+    assert config.replay.prompt_shape == "agentinfer_synthetic"
+
+
+def test_removed_prompt_shape_cli_flag_is_rejected() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        _parser().parse_args(["replay", "--config", "replay.yaml", "--prompt-shape", "agentinfer_synthetic"])
+
+    assert exc_info.value.code == 2
 
 
 @pytest.mark.parametrize("flag", ["--enabled", "--no-enabled", "--router-url"])
@@ -143,6 +180,143 @@ replay:
         "task_num": 2,
         "trace_path": str(source),
     }
+
+
+def test_replay_with_config_requires_no_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = tmp_path / "replay.yaml"
+    config_path.write_text(
+        """
+experiment:
+  task_num: 1
+  result_dir: result
+  max_concurrency: 1
+backend:
+  base_url: http://backend:8000
+  model: served-model
+replay:
+  trace_path: source.jsonl
+""",
+        encoding="utf-8",
+    )
+    calls = []
+    runner = types.ModuleType("agentinfer.agentbench.replay.runner")
+    runner.run_replay = lambda config, *, cli_metadata: calls.append((config, cli_metadata)) or tmp_path / "result"
+    monkeypatch.setitem(sys.modules, runner.__name__, runner)
+
+    assert main(["replay", "--config", str(config_path)]) == 0
+
+    config, metadata = calls[0]
+    assert config.experiment.task_num == 1
+    assert config.experiment.max_concurrency == 1
+    assert config.backend.base_url == "http://backend:8000"
+    assert config.backend.model == "served-model"
+    assert config.replay.trace_path == tmp_path / "source.jsonl"
+    assert metadata["config_path"] == str(config_path)
+    assert metadata["overrides"] == {}
+
+
+@pytest.mark.parametrize(
+    ("trace_type", "template", "shape", "endpoint"),
+    [
+        ("agentinfer", "replay_agentinfer.yaml", "agentinfer_synthetic", "/v1/messages"),
+        (
+            "inferact_codex_swebenchpro",
+            "replay_inferact.yaml",
+            "inferact_synthetic",
+            "/v1/chat/completions",
+        ),
+        ("tracelab", "replay_tracelab.yaml", "tracelab_synthetic", "/v1/chat/completions"),
+        ("agentX", "replay_agentX.yaml", "agentX_synthetic", "/v1/chat/completions"),
+    ],
+)
+def test_replay_without_config_selects_builtin_template(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    trace_type: str,
+    template: str,
+    shape: str,
+    endpoint: str,
+) -> None:
+    source = tmp_path / "source.jsonl"
+    calls = []
+    runner = types.ModuleType("agentinfer.agentbench.replay.runner")
+    runner.run_replay = lambda config, *, cli_metadata: calls.append((config, cli_metadata)) or tmp_path / "result"
+    monkeypatch.setitem(sys.modules, runner.__name__, runner)
+    monkeypatch.chdir(tmp_path)
+
+    assert (
+        main(
+            [
+                "replay",
+                "--trace-type",
+                trace_type,
+                "--trace-path",
+                str(source),
+                "--task-num",
+                "3",
+                "--max-concurrency",
+                "2",
+                "--base-url",
+                "http://backend:8000",
+                "--model",
+                "served-model",
+            ]
+        )
+        == 0
+    )
+
+    config, metadata = calls[0]
+    assert config.replay.trace_type == trace_type
+    assert config.replay.trace_path == source
+    assert config.replay.prompt_shape == shape
+    assert config.experiment.task_num == 3
+    assert config.experiment.max_concurrency == 2
+    assert config.backend.base_url == "http://backend:8000"
+    assert config.backend.model == "served-model"
+    assert config.backend.endpoint == endpoint
+    assert metadata["builtin_config"] == template
+    assert "config_path" not in metadata
+
+
+def test_replay_without_config_requires_selection_arguments(capsys) -> None:
+    with pytest.raises(SystemExit, match="2"):
+        main(["replay", "--trace-path", "source.jsonl"])
+
+    error = capsys.readouterr().err
+    assert "replay without --config requires" in error
+    for flag in ("--trace-type", "--task-num", "--max-concurrency", "--base-url", "--model"):
+        assert flag in error
+
+
+def test_replay_without_config_allows_tracelab_dataset_download(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+    runner = types.ModuleType("agentinfer.agentbench.replay.runner")
+    runner.run_replay = lambda config, *, cli_metadata: calls.append(config) or tmp_path / "result"
+    monkeypatch.setitem(sys.modules, runner.__name__, runner)
+
+    assert (
+        main(
+            [
+                "replay",
+                "--trace-type",
+                "tracelab",
+                "--task-num",
+                "3",
+                "--max-concurrency",
+                "2",
+                "--base-url",
+                "http://backend:8000",
+                "--model",
+                "served-model",
+            ]
+        )
+        == 0
+    )
+
+    assert calls[0].replay.trace_path is None
 
 
 def test_compare_delegates_to_owned_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:

@@ -80,7 +80,6 @@ def config(tmp_path):
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": source,
-                "prompt_shape": "trace_record",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
             }
