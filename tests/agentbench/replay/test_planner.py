@@ -78,6 +78,57 @@ def test_execution_metadata_partitions_sent_and_pre_send_failures() -> None:
     assert metadata["dependency_skipped_requests"] == 1
 
 
+@pytest.mark.parametrize("context_mode", ["append", "trim"])
+def test_execution_metadata_partitions_context_cache_usage(context_mode: str) -> None:
+    planned = (
+        SimpleNamespace(node_type="request", context_mode="independent", runtime_request_id="root", context_after=None),
+        SimpleNamespace(
+            node_type="request",
+            context_mode=context_mode,
+            runtime_request_id="next",
+            context_after="source-root",
+        ),
+    )
+    plan = SimpleNamespace(workload_fingerprint="fingerprint", tasks=(SimpleNamespace(requests=planned),))
+    nodes = (
+        NodeExecution("root", "root", "request", "lead_main", "success", 0, 0, 0, None),
+        NodeExecution("next", "next", "request", "continuation", "success", 0, 0, 0, None),
+    )
+    task_results = (ReplayTaskExecution("task", "session", "completed", 1, None, nodes),)
+    facts = tuple(
+        RequestFact(
+            "1",
+            "run",
+            request_id,
+            "session",
+            "lead",
+            "lead",
+            "start",
+            "finish",
+            "success",
+            200,
+            1,
+            0.1,
+            10,
+            2,
+            None,
+            cached,
+            "http://backend",
+            None,
+        )
+        for request_id, cached in (("root", 0), ("next", 8))
+    )
+
+    metadata = _execution_metadata(plan, task_results, facts=facts)  # type: ignore[arg-type]
+
+    assert metadata["cache_usage_coverage_requests"] == 2
+    assert metadata["observed_cached_tokens"] == 8
+    assert metadata["first_request_cache_usage_coverage"] == 1
+    assert metadata["first_request_observed_cached_tokens"] == 0
+    assert metadata["continuation_cache_usage_coverage"] == 1
+    assert metadata["continuation_observed_cached_tokens"] == 8
+
+
 def _source(path: Path) -> None:
     rows = [
         _row("s1-lead", "s1", "lead", 0, 1, cached_tokens=6),
@@ -192,8 +243,8 @@ def test_plan_is_stable_isolated_and_endpoint_independent(
     assert chat.workload_fingerprint == messages.workload_fingerprint
     assert chat.workload_fingerprint != different_concurrency.workload_fingerprint
     assert chat.workload_fingerprint != different_same_agent_gap.workload_fingerprint
-    assert chat.interval_model.fit_version == "agentinfer-replay-trace/v2"
-    assert chat.planner_version == "agentinfer-replay-structural/v9"
+    assert chat.interval_model.fit_version == "agentinfer-replay-trace"
+    assert chat.planner_version == "agentinfer-replay-structural"
     assert chat.execution_ready is False
     assert len(chat.tasks) == 5
     assert len({task.runtime_session_id for task in chat.tasks}) == 5

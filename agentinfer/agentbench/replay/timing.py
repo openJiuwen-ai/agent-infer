@@ -17,7 +17,7 @@ _ANCHOR_PROBABILITIES = (0.50, 0.95, 0.99)
 _ANCHOR_NAMES = ("p50_seconds", "p95_seconds", "p99_seconds")
 _ANCHOR_Z = tuple(NormalDist().inv_cdf(probability) for probability in _ANCHOR_PROBABILITIES)
 _U_CLAMP = 1e-12
-_CDF_VERSION = "python-statistics-normaldist/v1"
+_CDF_VERSION = "python-statistics-normaldist"
 _MAX_ANCHOR_RESIDUAL_RATIO = 0.02
 
 
@@ -67,7 +67,7 @@ def build_interval_model(config: ReplayConfig | None = None) -> IntervalModel:
     """Fit and return the selected auditable interval model."""
 
     if config is None or config.interval_mode == "trace":
-        return IntervalModel(mode="trace", fit_version="agentinfer-replay-trace/v2")
+        return IntervalModel(mode="trace", fit_version="agentinfer-replay-trace")
     configured = config.interval_lognormal
     if configured is None:  # Also guarded by ReplayConfig; retain direct-call fail-closed behavior.
         raise ValueError("interval_mode=lognormal requires p50/p95/p99 anchors")
@@ -94,7 +94,7 @@ def build_interval_model(config: ReplayConfig | None = None) -> IntervalModel:
     ]
     return IntervalModel(
         mode="lognormal",
-        fit_version="lognormal-three-quantile-ols/v1",
+        fit_version="lognormal-three-quantile-ols",
         mu=mu,
         sigma=sigma,
         anchors=anchors,
@@ -110,7 +110,7 @@ def build_interval_model(config: ReplayConfig | None = None) -> IntervalModel:
 def deterministic_uniform(sample_seed: int, runtime_session_id: str, request_key: str) -> float:
     """Map stable request identity to a reproducible open-interval uniform."""
 
-    material = f"{sample_seed}\0{runtime_session_id}\0{request_key}\0interval/v1"
+    material = f"{sample_seed}\0{runtime_session_id}\0{request_key}\0interval"
     integer = int.from_bytes(hashlib.sha256(material.encode()).digest()[:8], "big")
     uniform = (integer + 0.5) / 2**64
     return min(1 - _U_CLAMP, max(_U_CLAMP, uniform))
@@ -123,7 +123,7 @@ def backend_sampling_seed(
 ) -> int:
     """Return a deterministic signed-31-bit Backend seed."""
 
-    material = f"{config.sample_seed}\0{runtime_session_id}\0{request.key}\0backend-seed/v1"
+    material = f"{config.sample_seed}\0{runtime_session_id}\0{request.key}\0backend-seed"
     digest = hashlib.sha256(material.encode()).digest()
     return int.from_bytes(digest[:4], "big") & 0x7FFFFFFF
 
@@ -138,9 +138,11 @@ def effective_interval_seconds(
 
     if request.send_after is None and request.delay_seconds == 0:
         return 0.0
-    if request.dependency_kind != "same_agent" or request.same_agent_gap_seconds is None:
+    if request.dependency_kind != "same_agent":
         return request.delay_seconds
     if config.interval_mode == "trace":
+        if request.same_agent_gap_seconds is None:
+            raise ValueError(f"trace interval is unavailable for request {request.key}")
         return max(
             0.0,
             request.same_agent_gap_seconds * config.trace_same_agent_gap_scale

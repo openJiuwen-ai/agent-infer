@@ -12,10 +12,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .schema import ReplayAnalysis, ReplaySourceEvidence, ReplayTimingEvidence
 
 BUNDLE_SCHEMA_VERSION = "2"
+TOKEN_RECIPE_SCHEMA_VERSION = "3"
 BUNDLE_MANIFEST_NAME = "manifest.json"
 
 
@@ -62,13 +70,16 @@ class UnifiedTraceIR:
 
     root: Path
     requests_path: Path
-    text_dir: Path
+    text_dir: Path | None
     manifest_path: Path
     bundle_sha256: str
+    prompt_source_kind: str = "text_turns"
 
     def text_path(self, reference: PromptReference) -> Path:
         """Resolve a validated prompt reference beneath this IR's text root."""
 
+        if self.text_dir is None:
+            raise ValueError("this unified Trace IR has no text sidecars")
         return self.text_dir / reference.session_id / f"turn_{reference.turn_index}.txt"
 
 
@@ -131,7 +142,7 @@ def _validate_file(root: Path, entry: object, label: str) -> Path:
 def _trace_ir_digest_payload(manifest: dict[str, object]) -> dict[str, object]:
     """Select every manifest field covered by the portable Trace IR digest."""
 
-    return {
+    payload = {
         "schema_version": manifest.get("schema_version"),
         "converter": manifest.get("converter"),
         "source": manifest.get("source"),
@@ -140,9 +151,12 @@ def _trace_ir_digest_payload(manifest: dict[str, object]) -> dict[str, object]:
         "texts": manifest.get("texts"),
         "summary": manifest.get("summary"),
     }
+    if manifest.get("schema_version") == TOKEN_RECIPE_SCHEMA_VERSION:
+        payload["prompt_source"] = manifest.get("prompt_source")
+    return payload
 
 
-def validate_trace_ir(requests_path: Path, text_dir: Path) -> UnifiedTraceIR:
+def validate_trace_ir(requests_path: Path, text_dir: Path | None = None) -> UnifiedTraceIR:
     """Validate the complete unified Trace IR and all cross-file references.
 
     The manifest is discovered next to ``requests.jsonl`` and binds the request
@@ -150,45 +164,62 @@ def validate_trace_ir(requests_path: Path, text_dir: Path) -> UnifiedTraceIR:
     """
 
     requests_path = requests_path.resolve()
-    text_dir = text_dir.resolve()
+    text_dir = text_dir.resolve() if text_dir is not None else None
     root = requests_path.parent
     manifest_path = root / BUNDLE_MANIFEST_NAME
     manifest = _load_object(manifest_path, "unified Trace IR manifest")
-    if manifest.get("schema_version") != BUNDLE_SCHEMA_VERSION:
+    schema_version = manifest.get("schema_version")
+    if schema_version not in {BUNDLE_SCHEMA_VERSION, TOKEN_RECIPE_SCHEMA_VERSION}:
         raise ValueError(f"unsupported unified Trace IR schema_version: {manifest.get('schema_version')!r}")
+    prompt_source = manifest.get("prompt_source")
+    if schema_version == BUNDLE_SCHEMA_VERSION:
+        prompt_source_kind = "text_turns"
+        if prompt_source not in (None, {"kind": "text_turns"}):
+            raise ValueError("text-turn Trace IR only supports prompt_source.kind=text_turns")
+    else:
+        if prompt_source != {"kind": "token_recipe"}:
+            raise ValueError("token-recipe Trace IR requires prompt_source.kind=token_recipe")
+        prompt_source_kind = "token_recipe"
     calculated_digest = canonical_sha256(_trace_ir_digest_payload(manifest))
     if manifest.get("bundle_sha256") != calculated_digest:
         raise ValueError("bundle_sha256 does not match manifest contents")
     manifest_requests = _validate_file(root, manifest.get("requests"), "requests")
     if manifest_requests != requests_path:
         raise ValueError("converted requests path does not match the Trace IR manifest")
-    manifest_text_dir = _safe_relative_path(manifest.get("text_dir"), "text_dir")
-    if root.joinpath(*manifest_text_dir.parts).resolve() != text_dir:
-        raise ValueError("converted texts path does not match the Trace IR manifest")
-    if not text_dir.is_dir():
-        raise ValueError(f"Trace IR text directory is missing: {text_dir}")
-
-    raw_texts = manifest.get("texts")
-    if not isinstance(raw_texts, list):
-        raise ValueError("manifest texts must be a list")
     expected_paths: set[Path] = set()
-    for index, entry in enumerate(raw_texts):
-        path = _validate_file(root, entry, f"texts[{index}]")
-        if path in expected_paths:
-            raise ValueError(f"duplicate text manifest entry: {path.relative_to(root)}")
-        if text_dir not in path.parents:
-            raise ValueError(f"text manifest entry escapes text_dir: {path.relative_to(root)}")
-        expected_paths.add(path)
-    actual_paths = {path.resolve() for path in text_dir.rglob("*") if path.is_file()}
-    if actual_paths != expected_paths:
-        missing = expected_paths - actual_paths
-        extra = actual_paths - expected_paths
-        raise ValueError(f"text manifest inventory mismatch: missing={len(missing)} extra={len(extra)}")
+    if prompt_source_kind == "text_turns":
+        if text_dir is None:
+            raise ValueError("text_turns unified Trace IR requires a text directory")
+        manifest_text_dir = _safe_relative_path(manifest.get("text_dir"), "text_dir")
+        if root.joinpath(*manifest_text_dir.parts).resolve() != text_dir:
+            raise ValueError("converted texts path does not match the Trace IR manifest")
+        if not text_dir.is_dir():
+            raise ValueError(f"Trace IR text directory is missing: {text_dir}")
+        raw_texts = manifest.get("texts")
+        if not isinstance(raw_texts, list):
+            raise ValueError("manifest texts must be a list")
+        for index, entry in enumerate(raw_texts):
+            path = _validate_file(root, entry, f"texts[{index}]")
+            if path in expected_paths:
+                raise ValueError(f"duplicate text manifest entry: {path.relative_to(root)}")
+            if text_dir not in path.parents:
+                raise ValueError(f"text manifest entry escapes text_dir: {path.relative_to(root)}")
+            expected_paths.add(path)
+        actual_paths = {path.resolve() for path in text_dir.rglob("*") if path.is_file()}
+        if actual_paths != expected_paths:
+            missing = expected_paths - actual_paths
+            extra = actual_paths - expected_paths
+            raise ValueError(f"text manifest inventory mismatch: missing={len(missing)} extra={len(extra)}")
+    elif text_dir is not None:
+        raise ValueError("token_recipe unified Trace IR must not supply a text directory")
 
     request_rows = 0
     referenced_paths: set[Path] = set()
     references: set[PromptReference] = set()
     turns_by_session: dict[str, set[int]] = {}
+    recipe_ids: set[str] = set()
+    recipe_sequences: dict[str, set[int]] = {}
+    recipe_previous: dict[str, str | None] = {}
     with requests_path.open(encoding="utf-8") as handle:
         for source_line, line in enumerate(handle, start=1):
             try:
@@ -197,34 +228,86 @@ def validate_trace_ir(requests_path: Path, text_dir: Path) -> UnifiedTraceIR:
                 raise ValueError(f"invalid requests JSON at line {source_line}: {exc}") from exc
             if not isinstance(row, dict):
                 raise ValueError(f"requests line {source_line} is not an object")
-            reference = parse_prompt_reference(row.get("prompt_ref"))
-            if reference is None:
-                raise ValueError(f"requests line {source_line} has no prompt_ref")
-            if row.get("session_id") != reference.session_id:
-                raise ValueError(f"requests line {source_line} prompt_ref session does not match session_id")
-            if reference in references:
-                raise ValueError(f"requests line {source_line} duplicates a prompt_ref")
-            references.add(reference)
-            turns_by_session.setdefault(reference.session_id, set()).add(reference.turn_index)
-            path = text_dir / reference.session_id / f"turn_{reference.turn_index}.txt"
-            if path.resolve() not in expected_paths:
-                raise ValueError(f"requests line {source_line} references an unmanifested text file")
-            referenced_paths.add(path.resolve())
+            if prompt_source_kind == "text_turns":
+                reference = parse_prompt_reference(row.get("prompt_ref"))
+                if reference is None:
+                    raise ValueError(f"requests line {source_line} has no prompt_ref")
+                if row.get("session_id") != reference.session_id:
+                    raise ValueError(f"requests line {source_line} prompt_ref session does not match session_id")
+                if reference in references:
+                    raise ValueError(f"requests line {source_line} duplicates a prompt_ref")
+                references.add(reference)
+                turns_by_session.setdefault(reference.session_id, set()).add(reference.turn_index)
+                assert text_dir is not None
+                path = text_dir / reference.session_id / f"turn_{reference.turn_index}.txt"
+                if path.resolve() not in expected_paths:
+                    raise ValueError(f"requests line {source_line} references an unmanifested text file")
+                referenced_paths.add(path.resolve())
+            else:
+                request_id = row.get("request_id")
+                session_id = row.get("session_id")
+                sequence = row.get("sequence_index")
+                context_after = row.get("context_after")
+                send_after = row.get("send_after")
+                if not isinstance(request_id, str) or not request_id:
+                    raise ValueError(f"requests line {source_line} has no request_id")
+                if request_id in recipe_ids:
+                    raise ValueError(f"requests line {source_line} duplicates request_id {request_id}")
+                if not isinstance(session_id, str) or not session_id:
+                    raise ValueError(f"requests line {source_line} has no session_id")
+                if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
+                    raise ValueError(f"requests line {source_line} has invalid sequence_index")
+                if context_after is not None and (
+                    not isinstance(context_after, str) or context_after not in recipe_ids
+                ):
+                    raise ValueError(f"requests line {source_line} context_after must reference an earlier request")
+                if sequence == 0 and context_after is not None:
+                    raise ValueError(f"requests line {source_line} first recipe request has context_after")
+                if sequence > 0 and (context_after is None or context_after != recipe_previous.get(session_id)):
+                    raise ValueError(
+                        f"requests line {source_line} context_after does not reference the previous request"
+                    )
+                if send_after != context_after:
+                    raise ValueError(f"requests line {source_line} send_after must match context_after")
+                if row.get("prompt_ref") is not None:
+                    raise ValueError(f"requests line {source_line} token_recipe cannot reference source text")
+                for field in ("input_tokens", "output_tokens"):
+                    value = row.get(field)
+                    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                        raise ValueError(f"requests line {source_line} has invalid {field}")
+                cached = row.get("cached_tokens")
+                if (
+                    isinstance(cached, bool)
+                    or not isinstance(cached, int)
+                    or cached < 0
+                    or cached > row["input_tokens"]
+                ):
+                    raise ValueError(f"requests line {source_line} has invalid cached_tokens")
+                sequences = recipe_sequences.setdefault(session_id, set())
+                if sequence in sequences:
+                    raise ValueError(f"requests line {source_line} duplicates sequence_index")
+                sequences.add(sequence)
+                recipe_ids.add(request_id)
+                recipe_previous[session_id] = request_id
             request_rows += 1
     if request_rows != int(manifest["requests"]["lines"]):
         raise ValueError("requests row count does not match manifest")
-    if referenced_paths != expected_paths:
+    if prompt_source_kind == "text_turns" and referenced_paths != expected_paths:
         raise ValueError("one or more manifested text files are not referenced by requests.jsonl")
     for session_id, turns in turns_by_session.items():
         if turns != set(range(len(turns))):
             raise ValueError(f"prompt_ref turns are not contiguous for session {session_id}")
+    for session_id, sequences in recipe_sequences.items():
+        if sequences != set(range(len(sequences))):
+            raise ValueError(f"sequence_index values are not contiguous for session {session_id}")
 
     summary = manifest.get("summary")
     if not isinstance(summary, dict):
         raise ValueError("manifest summary must be an object")
     if summary.get("requests") != request_rows or summary.get("text_files") != len(expected_paths):
         raise ValueError("manifest summary request/text coverage does not match the Trace IR")
-    if summary.get("sessions") != len(turns_by_session):
+    session_count = len(turns_by_session) if prompt_source_kind == "text_turns" else len(recipe_sequences)
+    if summary.get("sessions") != session_count:
         raise ValueError("manifest summary session coverage does not match the Trace IR")
     return UnifiedTraceIR(
         root,
@@ -232,6 +315,7 @@ def validate_trace_ir(requests_path: Path, text_dir: Path) -> UnifiedTraceIR:
         text_dir,
         manifest_path,
         calculated_digest,
+        prompt_source_kind,
     )
 
 
@@ -241,6 +325,7 @@ def write_trace_ir_manifest(
     converter_name: str,
     source_path: Path,
     summary: dict[str, object],
+    prompt_source_kind: str = "text_turns",
 ) -> dict[str, object]:
     """Inventory a converted Trace IR and atomically publish its manifest."""
 
@@ -249,8 +334,10 @@ def write_trace_ir_manifest(
     text_dir = output_dir / "texts"
     if not requests_path.is_file():
         raise ValueError("converter output is missing requests.jsonl")
-    if not text_dir.is_dir():
+    if prompt_source_kind == "text_turns" and not text_dir.is_dir():
         raise ValueError("converter output is missing texts/")
+    if prompt_source_kind not in {"text_turns", "token_recipe"}:
+        raise ValueError(f"unsupported prompt source kind: {prompt_source_kind}")
 
     def entry(path: Path) -> dict[str, object]:
         return {
@@ -261,17 +348,22 @@ def write_trace_ir_manifest(
         }
 
     manifest_without_digest: dict[str, object] = {
-        "schema_version": BUNDLE_SCHEMA_VERSION,
+        "schema_version": BUNDLE_SCHEMA_VERSION if prompt_source_kind == "text_turns" else TOKEN_RECIPE_SCHEMA_VERSION,
         "converter": {"name": converter_name},
         "source": {
             "sha256": sha256_file(source_path),
             "bytes": source_path.stat().st_size,
         },
         "requests": entry(requests_path),
-        "text_dir": "texts",
-        "texts": [entry(path) for path in sorted(text_dir.rglob("*")) if path.is_file()],
         "summary": summary,
     }
+    if prompt_source_kind == "text_turns":
+        manifest_without_digest["text_dir"] = "texts"
+        manifest_without_digest["texts"] = [entry(path) for path in sorted(text_dir.rglob("*")) if path.is_file()]
+    else:
+        manifest_without_digest["prompt_source"] = {"kind": prompt_source_kind}
+        manifest_without_digest["text_dir"] = None
+        manifest_without_digest["texts"] = None
     manifest = {
         **manifest_without_digest,
         "bundle_sha256": canonical_sha256(manifest_without_digest),
@@ -299,3 +391,205 @@ class TraceTextStore:
             text = self.trace_ir.text_path(reference).read_text(encoding="utf-8")
             self._cache[reference] = text
         return text
+
+
+_LEGACY_ANALYSIS_COUNTERS = (
+    "invalid_json",
+    "not_an_object",
+    "missing_session_id",
+    "missing_agent_id",
+    "invalid_timestamps",
+    "retry_matched_failures",
+    "rows_without_replayable_tokens",
+    "sessions_without_replayable_requests",
+    "inferred_actor_role",
+    "invalid_token_counts",
+    "duplicate_request_ids",
+    "pruned_terminal_timing_dependency_rows",
+    "inferred_late_title_requests",
+    "inferred_lead_name_requests",
+)
+
+
+def _explicit_required_string(row: dict[str, object], field: str, source_line: int) -> str:
+    """Return a required non-empty string from one validated explicit IR row."""
+
+    value = row.get(field)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"explicit IR line {source_line} has invalid {field}")
+    return value
+
+
+def _explicit_optional_string(value: object) -> str | None:
+    """Return an optional non-empty string without coercing source values."""
+
+    return value if isinstance(value, str) and value else None
+
+
+def _explicit_required_int(row: dict[str, object], field: str, source_line: int, *, positive: bool) -> int:
+    """Return a strict integer satisfying the explicit field's lower bound."""
+
+    value = row.get(field)
+    minimum = 1 if positive else 0
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise ValueError(f"explicit IR line {source_line} has invalid {field}")
+    return value
+
+
+def _explicit_optional_nonnegative_int(value: object) -> int | None:
+    """Return a strict optional non-negative integer."""
+
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _explicit_timestamp(row: dict[str, object], field: str, source_line: int) -> datetime:
+    """Parse a required explicit IR timestamp into UTC."""
+
+    raw = _explicit_required_string(row, field, source_line)
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"explicit IR line {source_line} has invalid {field}") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _explicit_source_gap(row: dict[str, object], source_line: int) -> float | None:
+    """Return a finite source gap, retaining unavailable timing as ``None``."""
+
+    value = row.get("source_gap_seconds")
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"explicit IR line {source_line} has invalid source_gap_seconds")
+    gap = float(value)
+    if not math.isfinite(gap) or gap < 0:
+        raise ValueError(f"explicit IR line {source_line} has invalid source_gap_seconds")
+    return gap
+
+
+def _explicit_timing_evidence(row: dict[str, object], source_line: int) -> ReplayTimingEvidence:
+    """Map selected event references into typed source timing evidence."""
+
+    from .schema import ReplayTimingEvidence
+
+    raw = row.get("timing_proxy")
+    if not isinstance(raw, dict):
+        raise ValueError(f"explicit IR line {source_line} has invalid timing_proxy")
+    return ReplayTimingEvidence(
+        valid=row.get("timing_valid") is True,
+        basis=_explicit_optional_string(raw.get("basis")),
+        reason=_explicit_optional_string(raw.get("reason")),
+        input_event_type=_explicit_optional_string(raw.get("input_ready_event_type")),
+        input_event_index=_explicit_optional_nonnegative_int(raw.get("input_ready_event_index")),
+        output_event_type=_explicit_optional_string(raw.get("output_end_event_type")),
+        output_event_index=_explicit_optional_nonnegative_int(raw.get("output_end_event_index")),
+    )
+
+
+def _explicit_source_evidence(row: dict[str, object], source_line: int) -> ReplaySourceEvidence:
+    """Map dataset provenance without exposing it as scheduling state."""
+
+    from .schema import ReplaySourceEvidence
+
+    return ReplaySourceEvidence(
+        provider=_explicit_required_string(row, "source_provider", source_line),
+        session_id=_explicit_required_string(row, "source_session_id", source_line),
+        round_index=_explicit_required_int(row, "round_index", source_line, positive=False),
+        round_id=_explicit_optional_string(row.get("source_round_id")),
+        trace_key=_explicit_optional_string(row.get("source_trace_key")),
+        model=_explicit_optional_string(row.get("source_model")),
+        newly_append_tokens=_explicit_required_int(row, "newly_append_tokens", source_line, positive=False),
+        timing=_explicit_timing_evidence(row, source_line),
+        tool_count=_explicit_required_int(row, "tool_count", source_line, positive=False),
+        tool_error_count=_explicit_required_int(row, "tool_error_count", source_line, positive=False),
+    )
+
+
+def analyze_explicit_trace_ir(trace_ir: UnifiedTraceIR) -> ReplayAnalysis:
+    """Build Replay sessions from a validated token-recipe IR without inference."""
+
+    from .schema import ReplayAnalysis, ReplayRequest, ReplaySession
+
+    if trace_ir.prompt_source_kind != "token_recipe":
+        raise ValueError("explicit Replay analysis requires token_recipe unified Trace IR")
+    rows_by_session: dict[str, list[dict[str, object]]] = defaultdict(list)
+    with trace_ir.requests_path.open(encoding="utf-8") as handle:
+        for ir_line, line in enumerate(handle, start=1):
+            raw = json.loads(line)
+            if not isinstance(raw, dict):
+                raise ValueError(f"explicit IR line {ir_line} is not an object")
+            row = {str(key): value for key, value in raw.items()}
+            rows_by_session[_explicit_required_string(row, "session_id", ir_line)].append(row)
+
+    sessions: list[ReplaySession] = []
+    unavailable_timing = 0
+    round_index_gaps = 0
+    for session_id, session_rows in sorted(rows_by_session.items()):
+        rows = sorted(session_rows, key=lambda row: int(row["sequence_index"]))
+        requests: list[ReplayRequest] = []
+        previous_round_index: int | None = None
+        for row in rows:
+            source_line = _explicit_required_int(row, "source_line", 0, positive=True)
+            request_id = _explicit_required_string(row, "request_id", source_line)
+            sequence_index = _explicit_required_int(row, "sequence_index", source_line, positive=False)
+            context_after = _explicit_optional_string(row.get("context_after"))
+            gap = _explicit_source_gap(row, source_line)
+            evidence = _explicit_source_evidence(row, source_line)
+            if not evidence.timing.valid:
+                unavailable_timing += 1
+            if previous_round_index is not None and evidence.round_index != previous_round_index + 1:
+                round_index_gaps += 1
+            previous_round_index = evidence.round_index
+            input_tokens = _explicit_required_int(row, "input_tokens", source_line, positive=True)
+            output_tokens = _explicit_required_int(row, "output_tokens", source_line, positive=True)
+            requests.append(
+                ReplayRequest(
+                    key=request_id,
+                    source_line=source_line,
+                    source_request_id=request_id,
+                    actor_id="lead",
+                    actor_role="lead",
+                    parent_actor_id=None,
+                    started_at=_explicit_timestamp(row, "started_at", source_line),
+                    finished_at=_explicit_timestamp(row, "finished_at", source_line),
+                    historical_status="unknown",
+                    source_input_tokens=input_tokens,
+                    source_output_tokens=output_tokens,
+                    source_cached_tokens=_explicit_required_int(row, "cached_tokens", source_line, positive=False),
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    replay_kind="request",
+                    prompt_kind="lead_main" if sequence_index == 0 else "continuation",
+                    prompt_kind_source="explicit",
+                    prompt_kind_inference_rule=None,
+                    retry_match_key=None,
+                    prompt_recipe_key=request_id,
+                    prompt_ref=None,
+                    send_after=context_after,
+                    context_after=context_after,
+                    delay_seconds=gap or 0.0,
+                    dependency_kind="session_root" if context_after is None else "same_agent",
+                    same_agent_gap_seconds=gap if context_after is not None else None,
+                    parallel_with=(),
+                    source_evidence=evidence,
+                )
+            )
+        source_task_id = _explicit_optional_string(rows[0].get("task_id")) if rows else None
+        sessions.append(ReplaySession(session_id, source_task_id, tuple(requests)))
+
+    row_analysis = dict.fromkeys(_LEGACY_ANALYSIS_COUNTERS, 0)
+    row_analysis["explicit_timing_unavailable"] = unavailable_timing
+    row_analysis["source_round_index_gaps"] = round_index_gaps
+    total_rows = sum(len(rows) for rows in rows_by_session.values())
+    return ReplayAnalysis(
+        source_path=str(trace_ir.requests_path),
+        source_sha256=sha256_file(trace_ir.requests_path),
+        total_rows=total_rows,
+        valid_rows=total_rows,
+        row_analysis=dict(sorted(row_analysis.items())),
+        sessions=tuple(sessions),
+    )

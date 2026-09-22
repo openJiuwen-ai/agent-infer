@@ -67,7 +67,7 @@ class DeterministicBlockRenderer:
     sharing while retaining exact prefix identity within one session.
     """
 
-    version = "agentinfer-deterministic-block-text/v1"
+    version = "agentinfer-deterministic-block-text"
 
     def __init__(
         self,

@@ -1,0 +1,45 @@
+# Trace Replay defaults for AgentInfer requests.jsonl input.
+
+experiment:
+  task_num: null
+  max_concurrency: 1
+  task_timeout_seconds: 3600
+  run_timeout_seconds: null
+
+backend:
+  type: vllm
+  base_url: http://127.0.0.1:8000
+  metrics_url: null
+  tokenizer_base_url: null
+  model: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8
+  endpoint: /v1/messages
+  chat_template_kwargs: {}
+  api_key_env: null
+
+replay:
+  trace_type: agentinfer
+  trace_path: null
+  trace_same_agent_gap_scale: 1.0
+  trace_same_agent_gap_offset_seconds: 0.0
+  interval_mode: trace
+  sample_seed: 0
+  lead_title_sys_shared_prefix: 296
+  lead_name_sys_shared_prefix: 105
+  lead_1st_sys_shared_prefix: 18
+  lead_1st_sys_session_prefix: 1466
+  lead_1st_tool_shared_prefix: 17550
+  lead_1st_msg_shared_prefix: 74
+  lead_1st_trailing_system_prefix: 459
+  subagent_tool_1st_shared_prefix: 6900
+  subagent_1st_sys_shared_prefix: 18
+  subagent_1st_sys_session_prefix: 732
+  subagent_1st_msg_shared_prefix: 74
+  lead_continuation_extra_system_ratio: 0.2146
+  subagent_continuation_extra_system_ratio: 0.2344
+  lead_continuation_system_tokens: 64
+  subagent_continuation_system_tokens: 32
+  context_adjustment_mode: adaptive
+  context_micro_trim_max_tokens: 64
+  context_micro_trim_max_ratio: 0.005
+  prompt_calibration_tolerance_tokens: 0
+  request_timeout_seconds: 3600

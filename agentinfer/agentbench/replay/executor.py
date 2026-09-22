@@ -273,7 +273,7 @@ class ReplayExecutor:
             _NodeCompletion(response.finished_clock, exchange, completion_status, response.error)
         )
         calibration = asdict(prompt.calibration) if prompt.calibration is not None else None
-        if calibration is not None and self.config.replay.prompt_shape == "trace_record":
+        if calibration is not None and self.config.replay.prompt_shape == "inferact_synthetic":
             actual = response.input_tokens
             calibration["backend_input_tokens"] = actual
             calibration["backend_input_residual_tokens"] = (
