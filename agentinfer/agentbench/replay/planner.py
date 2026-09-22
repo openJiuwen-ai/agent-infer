@@ -190,12 +190,6 @@ def _required_requests(session: ReplaySession) -> tuple[ReplayRequest, ...]:
     return tuple(request for request in session.requests if request.key in required)
 
 
-def _bounded_tokens(value: int | None, maximum: int | None) -> int | None:
-    if value is None:
-        return None
-    return min(value, maximum) if maximum is not None else value
-
-
 def _runtime_request_id(runtime_session_id: str, source_key: str) -> str:
     return str(uuid.uuid5(uuid.UUID(runtime_session_id), source_key))
 
@@ -205,7 +199,7 @@ def _context_plan(
     request: ReplayRequest,
     token_targets: dict[str, tuple[int | None, int | None]],
 ) -> tuple[str | None, ContextMode]:
-    """Choose the context predecessor and mode using bounded token targets."""
+    """Choose the context predecessor and mode using source token targets."""
 
     source_context = request.context_after
     if request.replay_kind != "request":
@@ -238,13 +232,7 @@ def _task_plan(
     interval_model: IntervalModel,
 ) -> ReplayTaskPlan:
     requests = _required_requests(sampled.source)
-    token_targets = {
-        request.key: (
-            _bounded_tokens(request.input_tokens, config.replay.max_input_tokens),
-            _bounded_tokens(request.output_tokens, config.replay.max_output_tokens),
-        )
-        for request in requests
-    }
+    token_targets = {request.key: (request.input_tokens, request.output_tokens) for request in requests}
     nodes: list[ReplayPlanNode] = []
     for request in requests:
         context_after, context_mode = _context_plan(

@@ -139,7 +139,6 @@ def test_inferact_synthetic_checks_wire_usage_and_preserves_both_stream_fields(t
                 "replay": {
                     "trace_path": "source.json",
                     "trace_type": "inferact_codex_swebenchpro",
-                    "prompt_shape": "inferact_synthetic",
                     "interval_mode": "lognormal",
                     "interval_lognormal": {"p50_seconds": 1, "p95_seconds": 2, "p99_seconds": 3},
                     "prompt_calibration_tolerance_tokens": 0,
@@ -199,7 +198,6 @@ def test_exact_token_validation_rejects_successful_response_with_wrong_usage(tmp
                 "replay": {
                     "trace_type": "tracelab",
                     "trace_path": "rounds.jsonl",
-                    "prompt_shape": "tracelab_synthetic",
                     "prompt_calibration_tolerance_tokens": 0,
                 },
             }

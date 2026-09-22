@@ -99,7 +99,6 @@ def test_tracelab_plan_repeats_sessions_with_isolated_recipe_ids(tmp_path: Path)
             "replay": {
                 "trace_type": "tracelab",
                 "trace_path": source,
-                "prompt_shape": "tracelab_synthetic",
                 "prompt_calibration_tolerance_tokens": 0,
             },
         }
@@ -143,7 +142,6 @@ def test_tracelab_builder_appends_live_history_and_preserves_exact_length() -> N
                 "replay": {
                     "trace_type": "tracelab",
                     "trace_path": "source.jsonl",
-                    "prompt_shape": "tracelab_synthetic",
                     "prompt_calibration_tolerance_tokens": 0,
                 },
             }
@@ -198,7 +196,6 @@ def test_tracelab_preserves_source_token_counts_without_reconciling_split(tmp_pa
             "replay": {
                 "trace_type": "tracelab",
                 "trace_path": source,
-                "prompt_shape": "tracelab_synthetic",
                 "prompt_calibration_tolerance_tokens": 0,
             }
         }
@@ -238,7 +235,6 @@ def test_tracelab_does_not_drop_live_history_to_fit_a_small_target(mode: str) ->
                 "replay": {
                     "trace_type": "tracelab",
                     "trace_path": "source.jsonl",
-                    "prompt_shape": "tracelab_synthetic",
                     "prompt_calibration_tolerance_tokens": 0,
                     "context_adjustment_mode": mode,
                 }
@@ -303,7 +299,6 @@ def test_tracelab_runner_uses_live_context_and_skips_failed_dependencies(
             "replay": {
                 "trace_type": "tracelab",
                 "trace_path": source,
-                "prompt_shape": "tracelab_synthetic",
                 "prompt_calibration_tolerance_tokens": 0,
                 "trace_same_agent_gap_scale": 0,
             },

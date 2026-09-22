@@ -49,13 +49,13 @@ Converter 原样保留源 token 统计，按 Provider、Session 分组并按 rou
 vllm bench serve --agentinfer replay \
   --config /path/to/tracelab.yaml \
   --trace-type tracelab --trace-path /path/to/round_trace.jsonl \
-  --prompt-shape tracelab_synthetic --endpoint /v1/chat/completions \
+  --endpoint /v1/chat/completions \
   --base-url http://127.0.0.1:8000 --model MODEL_NAME \
   --task-num 8 --max-concurrency 4 \
   --result-dir results/replay-tracelab-8x4
 ```
 
-保留完整输入/输出时，配置 `max_input_tokens: null`、`max_output_tokens: null`；
+回放直接使用 trace 中完整的输入和输出 token 目标值。
 `prompt_calibration_tolerance_tokens` 必须为 `0`。支持 `trace` 和 `lognormal` 间隔模式。
 `task_num` 表示采样后的 Runtime Session 数，`max_concurrency` 限制同时运行的 Session 数。
 重复采样使用不同的 Runtime Session ID 和私有合成内容。
@@ -81,22 +81,21 @@ TraceLab IR 使用 `requests.jsonl` 和 `manifest.json`，不生成文本 sideca
 
 ## 输入与配置
 
-旧配置中的 `claude_code_minimal_v1`、`trace_record`、`token_recipe` 应分别迁移为
-`agentinfer_synthetic`、`inferact_synthetic`、`tracelab_synthetic`，不提供旧名称别名。
-名称参与 workload fingerprint，迁移后不应按相同 workload ID 比较。
+提示词形态由 `replay.trace_type` 自动确定。请删除旧 YAML 中的 `replay.prompt_shape` 和命令中的
+`--prompt-shape`；显式配置提示词形态会报错。
+序列化配置移除此字段后，workload fingerprint 和 Runtime ID 会变化，迁移后不应按相同 workload ID 比较。
 IR 的 `prompt_source.kind=token_recipe` 保持不变，token 目标用于构造合成 user 轮次并续接实时 Assistant 上下文。
 Inferact 仍保留源 Human 文本及实时 Assistant 历史；超出校准容差记录到
 `trace-record-validation.json`，不会重写文本或因此终止 Session。
 
 | 配置 | 含义 |
 | --- | --- |
-| `replay.trace_type: agentinfer` | 输入为 AgentInfer `requests.jsonl`；使用默认 `prompt_shape: agentinfer_synthetic`。 |
-| `replay.trace_type: inferact_codex_swebenchpro` | 输入为 Inferact 原始 JSON；要求 `prompt_shape: inferact_synthetic`、`interval_mode: lognormal` 和 `/v1/chat/completions`。 |
-| `replay.trace_type: tracelab` | 归一化、未压缩的 JSONL；要求 `prompt_shape: tracelab_synthetic`、零校准容差和 `/v1/chat/completions`。 |
-| `replay.trace_type: agentX` | `prompt_shape: agentX_synthetic` 为预留入口，执行时抛出 `NotImplementedError`。 |
+| `replay.trace_type: agentinfer` | 输入为 AgentInfer `requests.jsonl`；自动选择 `agentinfer_synthetic`。 |
+| `replay.trace_type: inferact_codex_swebenchpro` | 输入为 Inferact 原始 JSON；自动选择 `inferact_synthetic`，要求 `interval_mode: lognormal`、零校准容差和 `/v1/chat/completions`。 |
+| `replay.trace_type: tracelab` | 归一化、未压缩的 JSONL；自动选择 `tracelab_synthetic`，要求零校准容差和 `/v1/chat/completions`。 |
+| `replay.trace_type: agentX` | 自动选择 `agentX_synthetic`；为预留入口，执行时抛出 `NotImplementedError`。 |
 | `replay.interval_mode` | `trace` 保留历史间隔，`lognormal` 按配置的分布生成间隔。 |
 | `replay.sample_seed` | 可重复的会话抽样和后端采样种子。 |
-| `replay.max_input_tokens` / `max_output_tokens` | 可选 token 目标上限；`null` 保留 trace 目标。 |
 | `replay.context_adjustment_mode` | `strict` 拒绝非追加上下文；`adaptive` 审计裁剪和上下文重置。 |
 | `replay.request_timeout_seconds` | 单请求超时。 |
 

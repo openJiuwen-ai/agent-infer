@@ -94,12 +94,6 @@ class ReplayConfig(ReplayStrictModel):
     interval_mode: Literal["trace", "lognormal"] = Field("trace", json_schema_extra={"cli": True})
     interval_lognormal: ReplayIntervalLognormalConfig | None = None
     sample_seed: int = 0
-    prompt_shape: Literal["agentinfer_synthetic", "inferact_synthetic", "tracelab_synthetic", "agentX_synthetic"] = (
-        Field(
-            "agentinfer_synthetic",
-            json_schema_extra={"cli": True},
-        )
-    )
     lead_title_sys_shared_prefix: int = Field(0, ge=0)
     lead_name_sys_shared_prefix: int = Field(0, ge=0)
     lead_1st_sys_shared_prefix: int = Field(0, ge=0)
@@ -115,8 +109,6 @@ class ReplayConfig(ReplayStrictModel):
     subagent_continuation_extra_system_ratio: float = Field(0, ge=0, le=1)
     lead_continuation_system_tokens: int = Field(0, ge=0)
     subagent_continuation_system_tokens: int = Field(0, ge=0)
-    max_input_tokens: int | None = Field(None, ge=1)
-    max_output_tokens: int | None = Field(None, ge=1)
     context_adjustment_mode: Literal["strict", "adaptive"] = "strict"
     context_micro_trim_max_tokens: int = Field(64, ge=0)
     context_micro_trim_max_ratio: float = Field(0.005, ge=0, le=1)
@@ -128,6 +120,17 @@ class ReplayConfig(ReplayStrictModel):
     )
     request_timeout_seconds: int = Field(3600, ge=1)
 
+    @property
+    def prompt_shape(self) -> str:
+        """Derive the internal prompt shape from the selected trace adapter."""
+
+        return {
+            "inferact_codex_swebenchpro": "inferact_synthetic",
+            "agentinfer": "agentinfer_synthetic",
+            "tracelab": "tracelab_synthetic",
+            "agentX": "agentX_synthetic",
+        }[self.trace_type]
+
     @model_validator(mode="after")
     def validate_replay_modes(self) -> ReplayConfig:
         if self.interval_mode == "lognormal":
@@ -136,23 +139,13 @@ class ReplayConfig(ReplayStrictModel):
         elif self.interval_lognormal is not None:
             raise ValueError("interval_lognormal anchors require interval_mode=lognormal")
         if self.trace_type == "inferact_codex_swebenchpro":
-            if self.prompt_shape != "inferact_synthetic":
-                raise ValueError("inferact_codex_swebenchpro requires prompt_shape=inferact_synthetic")
             if self.interval_mode != "lognormal":
                 raise ValueError("inferact_codex_swebenchpro requires interval_mode=lognormal")
             if self.prompt_calibration_tolerance_tokens != 0:
                 raise ValueError("inferact_codex_swebenchpro requires prompt_calibration_tolerance_tokens=0")
-        if self.trace_type == "agentinfer" and self.prompt_shape == "inferact_synthetic":
-            raise ValueError("agentinfer trace_type does not provide a unified inferact_synthetic IR")
         if self.trace_type == "tracelab":
-            if self.prompt_shape != "tracelab_synthetic":
-                raise ValueError("tracelab requires prompt_shape=tracelab_synthetic")
             if self.prompt_calibration_tolerance_tokens != 0:
                 raise ValueError("tracelab requires prompt_calibration_tolerance_tokens=0")
-        elif self.prompt_shape == "tracelab_synthetic":
-            raise ValueError("prompt_shape=tracelab_synthetic requires trace_type=tracelab")
-        if self.prompt_shape == "agentX_synthetic" and self.trace_type != "agentX":
-            raise ValueError("prompt_shape=agentX_synthetic requires trace_type=agentX")
         return self
 
     def context_micro_trim_limit(self, target: int) -> int:

@@ -189,7 +189,6 @@ def test_inferact_synthetic_uses_human_sidecar_and_live_length_aligned_assistant
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": tmp_path / "source.json",
-                "prompt_shape": "inferact_synthetic",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {
                     "p50_seconds": 2,
@@ -232,7 +231,6 @@ def test_inferact_synthetic_repairs_live_assistant_drift_by_default(tmp_path: Pa
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": tmp_path / "source.json",
-                "prompt_shape": "inferact_synthetic",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
             },
@@ -333,7 +331,6 @@ def test_inferact_trace_is_validated_before_analysis(
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": source,
-                "prompt_shape": "inferact_synthetic",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
             }
@@ -395,7 +392,6 @@ def test_inferact_synthetic_runner_rejects_backend_residuals_and_reports_them(
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": source,
-                "prompt_shape": "inferact_synthetic",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
                 "prompt_calibration_tolerance_tokens": 0,
@@ -500,7 +496,6 @@ def test_current_turn_replay_repeats_targets_with_different_live_answers(tmp_pat
                 "replay": {
                     "trace_type": "inferact_codex_swebenchpro",
                     "trace_path": source,
-                    "prompt_shape": "inferact_synthetic",
                     "interval_mode": "lognormal",
                     "interval_lognormal": {"p50_seconds": 0.002, "p95_seconds": 0.03, "p99_seconds": 0.09},
                 },
@@ -575,7 +570,6 @@ def test_runtime_converter_uses_configured_backend_chat_template(monkeypatch: py
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": "source.json",
-                "prompt_shape": "inferact_synthetic",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
             },

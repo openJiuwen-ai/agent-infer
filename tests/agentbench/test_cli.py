@@ -10,6 +10,7 @@ import pytest
 
 from agentinfer.agentbench.benchkit.cli import (
     _apply_cli_overrides,
+    _apply_replay_cli_overrides,
     _parser,
     _prepare,
     _resolve_cli_path,
@@ -17,6 +18,7 @@ from agentinfer.agentbench.benchkit.cli import (
     main,
 )
 from agentinfer.agentbench.benchkit.config import AgentBenchConfig, load_config
+from agentinfer.agentbench.replay.config import ReplayBenchConfig
 
 
 def _config(path: Path) -> None:
@@ -35,27 +37,38 @@ def test_schema_overrides_metrics_url(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("shape", "obsolete"),
+    ("trace_type", "shape"),
     [
-        ("agentinfer_synthetic", "claude_code_minimal_v1"),
-        ("inferact_synthetic", "trace_record"),
-        ("tracelab_synthetic", "token_recipe"),
+        ("inferact_codex_swebenchpro", "inferact_synthetic"),
+        ("agentinfer", "agentinfer_synthetic"),
+        ("tracelab", "tracelab_synthetic"),
+        ("agentX", "agentX_synthetic"),
     ],
 )
-def test_replay_cli_accepts_source_named_shapes_and_rejects_old_names(shape: str, obsolete: str) -> None:
-    parser = _parser()
-    args = parser.parse_args(["replay", "--config", "replay.yaml", "--prompt-shape", shape])
-    assert args.prompt_shape == shape
-    with pytest.raises(SystemExit):
-        parser.parse_args(["replay", "--config", "replay.yaml", "--prompt-shape", obsolete])
-
-
-def test_replay_cli_accepts_reserved_agentx_shape() -> None:
-    args = _parser().parse_args(
-        ["replay", "--config", "replay.yaml", "--trace-type", "agentX", "--prompt-shape", "agentX_synthetic"]
+def test_replay_cli_derives_prompt_shape_after_trace_type_override(trace_type: str, shape: str) -> None:
+    config = ReplayBenchConfig.model_validate(
+        {
+            "replay": {
+                "trace_path": "source.json",
+                "interval_mode": "lognormal",
+                "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
+            }
+        }
     )
-    assert args.trace_type == "agentX"
-    assert args.prompt_shape == "agentX_synthetic"
+    args = _parser().parse_args(["replay", "--config", "replay.yaml", "--trace-type", trace_type])
+
+    overridden = _apply_replay_cli_overrides(args, config)
+
+    assert overridden.replay.trace_type == trace_type
+    assert overridden.replay.prompt_shape == shape
+    assert config.replay.prompt_shape == "agentinfer_synthetic"
+
+
+def test_removed_prompt_shape_cli_flag_is_rejected() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        _parser().parse_args(["replay", "--config", "replay.yaml", "--prompt-shape", "agentinfer_synthetic"])
+
+    assert exc_info.value.code == 2
 
 
 @pytest.mark.parametrize("flag", ["--enabled", "--no-enabled", "--router-url"])

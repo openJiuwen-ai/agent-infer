@@ -19,13 +19,13 @@ before applying these CLI overrides:
 vllm bench serve --agentinfer replay \
   --config /path/to/tracelab.yaml \
   --trace-type tracelab --trace-path /path/to/round_trace.jsonl \
-  --prompt-shape tracelab_synthetic --endpoint /v1/chat/completions \
+  --endpoint /v1/chat/completions \
   --base-url http://127.0.0.1:8000 --model MODEL_NAME \
   --task-num 8 --max-concurrency 4 \
   --result-dir results/replay-tracelab-8x4
 ```
 
-Keep `max_input_tokens` and `max_output_tokens` null for full token targets.
+Replay uses the full input and output token targets from the trace.
 `prompt_calibration_tolerance_tokens` must be zero. Both `trace` and `lognormal` intervals are supported.
 Task count and concurrency refer to runtime sessions; repeated samples have distinct identities and private content.
 
@@ -50,8 +50,9 @@ plans: `context_after` replaces `input_after`. Converter, planner, sampler, and 
 version suffixes; `schema_version` remains part of format validation. Identifier and hash-material changes affect
 workload fingerprints, runtime identities, and seeds. Historical prefix-copy runs are not equivalent workloads.
 
-Migrate old prompt shapes `claude_code_minimal_v1`, `trace_record`, and `token_recipe` to
-`agentinfer_synthetic`, `inferact_synthetic`, and `tracelab_synthetic`, respectively. Old aliases are rejected.
+Prompt shape is derived automatically from `replay.trace_type`. Remove `replay.prompt_shape` from existing YAML
+files and remove `--prompt-shape` from commands; explicit prompt-shape configuration is rejected.
+Removing the field from serialized configuration changes workload fingerprints and runtime identities.
 IR `prompt_source.kind=token_recipe` is unchanged; its token targets now describe synthetic user turns with live
 assistant context. Changes to plans or prompt construction affect workload fingerprints and runtime identities.
 Inferact still preserves source human text and live assistant history; calibration residuals remain diagnostics
@@ -96,13 +97,12 @@ recording sources. The backend context window must accommodate the request targe
 
 | Configuration | Meaning |
 | --- | --- |
-| `replay.trace_type: agentinfer` | AgentInfer `requests.jsonl` input with the default `prompt_shape: agentinfer_synthetic`. |
-| `replay.trace_type: inferact_codex_swebenchpro` | Raw Inferact JSON; requires `prompt_shape: inferact_synthetic`, `interval_mode: lognormal`, and `/v1/chat/completions`. |
-| `replay.trace_type: tracelab` | Normalized, uncompressed JSONL; requires `prompt_shape: tracelab_synthetic`, zero calibration tolerance, and `/v1/chat/completions`. |
-| `replay.trace_type: agentX` | Reserved with `prompt_shape: agentX_synthetic`; execution raises `NotImplementedError`. |
+| `replay.trace_type: agentinfer` | AgentInfer `requests.jsonl` input; automatically selects `agentinfer_synthetic`. |
+| `replay.trace_type: inferact_codex_swebenchpro` | Raw Inferact JSON; automatically selects `inferact_synthetic`. Requires `interval_mode: lognormal`, zero calibration tolerance, and `/v1/chat/completions`. |
+| `replay.trace_type: tracelab` | Normalized, uncompressed JSONL; automatically selects `tracelab_synthetic`. Requires zero calibration tolerance and `/v1/chat/completions`. |
+| `replay.trace_type: agentX` | Automatically selects `agentX_synthetic`; reserved, execution raises `NotImplementedError`. |
 | `replay.interval_mode` | `trace` preserves historical intervals; `lognormal` generates configured intervals. |
 | `replay.sample_seed` | Reproducible session selection and backend sampling seed. |
-| `replay.max_input_tokens` / `max_output_tokens` | Optional token caps; `null` preserves trace targets. |
 | `replay.context_adjustment_mode` | `strict` rejects non-append-only context; `adaptive` audits trims and context resets. |
 | `replay.request_timeout_seconds` | Per-request timeout. |
 
