@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.0",
+  "source": "real_vllm",
+  "policy_sha256": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+  "config_sha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+  "git_sha": "6e55e15a0000000000000000000000000000abcd",
+  "vllm_version": "0.21.0",
+  "vllm_commit": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+  "cuda_version": "12.9",
+  "gpu_driver_version": "555.42.06",
+  "hardware_profile": "nvidia_h100",
+  "hardware_sku": "NVIDIA H100 80GB HBM3",
+  "docker_image_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "profile": "throughput",
+  "regime": "throughput",
+  "primary_metric": "goodput_req_s",
+  "seeds": [1, 2, 3],
+  "sample_count": 3,
+  "raw_per_seed_metrics": [
+    {"seed": 1, "primary_value": 12.4, "metrics": {"output_throughput_tok_s": 3100.0}},
+    {"seed": 2, "primary_value": 12.1, "metrics": {"output_throughput_tok_s": 3050.0}},
+    {"seed": 3, "primary_value": 12.6, "metrics": {"output_throughput_tok_s": 3150.0}}
+  ],
+  "aggregate_metrics": {"goodput_req_s": {"median": 12.4, "mean": 12.37, "std": 0.25, "cv": 0.02, "n": 3}},
+  "slo": {"ttft_ms": 5000, "tpot_ms": 100},
+  "goodput": {"goodput_req_s": 12.4, "attainment_rate": 0.98},
+  "outcome_class": "eval_result",
+  "score_aggregation_formula_version": "median-v1",
+  "warmup_policy_version": "warmup-v1",
+  "command_line": "ve bench targets/scheduling/work.py --profile throughput",
+  "wall_time_s": 412.7,
+  "error_text": null
+}

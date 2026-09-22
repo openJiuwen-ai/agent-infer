@@ -25,6 +25,25 @@ AgentInfer manages caches and schedules agent workflow requests in or in front o
 [vLLM integration](docs/en/how-to/integrate-vllm.md) · [Benchmark guide](docs/en/how-to/run-benchmark.md) ·
 [AgentRouter middleware patch](agentinfer/agentrouter/README.md) · [Changelog](CHANGELOG.md)
 
+## Optional: evolve scheduling policies with RSI
+
+[RSI / vllm-evolve](tools/rsi/README.md#quick-start) searches for scheduling policies and records
+their verification and benchmark evidence. It is a separately installed development tool;
+the AgentInfer installation below does not install its `ve` CLI.
+
+For a first run, follow the [RSI quick start](tools/rsi/README.md#quick-start): install from
+`tools/rsi/` in a separate Python 3.12 environment, prepare Frontier and BurstGPT, then run a small
+CPU search. Linux/WSL 2 is required; this path needs no GPU or model weights. The default author is
+a deterministic template; using Codex as the author requires an explicit adapter command.
+Read `tools/rsi/runs/frontier_local_evolution/report.md` for the result. Simulator winners still
+need real-vLLM validation before production use.
+For remote validation, copy `tools/rsi/config/remote/gpu.env.example` to a local `.env`
+and replace the example SSH alias and paths. No shared server is preconfigured.
+
+The toolkit was imported from
+[`JiusiServe/vllm-evolve@a9cf8b6`](https://github.com/JiusiServe/vllm-evolve/tree/a9cf8b67c723daa38dc4010afbb0c453fb525520),
+with integration fixes maintained in this repository.
+
 ## Requirements
 
 - Operating system: Linux, or Windows with WSL 2.

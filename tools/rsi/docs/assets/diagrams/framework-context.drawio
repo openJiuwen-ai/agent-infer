@@ -1,0 +1,117 @@
+<mxfile host="app.diagrams.net" modified="2026-03-15T00:00:00.000Z" agent="vllm-evolve" version="21.0.0">
+  <diagram name="framework-context" id="framework-context">
+    <mxGraphModel dx="1422" dy="762" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="title" value="vllm-evolve: Where It Sits" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=18;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="300" y="20" width="350" height="36" as="geometry" />
+        </mxCell>
+
+        <!-- Your Agent group -->
+        <mxCell id="agent-group" value="Your Agent" style="swimlane;fontStyle=1;fontSize=13;fillColor=#dae8fc;strokeColor=#6c8ebf;startSize=30;rounded=1;arcSize=5;" vertex="1" parent="1">
+          <mxGeometry x="40" y="60" width="180" height="290" as="geometry" />
+        </mxCell>
+        <mxCell id="cc" value="&lt;b&gt;Claude Code&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="agent-group">
+          <mxGeometry x="15" y="40" width="150" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="oc" value="&lt;b&gt;OpenCode&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="agent-group">
+          <mxGeometry x="15" y="100" width="150" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="human" value="&lt;b&gt;Human-in-loop&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="agent-group">
+          <mxGeometry x="15" y="160" width="150" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="api" value="&lt;b&gt;OpenAI / Anthropic&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6c8ebf;strokeDasharray=5 3;fontSize=11;fontStyle=1;fontColor=#aaa;" vertex="1" parent="agent-group">
+          <mxGeometry x="15" y="220" width="150" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Skill Layer -->
+        <mxCell id="skill-layer" value="Skill Layer" style="swimlane;fontStyle=1;fontSize=12;fillColor=#fff2cc;strokeColor=#d6b656;startSize=40;rounded=1;arcSize=5;" vertex="1" parent="1">
+          <mxGeometry x="260" y="130" width="164" height="180" as="geometry" />
+        </mxCell>
+        <mxCell id="evolve-skill" value="&lt;b style=&apos;font-size:15px;&apos;&gt;/evolve&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="skill-layer">
+          <mxGeometry x="10" y="48" width="144" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- Framework Core -->
+        <mxCell id="framework" value="vllm-evolve Framework" style="swimlane;fontStyle=1;fontSize=13;fillColor=#e1d5e7;strokeColor=#9673a6;startSize=44;rounded=1;arcSize=3;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="460" y="60" width="420" height="390" as="geometry" />
+        </mxCell>
+        <mxCell id="providers" value="&lt;b&gt;Provider Adapters&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;fontStyle=1;" vertex="1" parent="framework">
+          <mxGeometry x="20" y="50" width="380" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="controller" value="&lt;b&gt;Evolution Controller&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;fontStyle=1;" vertex="1" parent="framework">
+          <mxGeometry x="100" y="118" width="260" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="population" value="&lt;b&gt;Population&lt;/b&gt;&lt;br&gt;MAP-Elites · 4 islands" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="framework">
+          <mxGeometry x="20" y="200" width="185" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="checkpoints" value="&lt;b&gt;Checkpoints&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0f0f0;strokeColor=#bbb;fontSize=11;fontStyle=1;" vertex="1" parent="framework">
+          <mxGeometry x="20" y="326" width="185" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="evaluator" value="&lt;b&gt;Evaluator&lt;/b&gt;&lt;br&gt;DES Simulator (CPU)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;fontStyle=1;" vertex="1" parent="framework">
+          <mxGeometry x="215" y="200" width="185" height="120" as="geometry" />
+        </mxCell>
+
+        <!-- Policy Targets -->
+        <mxCell id="targets" value="Policy Targets" style="swimlane;fontStyle=1;fontSize=12;fillColor=#f8cecc;strokeColor=#b85450;startSize=30;rounded=1;arcSize=5;" vertex="1" parent="1">
+          <mxGeometry x="920" y="60" width="160" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="scheduling" value="&lt;b&gt;scheduling&lt;/b&gt; ✅" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;fontStyle=1;" vertex="1" parent="targets">
+          <mxGeometry x="10" y="38" width="140" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="kv" value="&lt;b&gt;kv_eviction&lt;/b&gt; ✅" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;fontStyle=1;" vertex="1" parent="targets">
+          <mxGeometry x="10" y="112" width="140" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="router" value="&lt;b&gt;pd_router&lt;/b&gt; 🔲" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#b85450;strokeDasharray=4 2;fontSize=10;fontStyle=1;fontColor=#888;" vertex="1" parent="targets">
+          <mxGeometry x="10" y="186" width="140" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="custom" value="&lt;b&gt;+ add your own&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#b85450;strokeDasharray=4 2;fontSize=9;fontColor=#b85450;" vertex="1" parent="targets">
+          <mxGeometry x="10" y="248" width="140" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Edges -->
+        <!-- CC → skill -->
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#d6b656;strokeWidth=1.5;" edge="1" source="cc" target="evolve-skill" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <!-- OC → skill -->
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#d6b656;strokeWidth=1.5;" edge="1" source="oc" target="evolve-skill" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <!-- skill → providers -->
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#d6b656;strokeWidth=1.5;" edge="1" source="evolve-skill" target="providers" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <!-- human → providers bypass -->
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6c8ebf;strokeWidth=1.3;dashed=1;" edge="1" source="human" target="providers" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="310" y="185" />
+              <mxPoint x="310" y="85" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <!-- providers → controller -->
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#666;strokeWidth=1.5;" edge="1" source="providers" target="controller" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <!-- controller → population -->
+        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#666;strokeWidth=1.5;" edge="1" source="controller" target="population" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <!-- controller → evaluator -->
+        <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#82b366;strokeWidth=1.5;" edge="1" source="controller" target="evaluator" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <!-- evaluator → targets -->
+        <mxCell id="e8" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#b85450;strokeWidth=1.5;" edge="1" source="evaluator" target="scheduling" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

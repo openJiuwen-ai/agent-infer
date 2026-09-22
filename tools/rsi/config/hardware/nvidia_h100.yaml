@@ -1,0 +1,19 @@
+name: nvidia_h100
+family: nvidia_gpu
+compute:
+  fp16_tflops: 989
+  fp8_tflops: 1979
+memory:
+  hbm_gb: 80
+  bandwidth_gb_s: 3350
+interconnect:
+  intra_node: nvlink
+  intra_node_bw_gb_s: 900
+  inter_node: rdma
+  inter_node_bw_gb_s: 50
+timing_model:
+  prefill_alpha: 2.1e-7
+  prefill_beta: 1.5e-4
+  prefill_gamma: 0.8e-3
+  decode_beta: 3.2e-5
+  decode_gamma: 0.025

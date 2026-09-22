@@ -1,0 +1,26 @@
+# vllm-evolve default configuration
+# Override any setting via CLI args or custom config file
+
+# Model and hardware context
+model: Qwen/Qwen2.5-7B-Instruct
+hardware: nvidia_h100  # see config/hardware/*.yaml for options
+
+# Evolution parameters
+evolution:
+  max_generations: 20
+  batch_size: 4
+  checkpoint_interval: 5
+  eval_mode: live   # real vLLM only (the DES simulator was deleted)
+  seed: 42
+
+# Population (MAP-Elites island model)
+population:
+  n_islands: 4
+  migration_interval: 10
+  migration_top_k: 3
+
+# Defaults
+target: scheduling
+provider: mock
+provider_kwargs: {}
+log_level: INFO

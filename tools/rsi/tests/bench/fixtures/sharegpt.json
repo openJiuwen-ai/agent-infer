@@ -1,0 +1,5 @@
+[
+  {"id": "a_0", "conversations": [{"from": "human", "value": "hello world this is a prompt"}, {"from": "gpt", "value": "this is the response text"}]},
+  {"id": "b_0", "conversations": [{"from": "human", "value": "only one turn"}]},
+  {"id": "c_0", "conversations": [{"from": "human", "value": "abcdefgh"}, {"from": "gpt", "value": "ijklmnop"}]}
+]
