@@ -1,7 +1,7 @@
 # Trace Replay defaults for normalized TraceLab JSONL input.
 
 experiment:
-  task_num: null
+  task_num: null  # required: set a positive integer in YAML or pass --task-num
   max_concurrency: 1
   task_timeout_seconds: 3600
   run_timeout_seconds: null

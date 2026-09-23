@@ -328,12 +328,13 @@ def test_inferact_trace_is_validated_before_analysis(
     )
     config = ReplayBenchConfig.model_validate(
         {
+            "experiment": {"task_num": 1},
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": source,
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
-            }
+            },
         }
     )
 
@@ -528,7 +529,12 @@ def test_current_turn_replay_repeats_targets_with_different_live_answers(tmp_pat
 
 
 def test_reserved_agentx_trace_type_fails_explicitly(tmp_path: Path) -> None:
-    config = ReplayBenchConfig.model_validate({"replay": {"trace_type": "agentX", "trace_path": tmp_path / "trace"}})
+    config = ReplayBenchConfig.model_validate(
+        {
+            "experiment": {"task_num": 1},
+            "replay": {"trace_type": "agentX", "trace_path": tmp_path / "trace"},
+        }
+    )
 
     with pytest.raises(NotImplementedError, match="reserved for future integration"):
         _prepare_replay_source(config, tmp_path / "result")
@@ -561,6 +567,7 @@ def test_runtime_converter_uses_configured_backend_chat_template(monkeypatch: py
     monkeypatch.setattr("agentinfer.agentbench.replay.converters.codex_swebenchpro.httpx.Client", Client)
     config = ReplayBenchConfig.model_validate(
         {
+            "experiment": {"task_num": 1},
             "backend": {
                 "base_url": "http://backend",
                 "tokenizer_base_url": "http://tokenizer",
@@ -646,7 +653,7 @@ def test_runtime_converter_counts_each_turn_with_full_backend_history(
         ),
         encoding="utf-8",
     )
-    config = ReplayBenchConfig.model_validate({"replay": {"trace_path": source}})
+    config = ReplayBenchConfig.model_validate({"experiment": {"task_num": 1}, "replay": {"trace_path": source}})
     converter = CodexSwebenchProConverter.from_backend(config)
     converter.convert(source, tmp_path / "output")
     converter.close()

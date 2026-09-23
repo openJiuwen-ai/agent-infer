@@ -77,12 +77,13 @@ def config(tmp_path):
     )
     return ReplayBenchConfig.model_validate(
         {
+            "experiment": {"task_num": 1},
             "replay": {
                 "trace_type": "inferact_codex_swebenchpro",
                 "trace_path": source,
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
-            }
+            },
         }
     )
 

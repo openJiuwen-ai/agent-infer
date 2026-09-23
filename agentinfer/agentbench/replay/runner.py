@@ -25,11 +25,13 @@ from ..benchkit.metrics.source_health import evaluate_captures
 from ..benchkit.metrics.task import aggregate_task_results
 from ..benchkit.metrics.vllm import aggregate_vllm_metrics
 from ..request_proxy.request_trace import RequestFact, RequestTraceWriter, load_request_facts
+from .agentinfer_source import builtin_agentinfer_source
 from .analyzer import analyze_replay_trace, replay_analysis_to_dict
 from .config import ReplayBenchConfig
 from .converters.codex_swebenchpro import CodexSwebenchProConverter
 from .converters.tracelab import TraceLabConverter
 from .executor import ReplayExecutor, ReplayTaskExecution
+from .inferact_source import materialize_inferact_source
 from .local_tokenizer import LocalTokenizerCounter
 from .planner import ReplayPlan, build_replay_plan
 from .prompt import PromptBuilder, TokenizerClient
@@ -448,15 +450,24 @@ async def _run_replay(
 
 
 def _resolve_replay_source(config: ReplayBenchConfig) -> ReplayBenchConfig:
-    """Materialize an implicit TraceLab source and return an updated copy."""
+    """Materialize an adapter's implicit source and return an updated copy."""
 
     if config.replay.trace_path is None:
         task_num = config.experiment.task_num
-        if config.replay.trace_type != "tracelab" or task_num is None:
-            raise ValueError("unresolved Replay trace_path")
-        trace_path = materialize_tracelab_source(task_num)
+        if task_num is None:  # Defensive for unchecked model construction.
+            raise ValueError("experiment.task_num is required for Replay")
+        trace_type = config.replay.trace_type
+        if trace_type == "agentinfer":
+            trace_path = builtin_agentinfer_source()
+        elif trace_type == "inferact_codex_swebenchpro":
+            trace_path = materialize_inferact_source(task_num)
+        elif trace_type == "tracelab":
+            trace_path = materialize_tracelab_source(task_num)
+        else:
+            raise NotImplementedError(f"Replay trace_type={trace_type!r} is not implemented")
         logger.info(
-            "Using downloaded TraceLab dataset subset: task_num=%d trace_path=%s",
+            "Using default Replay dataset: trace_type=%s task_num=%d trace_path=%s",
+            trace_type,
             task_num,
             trace_path,
         )

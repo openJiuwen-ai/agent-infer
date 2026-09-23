@@ -92,7 +92,7 @@ class ReplayConfig(ReplayStrictModel):
     )
     trace_path: Path | None = Field(
         None,
-        description="Local trace path; TraceLab downloads a pinned dataset snapshot when omitted.",
+        description="Local trace path; supported adapters use their default dataset when omitted.",
         json_schema_extra={"cli": True},
     )
     trace_same_agent_gap_scale: float = Field(
@@ -146,8 +146,6 @@ class ReplayConfig(ReplayStrictModel):
 
     @model_validator(mode="after")
     def validate_replay_modes(self) -> ReplayConfig:
-        if self.trace_path is None and self.trace_type != "tracelab":
-            raise ValueError("trace_path may be null only when trace_type=tracelab")
         if self.interval_mode == "lognormal":
             if self.interval_lognormal is None:
                 raise ValueError("interval_mode=lognormal requires interval_lognormal anchors")
@@ -183,8 +181,8 @@ class ReplayBenchConfig(ReplayStrictModel):
     def validate_trace_backend(self) -> ReplayBenchConfig:
         """Reject trace adapters whose accounting does not match the wire endpoint."""
 
-        if self.replay.trace_path is None and self.experiment.task_num is None:
-            raise ValueError("TraceLab automatic dataset download requires experiment.task_num")
+        if self.experiment.task_num is None:
+            raise ValueError("experiment.task_num is required for Replay")
         if self.replay.trace_type == "inferact_codex_swebenchpro" and self.backend.endpoint != "/v1/chat/completions":
             raise ValueError("inferact_codex_swebenchpro requires backend.endpoint=/v1/chat/completions")
         if self.replay.trace_type == "tracelab" and self.backend.endpoint != "/v1/chat/completions":

@@ -35,6 +35,7 @@ class TextTokenizer:
 def config(tolerance=0):
     return ReplayBenchConfig.model_validate(
         {
+            "experiment": {"task_num": 1},
             "replay": {
                 "trace_path": "source.json",
                 "prompt_calibration_tolerance_tokens": tolerance,

@@ -59,7 +59,7 @@ def test_materialize_tracelab_source_keeps_first_complete_sessions(
     assert materialize_tracelab_source(2, cache_dir=tmp_path / "cache") == result
 
 
-def test_materialize_tracelab_source_rejects_too_few_sessions(
+def test_materialize_tracelab_source_keeps_all_when_fewer_than_requested(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -70,10 +70,9 @@ def test_materialize_tracelab_source_rejects_too_few_sessions(
         lambda **kwargs: str(source),
     )
 
-    with pytest.raises(ValueError, match="contains only 1 sessions; requested task_num=2"):
-        materialize_tracelab_source(2, cache_dir=tmp_path / "cache")
+    result = materialize_tracelab_source(2, cache_dir=tmp_path / "cache")
 
-    assert not (tmp_path / "cache" / "first-2-sessions.jsonl").exists()
+    assert [json.loads(line)["session_id"] for line in result.read_text().splitlines()] == ["only"]
 
 
 def test_resolve_replay_source_updates_copy_with_downloaded_path(

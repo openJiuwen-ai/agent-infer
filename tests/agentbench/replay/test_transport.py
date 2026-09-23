@@ -19,6 +19,7 @@ from agentinfer.agentbench.request_proxy.request_trace import RequestTraceWriter
 def test_replay_transport_disables_keepalive_reuse(tmp_path: Path) -> None:
     config = ReplayBenchConfig.model_validate(
         {
+            "experiment": {"task_num": 1},
             "backend": {"base_url": "http://backend", "endpoint": "/v1/messages"},
             "replay": {"trace_path": "source.jsonl"},
         }
@@ -37,6 +38,7 @@ def test_chat_transport_streams_content_usage_and_plan_identity(tmp_path: Path) 
     async def send() -> tuple[object, dict[str, object]]:
         config = ReplayBenchConfig.model_validate(
             {
+                "experiment": {"task_num": 1},
                 "backend": {
                     "base_url": "http://backend",
                     "endpoint": "/v1/chat/completions",
@@ -99,6 +101,7 @@ def test_messages_transport_keeps_title_prompt_tool_free_and_bridges_sampling(tm
     async def build() -> dict[str, object]:
         config = ReplayBenchConfig.model_validate(
             {
+                "experiment": {"task_num": 1},
                 "backend": {"base_url": "http://backend", "endpoint": "/v1/messages"},
                 "replay": {"trace_path": "source.jsonl"},
             }
@@ -136,6 +139,7 @@ def test_inferact_synthetic_checks_wire_usage_and_preserves_both_stream_fields(t
     async def send():
         config = ReplayBenchConfig.model_validate(
             {
+                "experiment": {"task_num": 1},
                 "replay": {
                     "trace_path": "source.json",
                     "trace_type": "inferact_codex_swebenchpro",
@@ -194,6 +198,7 @@ def test_exact_token_validation_rejects_successful_response_with_wrong_usage(tmp
     async def send() -> tuple[object, object]:
         config = ReplayBenchConfig.model_validate(
             {
+                "experiment": {"task_num": 1},
                 "backend": {"base_url": "http://backend", "endpoint": "/v1/chat/completions"},
                 "replay": {
                     "trace_type": "tracelab",

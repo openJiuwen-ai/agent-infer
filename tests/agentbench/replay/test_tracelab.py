@@ -138,6 +138,7 @@ def test_tracelab_builder_appends_live_history_and_preserves_exact_length() -> N
     async def build() -> tuple[SyntheticPrompt, SyntheticPrompt]:
         config = ReplayBenchConfig.model_validate(
             {
+                "experiment": {"task_num": 1},
                 "backend": {"endpoint": "/v1/chat/completions"},
                 "replay": {
                     "trace_type": "tracelab",
@@ -193,11 +194,12 @@ def test_tracelab_preserves_source_token_counts_without_reconciling_split(tmp_pa
 
     config = ReplayBenchConfig.model_validate(
         {
+            "experiment": {"task_num": 1},
             "replay": {
                 "trace_type": "tracelab",
                 "trace_path": source,
                 "prompt_calibration_tolerance_tokens": 0,
-            }
+            },
         }
     )
     node = build_replay_plan(config, analysis, trace_ir).tasks[0].requests[0]
@@ -232,12 +234,13 @@ def test_tracelab_does_not_drop_live_history_to_fit_a_small_target(mode: str) ->
     async def build() -> None:
         config = ReplayBenchConfig.model_validate(
             {
+                "experiment": {"task_num": 1},
                 "replay": {
                     "trace_type": "tracelab",
                     "trace_path": "source.jsonl",
                     "prompt_calibration_tolerance_tokens": 0,
                     "context_adjustment_mode": mode,
-                }
+                },
             }
         )
         builder = PromptBuilder(config, _RecipeTokenizer(), SimpleNamespace(prompt_source_kind="token_recipe"))

@@ -2,7 +2,7 @@
 
 # === Experiment: per-run execution limits ===
 experiment:
-  task_num: null
+  task_num: null                       # required: set >= 1 here or pass --task-num
   result_dir: ../result_replay
   max_concurrency: 1
   task_timeout_seconds: 3600
@@ -25,7 +25,7 @@ replay:
   # Trace adapter: agentinfer | inferact_codex_swebenchpro | agentX | tracelab.
   trace_type: agentinfer
   # Source trace. Dataset conversion output is written under <result_dir>/convert_result/.
-  trace_path: ../data/replay/requests.jsonl
+  trace_path: null
   # Prompt shape is selected automatically from trace_type.
   # Inferact additionally requires interval_mode=lognormal,
   # and backend.endpoint=/v1/chat/completions.

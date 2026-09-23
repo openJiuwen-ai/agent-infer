@@ -22,12 +22,14 @@ vllm bench serve --agentinfer replay \
   --result-dir results/replay-tracelab-8x4
 ```
 
-Without `--config`, `--trace-type`, `--task-num`, `--max-concurrency`, `--base-url`, and `--model` are required.
+Without `--config`, `--trace-type`, `--task-num`, `--base-url`, and `--model` are required; `--max-concurrency`
+defaults to `1`. `task_num` is required for every Replay type and must be a positive integer.
 When TraceLab has `trace_path: null`, Replay downloads the pinned `v0.0.2` snapshot of `UW-SyFI/TraceLab` and
 extracts the first `task_num` complete sessions in first-seen source order. Every round belonging to those sessions is
 retained. The uncompressed JSONL is cached at
 `~/.cache/agentinfer/datasets/tracelab/v0.0.2/first-<task_num>-sessions.jsonl`, or below `XDG_CACHE_HOME` when set,
-and reused by later runs. Automatic download requires a non-null `task_num`. An explicit `--trace-path` always wins
+and reused by later runs. If fewer source sessions exist, the planner cycles them deterministically to `task_num`.
+An explicit `--trace-path` always wins
 and disables download. With `--config`, all CLI overrides are optional and explicitly supplied overrides take precedence.
 YAML paths resolve relative to that file; CLI paths resolve relative to the current directory.
 
@@ -96,9 +98,8 @@ Run from the repository root, replacing `MODEL_NAME` with the actual served mode
 ```bash
 vllm bench serve --agentinfer replay \
   --config agentinfer/agentbench/configs/replay_benchmark.yaml \
-  --trace-path tests/agentbench/replay/claude_trace_8session_requests.jsonl \
   --base-url http://127.0.0.1:8000 \
-  --model MODEL_NAME --task-num 1 \
+  --model MODEL_NAME --task-num 8 --max-concurrency 4 \
   --result-dir results/replay-smoke
 ```
 
@@ -110,8 +111,8 @@ recording sources. The backend context window must accommodate the request targe
 
 | Configuration | Meaning |
 | --- | --- |
-| `replay.trace_type: agentinfer` | AgentInfer `requests.jsonl` input; automatically selects `agentinfer_synthetic`. |
-| `replay.trace_type: inferact_codex_swebenchpro` | Raw Inferact JSON; automatically selects `inferact_synthetic`. Requires `interval_mode: lognormal`, zero calibration tolerance, and `/v1/chat/completions`. |
+| `replay.trace_type: agentinfer` | AgentInfer `requests.jsonl` input; a null `trace_path` uses the packaged eight-session dataset. Automatically selects `agentinfer_synthetic`. |
+| `replay.trace_type: inferact_codex_swebenchpro` | Raw Inferact JSON; a null `trace_path` downloads a pinned revision and caches up to the first `task_num` records. Automatically selects `inferact_synthetic`. Requires `interval_mode: lognormal`, zero calibration tolerance, and `/v1/chat/completions`. |
 | `replay.trace_type: tracelab` | Normalized, uncompressed JSONL; a null `trace_path` downloads and extracts the first `task_num` complete sessions. Automatically selects `tracelab_synthetic`. Requires zero calibration tolerance and `/v1/chat/completions`. |
 | `replay.trace_type: agentX` | Automatically selects `agentX_synthetic`; reserved, execution raises `NotImplementedError`. |
 | `replay.interval_mode` | `trace` preserves historical intervals; `lognormal` generates configured intervals. |
