@@ -103,7 +103,6 @@ _REPLAY_OVERRIDES = _discover_overrides(ReplayBenchConfig)
 _REPLAY_REQUIRED_WITHOUT_CONFIG = (
     ("trace_type", "--trace-type"),
     ("task_num", "--task-num"),
-    ("max_concurrency", "--max-concurrency"),
     ("base_url", "--base-url"),
     ("model", "--model"),
 )

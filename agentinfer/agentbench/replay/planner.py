@@ -381,7 +381,9 @@ def build_replay_plan(
         raise ValueError("a unified Trace IR was supplied for a non-trace-record Replay mode")
     interval_model = build_interval_model(config.replay)
     replayable_count = sum(session.replayable for session in analysis.sessions)
-    total_tasks = config.experiment.task_num or replayable_count
+    total_tasks = config.experiment.task_num
+    if total_tasks is None:  # Defensive for unchecked model construction.
+        raise ValueError("experiment.task_num is required for Replay")
     if total_tasks <= 0:
         raise ValueError("the Replay trace has no usable sessions")
 

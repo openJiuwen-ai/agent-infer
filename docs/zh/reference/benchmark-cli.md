@@ -95,7 +95,8 @@ vllm bench serve --agentinfer replay --help
 
 提供 `--config` 时，其他 Replay 覆盖参数均为可选。未提供时，Replay 根据 `--trace-type`
 选择内置模板，
-并要求显式提供 `--trace-type`、`--task-num`、`--max-concurrency`、`--base-url` 和 `--model`。
-TraceLab 内置模板的 `trace_path` 为 `null` 时，会自动下载固定版本数据集，并缓存前 `task_num` 个完整
-Session；显式 `--trace-path` 会覆盖自动数据源。详见
+并要求显式提供 `--trace-type`、`--task-num`、`--base-url` 和 `--model`；`--max-concurrency` 默认为 `1`。
+AgentInfer、Inferact 或 TraceLab 内置模板的 `trace_path` 为 `null` 时会使用对应默认数据集；Inferact 和
+TraceLab 下载固定版本，并最多缓存前 `task_num` 个完整记录或 Session。显式 `--trace-path` 会覆盖默认
+数据源。详见
 [回放指南](../how-to/run-trace-replay.md)。

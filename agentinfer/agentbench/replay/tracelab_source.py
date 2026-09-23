@@ -65,8 +65,8 @@ def _write_session_subset(source: Path, destination: Path, task_num: int) -> Non
                         selected.add(key)
                     if key in selected:
                         output.write(line if line.endswith("\n") else f"{line}\n")
-        if len(selected) < task_num:
-            raise ValueError(f"TraceLab dataset contains only {len(selected)} sessions; requested task_num={task_num}")
+        if not selected:
+            raise ValueError("TraceLab dataset contains no sessions")
         os.replace(temporary_path, destination)
         temporary_path = None
     finally:
