@@ -9,9 +9,7 @@ AgentInfer manages caches and schedules agent workflow requests in or in front o
 - **Semantic Router**: a programmable Mixture-of-Models router for heterogeneous LLM inference. It optimizes
   multi-turn agent sessions through continuity-aware model selection, reducing disruptive and costly model switches.
 - **Router**: a high-performance, lightweight router for large-scale vLLM deployments, with agent-aware scheduling
-  policies and agent workflow modeling. Agent session affinity can be attached via the WASM
-  `agent_hint_affinity` guest (`--wasm-middleware` on upstream Router `#251`+); see
-  [`agentinfer/agentrouter`](agentinfer/agentrouter/README.md).
+  policies and agent workflow modeling.
 - **Agent Cache**: vLLM plugins that manage request scheduling and Ascend NPU-native KV cache management, pooling,
   and transfer under agentic workloads.
 - **AgentBench**: a benchmark for inference engines under agentic workloads, driven by real agent runs or
@@ -72,6 +70,14 @@ The installed `vllm` command delegates ordinary commands to upstream vLLM. Expli
 `vllm bench serve --agentinfer` commands enter AgentBench; `vllm serve MODEL --agentinfer` activates the
 AgentInfer serving path; other commands are delegated unchanged.
 See the [vLLM Quickstart](https://docs.vllm.ai/en/latest/getting_started/quickstart/) for standard serving options.
+
+## Router session affinity
+
+Attach agent session affinity with the WASM `agent_hint_affinity` guest. This requires an upstream
+vLLM Router build that includes `--wasm-middleware` ([#251](https://github.com/vllm-project/router/pull/251)
+or later). Build the plugin and the start command are documented in
+[`agentinfer/agentrouter`](agentinfer/agentrouter/README.md). Native `agent_hint_token_offsets` remains
+an optional patch in that directory.
 
 ## License
 

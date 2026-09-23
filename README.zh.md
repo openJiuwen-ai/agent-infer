@@ -9,8 +9,7 @@ AgentInfer 为智能体工作流提供缓存管理和请求调度能力，可集
 - **Semantic Router（语义路由）**：面向异构 LLM 推理的可编程 Mixture-of-Models 路由器，通过连续性感知的
   模型选择优化多轮智能体会话，减少破坏性且高代价的模型切换。
 - **Router（路由器）**：面向 vLLM 大规模部署的高性能、轻量级路由器，提供 Agent 感知调度策略与
-  智能体工作流建模。会话亲和可通过 WASM `agent_hint_affinity` 插件接入（上游 Router `#251`+ 的
-  `--wasm-middleware`）；见 [`agentinfer/agentrouter`](agentinfer/agentrouter/README.md)。
+  智能体工作流建模。
 - **Agent Cache（智能体缓存）**：vLLM 插件，在智能体工作负载下负责请求调度以及 Ascend NPU 原生
   KV Cache 管理、池化与传输。
 - **AgentBench（基准测试）**：面向智能体工作负载下推理引擎的基准测试，支持真实智能体运行与
@@ -70,6 +69,12 @@ vllm serve meta-llama/Llama-3.1-8B-Instruct --agentinfer
 安装后的 `vllm` 命令会将普通命令委托给上游 vLLM。显式的 `vllm bench serve --agentinfer` 命令进入
 AgentBench；`vllm serve MODEL --agentinfer` 激活 AgentInfer 服务路径；其他命令原样委托给上游。标准服务参数见
 [vLLM Quickstart](https://docs.vllm.ai/en/latest/getting_started/quickstart/)。
+
+## Router 会话亲和
+
+会话亲和通过 WASM `agent_hint_affinity` 插件接入，需要带 `--wasm-middleware` 的上游 vLLM Router
+（[#251](https://github.com/vllm-project/router/pull/251) 及之后）。插件构建和启动命令见
+[`agentinfer/agentrouter`](agentinfer/agentrouter/README.md)。原生 `agent_hint_token_offsets` 仍是该目录下的可选补丁。
 
 ## License
 
