@@ -23,7 +23,7 @@ AgentInfer manages caches and schedules agent workflow requests in or in front o
 
 [Documentation](docs/README.md) · [Quick start](docs/en/tutorial/01-quick-start.md) ·
 [vLLM integration](docs/en/how-to/integrate-vllm.md) · [Benchmark guide](docs/en/how-to/run-benchmark.md) ·
-[AgentRouter middleware patch](agentinfer/agentrouter/README.md) · [Changelog](CHANGELOG.md)
+[AgentRouter WASM affinity + native patch](agentinfer/agentrouter/README.md) · [Changelog](CHANGELOG.md)
 
 ## Requirements
 
@@ -70,6 +70,14 @@ The installed `vllm` command delegates ordinary commands to upstream vLLM. Expli
 `vllm bench serve --agentinfer` commands enter AgentBench; `vllm serve MODEL --agentinfer` activates the
 AgentInfer serving path; other commands are delegated unchanged.
 See the [vLLM Quickstart](https://docs.vllm.ai/en/latest/getting_started/quickstart/) for standard serving options.
+
+## Router session affinity
+
+Attach agent session affinity with the WASM `agent_hint_affinity` guest. This requires an upstream
+vLLM Router build that includes `--wasm-middleware` ([#251](https://github.com/vllm-project/router/pull/251)
+or later). Build the plugin and the start command are documented in
+[`agentinfer/agentrouter`](agentinfer/agentrouter/README.md). Native `agent_hint_token_offsets` remains
+an optional patch in that directory.
 
 ## License
 
