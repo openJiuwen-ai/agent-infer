@@ -23,7 +23,7 @@ AgentInfer 为智能体工作流提供缓存管理和请求调度能力，可集
 
 [文档导航](docs/README.md) · [快速开始](docs/zh/tutorial/01-quick-start.md) ·
 [vLLM 接入](docs/zh/how-to/integrate-vllm.md) · [基准测试指南](docs/zh/how-to/run-benchmark.md) ·
-[AgentRouter middleware 补丁](agentinfer/agentrouter/README.md) · [变更日志](CHANGELOG.md)
+[AgentRouter WASM affinity + native 补丁](agentinfer/agentrouter/README.md) · [变更日志](CHANGELOG.md)
 
 ## 环境要求
 
@@ -69,6 +69,12 @@ vllm serve meta-llama/Llama-3.1-8B-Instruct --agentinfer
 安装后的 `vllm` 命令会将普通命令委托给上游 vLLM。显式的 `vllm bench serve --agentinfer` 命令进入
 AgentBench；`vllm serve MODEL --agentinfer` 激活 AgentInfer 服务路径；其他命令原样委托给上游。标准服务参数见
 [vLLM Quickstart](https://docs.vllm.ai/en/latest/getting_started/quickstart/)。
+
+## Router 会话亲和
+
+会话亲和通过 WASM `agent_hint_affinity` 插件接入，需要带 `--wasm-middleware` 的上游 vLLM Router
+（[#251](https://github.com/vllm-project/router/pull/251) 及之后）。插件构建和启动命令见
+[`agentinfer/agentrouter`](agentinfer/agentrouter/README.md)。原生 `agent_hint_token_offsets` 仍是该目录下的可选补丁。
 
 ## License
 
