@@ -10,7 +10,7 @@ Reference 和 Explanation；开发者内部设计稿位于仓根目录的 `desig
   [vLLM Router 构建与部署](zh/how-to/deploy-vllm-router.md)（Windows 构建见 [deploy-vllm-router-on-windows](zh/how-to/deploy-vllm-router-on-windows.md)）、
   [Semantic Router 构建与部署](zh/how-to/deploy-semantic-router.md)（Windows 构建见 [deploy-semantic-router-on-windows](zh/how-to/deploy-semantic-router-on-windows.md)），
   用于完成具体任务。
-- **Integrations**：[AgentRouter native middleware 补丁](../agentinfer/agentrouter/README.md)。
+- **Integrations**：[AgentRouter WASM affinity + native 补丁](../agentinfer/agentrouter/README.md)。
 - **Reference**：[Python API](zh/reference/python-api.md)、[基准命令行](zh/reference/benchmark-cli.md)、
   [基准配置](zh/reference/benchmark-config.md)和[运行产物](zh/reference/run-artifacts.md)，用于查询接口和参数。
 - **Explanation**：[架构概述](zh/explanation/architecture.md)、
@@ -23,7 +23,7 @@ Reference 和 Explanation；开发者内部设计稿位于仓根目录的 `desig
 - **How-to**: [Integrate with vLLM](en/how-to/integrate-vllm.md) and
   [run a benchmark](en/how-to/run-benchmark.md), [Trace Replay](en/how-to/run-trace-replay.md) to complete specific
   tasks.
-- **Integrations**: [AgentRouter native middleware patch](../agentinfer/agentrouter/README.md).
+- **Integrations**: [AgentRouter WASM affinity + native patch](../agentinfer/agentrouter/README.md).
 - **Reference**: [Python API](en/reference/python-api.md), [benchmark CLI](en/reference/benchmark-cli.md),
   [benchmark configuration](en/reference/benchmark-config.md), and
   [run artifacts](en/reference/run-artifacts.md) for interfaces and parameters.

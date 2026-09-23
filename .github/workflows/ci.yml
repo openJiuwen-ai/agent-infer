@@ -42,7 +42,8 @@ jobs:
         with:
           filters: |
             patch:
-              - 'agentinfer/agentrouter/**'
+              - 'agentinfer/agentrouter/patches/**'
+              - 'agentinfer/agentrouter/README.md'
 
       - name: Verify patch applies on upstream Router pin
         if: steps.changed.outputs.patch == 'true'
@@ -51,7 +52,6 @@ jobs:
           PIN=d60711dc72ab8f073e33f9a3d93ee81b97274c26
           PATCH="$GITHUB_WORKSPACE/agentinfer/agentrouter/patches/0001-agent-hint-native-middleware.patch"
           test -s "$PATCH"
-          rg -q 'agent_hint_affinity' "$PATCH"
           rg -q 'agent_hint_token_offsets' "$PATCH"
           curl -fsSL "https://github.com/vllm-project/router/archive/${PIN}.tar.gz" | tar -xz -C /tmp
           cd "/tmp/router-${PIN}"
@@ -59,7 +59,38 @@ jobs:
           git apply "$PATCH"
           test -f src/agent_hint_token_offsets.rs
           test -f tests/test_agent_hint_routing.rs
-          rg -q 'agent_hint_affinity' src/middleware.rs
+          rg -q 'agent_hint_token_offsets' src/middleware.rs
+
+  agent-hint-affinity-wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for affinity guest changes
+        id: changed
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            guest:
+              - 'agentinfer/agentrouter/agent_hint_affinity/**'
+              - 'agentinfer/agentrouter/README.md'
+
+      - name: Install Rust toolchain (wasm32-wasip2)
+        if: steps.changed.outputs.guest == 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Build affinity WASM guest + run helper unit tests
+        if: steps.changed.outputs.guest == 'true'
+        working-directory: agentinfer/agentrouter/agent_hint_affinity
+        run: |
+          set -euo pipefail
+          cargo test
+          ./build.sh
+          test -f agent_hint_affinity.component.wasm
+          # Fail if the vendored WIT drifts from the documented upstream package name.
+          rg -q 'package vllm:router-middleware@0.1.0' wit/router-middleware.wit
 
   cpu-tests:
     runs-on: ubuntu-latest
