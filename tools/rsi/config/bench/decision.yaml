@@ -1,0 +1,8 @@
+# Decision policy: how per-profile verdicts roll up into accept/reject.
+# THIS is where you (the human) say what "better" means for your deployment.
+#   require_improve: these profiles MUST show a statistically real improvement
+#   forbid_regress:  these profiles MUST NOT regress (a regression = reject)
+#   epsilon_pct:     improvements smaller than this are treated as a tie
+require_improve: [throughput]
+forbid_regress: [latency, replay]
+epsilon_pct: 2.0

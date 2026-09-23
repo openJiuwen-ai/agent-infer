@@ -1,0 +1,3 @@
+Timestamp,Session ID,Elapsed time,Model,Request tokens,Response tokens,Total tokens,Log Type
+10,sess_1,2,GPT-4,500,100,600,Conversation log
+20,sess_2,3,ChatGPT,300,50,350,API log

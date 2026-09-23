@@ -1,0 +1,21 @@
+name: ascend_a5
+family: ascend_npu
+compute:
+  fp16_tflops: 640
+  bf16_tflops: 640
+memory:
+  hbm_gb: 128
+  bandwidth_gb_s: 3200
+interconnect:
+  intra_node: hccs
+  intra_node_bw_gb_s: 800
+  inter_node: rdma
+  inter_node_bw_gb_s: 50
+timing_model:
+  prefill_alpha: 1.8e-7
+  prefill_beta: 1.1e-4
+  prefill_gamma: 0.6e-3
+  decode_beta: 2.2e-5
+  decode_gamma: 0.015
+  graph_compile_overhead_ms: 12.0
+  graph_cache_hit_rate: 0.90

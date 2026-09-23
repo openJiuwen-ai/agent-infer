@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "autopt Profile — L1 measured-signals contract (ar profile output / what ve-diagnose consumes)",
+  "type": "object",
+  "required": ["metrics", "source", "marker_verified"],
+  "additionalProperties": false,
+  "properties": {
+    "config": {"type": "object"},
+    "metrics": {"type": "object"},
+    "vllm": {"type": "object"},
+    "gpu": {"type": "object"},
+    "per_seed": {"type": "object"},
+    "saturated": {"type": ["boolean", "null"]},
+    "outcome_class": {"type": "string"},
+    "source": {"type": "string", "enum": ["real_vllm", "local_smoke", ""]},
+    "marker_verified": {"type": "boolean"},
+    "bench_config": {"type": ["object", "null"]},
+    "eval_result": {"type": ["object", "null"]},
+    "remote_cmd": {"type": "string"},
+    "evidence": {"type": "array"}
+  }
+}

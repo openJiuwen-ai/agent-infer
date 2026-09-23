@@ -1,0 +1,122 @@
+<mxfile host="app.diagrams.net" modified="2026-04-07" type="device">
+  <diagram id="evolution-loop" name="Evolution Loop">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="800" pageHeight="560" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- Title -->
+        <mxCell id="title" value="Claude Code Autonomous Evolution Loop" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=16;fontStyle=1;fontColor=#0366d6;" vertex="1" parent="1">
+          <mxGeometry x="180" y="10" width="440" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- Step 1: Context -->
+        <mxCell id="s1" value="&lt;b&gt;1. context&lt;/b&gt;&lt;br&gt;Read parent code, seed metrics,&lt;br&gt;inspirations, domain hints, store history" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=center;verticalAlign=middle;arcSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="60" width="260" height="70" as="geometry"/>
+        </mxCell>
+
+        <!-- Step 2: Mutate -->
+        <mxCell id="s2" value="&lt;b&gt;2. mutate&lt;/b&gt;&lt;br&gt;Choose skill (e.g. /evolve-eoh)&lt;br&gt;Generate new_policy.py" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;align=center;verticalAlign=middle;arcSize=20;" vertex="1" parent="1">
+          <mxGeometry x="500" y="60" width="260" height="70" as="geometry"/>
+        </mxCell>
+
+        <!-- Step 3: Verify -->
+        <mxCell id="s3" value="&lt;b&gt;3. verify&lt;/b&gt;&lt;br&gt;L1 AST safety&lt;br&gt;L2 constraints + O(n²)&lt;br&gt;L3 anti-overfit" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;align=center;verticalAlign=middle;arcSize=20;" vertex="1" parent="1">
+          <mxGeometry x="500" y="180" width="260" height="70" as="geometry"/>
+        </mxCell>
+
+        <!-- Diamond: passed? -->
+        <mxCell id="d1" value="passed?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="580" y="290" width="100" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- Step 4: Simulate -->
+        <mxCell id="s4" value="&lt;b&gt;4. simulate&lt;/b&gt;&lt;br&gt;3 scenarios: steady / bursty / long_ctx&lt;br&gt;Worst-case fitness&lt;br&gt;Auto-stored in SQLite" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;align=center;verticalAlign=middle;arcSize=20;" vertex="1" parent="1">
+          <mxGeometry x="220" y="280" width="280" height="80" as="geometry"/>
+        </mxCell>
+
+        <!-- Step 5: Rank -->
+        <mxCell id="s5" value="&lt;b&gt;5. rank&lt;/b&gt;&lt;br&gt;Compare with current best&lt;br&gt;Update policy ranking" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;align=center;verticalAlign=middle;arcSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="290" width="160" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- Diamond: good enough? -->
+        <mxCell id="d2" value="continue?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="400" width="100" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- Export -->
+        <mxCell id="export" value="&lt;b&gt;export-plugin&lt;/b&gt;&lt;br&gt;Deploy to vLLM" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;align=center;verticalAlign=middle;arcSize=20;fontColor=#333333;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="220" y="400" width="160" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- Reject box -->
+        <mxCell id="reject" value="reject&lt;br&gt;(log failure)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;align=center;fontColor=#999999;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="680" y="390" width="100" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- Arrows -->
+        <!-- s1 -> s2 -->
+        <mxCell id="a12" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=0.5;entryX=0;entryY=0.5;strokeColor=#333333;strokeWidth=2;" edge="1" source="s1" target="s2" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- s2 -> s3 -->
+        <mxCell id="a23" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeColor=#333333;strokeWidth=2;" edge="1" source="s2" target="s3" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- s3 -> d1 -->
+        <mxCell id="a3d" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeColor=#333333;strokeWidth=2;" edge="1" source="s3" target="d1" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- d1 -> s4 (Yes) -->
+        <mxCell id="ad4" value="Yes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;exitX=0;exitY=0.5;entryX=1;entryY=0.5;strokeColor=#82b366;strokeWidth=2;fontStyle=1;fontSize=10;" edge="1" source="d1" target="s4" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- d1 -> reject (No) -->
+        <mxCell id="adr" value="No" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeColor=#b85450;strokeWidth=2;fontStyle=1;fontSize=10;" edge="1" source="d1" target="reject" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- s4 -> s5 -->
+        <mxCell id="a45" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;exitX=0;exitY=0.5;entryX=1;entryY=0.5;strokeColor=#333333;strokeWidth=2;" edge="1" source="s4" target="s5" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- s5 -> d2 -->
+        <mxCell id="a5d" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeColor=#333333;strokeWidth=2;" edge="1" source="s5" target="d2" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- d2 -> s1 (Yes, loop back) -->
+        <mxCell id="ad1" value="Yes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;exitX=0;exitY=0.5;entryX=0;entryY=1;strokeColor=#0366d6;strokeWidth=2;fontStyle=1;fontSize=10;curved=1;" edge="1" source="d2" target="s1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="20" y="430"/>
+              <mxPoint x="20" y="130"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- d2 -> export (No, done) -->
+        <mxCell id="ade" value="Done" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=0.5;entryX=0;entryY=0.5;strokeColor=#666666;strokeWidth=2;fontStyle=1;fontSize=10;" edge="1" source="d2" target="export" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- reject -> s1 (loop back) -->
+        <mxCell id="ars" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=0.5;entryX=1;entryY=1;strokeColor=#999999;strokeWidth=1;dashed=1;curved=1;" edge="1" source="reject" target="s1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="770" y="410"/>
+              <mxPoint x="770" y="130"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

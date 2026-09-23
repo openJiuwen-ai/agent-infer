@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": ["Bash(ar:*)"]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__VE_PYTHON__ \"__VE_HOOK__\""
+          }
+        ]
+      }
+    ]
+  }
+}

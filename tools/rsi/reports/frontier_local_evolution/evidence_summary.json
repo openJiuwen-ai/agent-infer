@@ -1,0 +1,95 @@
+{
+  "ok": true,
+  "source": "frontier_sim",
+  "outcome_class": "simulator_nonqualifying",
+  "remote_executed": false,
+  "winner": {
+    "name": "D3Q",
+    "sha256": "d4b3a3ee8c98f82c1d900e7faaf311349f2c61797e551a631b70f9b38d80c327",
+    "generation": 0,
+    "heldin_score_pct": 39.73793346863075,
+    "source": "reports/frontier_local_evolution/sim_winner/work_variant.py"
+  },
+  "acceptance": {
+    "aggregate_median_goodput_gain_pct": 13.719635903367822,
+    "positive_scenarios": 2,
+    "scenario_count": 3,
+    "minimum_scenario_gain_pct": -0.22576258522071235,
+    "completion_ok": true,
+    "marker_ok": true,
+    "mechanism_ablation_supported": true,
+    "passed": true
+  },
+  "heldout": [
+    {
+      "scenario": "burstgpt_test",
+      "strongest_baseline": "ljf",
+      "baseline_goodput_req_s": 22.684052727501136,
+      "candidate_goodput_req_s": 22.6328406236307,
+      "gain_pct": -0.22576258522071235,
+      "candidate_ttft_p50_ms": 0.45600000000001195,
+      "candidate_ttft_p99_ms": 3.6480000000000956,
+      "candidate_throughput_req_s": 22.6328406236307,
+      "completed": 32,
+      "invocations": 99,
+      "fallbacks": 0,
+      "defers": 0,
+      "forced": 0
+    },
+    {
+      "scenario": "stress_test_moderate",
+      "strongest_baseline": "lifo",
+      "baseline_goodput_req_s": 3.211663828724745,
+      "candidate_goodput_req_s": 3.652292412465943,
+      "gain_pct": 13.719635903367822,
+      "candidate_ttft_p50_ms": 240.29600000004348,
+      "candidate_ttft_p99_ms": 4322.9283999982,
+      "candidate_throughput_req_s": 8.765501789918263,
+      "completed": 60,
+      "invocations": 39279,
+      "fallbacks": 0,
+      "defers": 0,
+      "forced": 0
+    },
+    {
+      "scenario": "stress_test_severe",
+      "strongest_baseline": "fcfs",
+      "baseline_goodput_req_s": 0.6853070175441185,
+      "candidate_goodput_req_s": 0.8387449155286403,
+      "gain_pct": 22.38965807389297,
+      "candidate_ttft_p50_ms": 592.8399999999688,
+      "candidate_ttft_p99_ms": 9040.85311999603,
+      "candidate_throughput_req_s": 6.290586866464802,
+      "completed": 75,
+      "invocations": 70488,
+      "fallbacks": 0,
+      "defers": 0,
+      "forced": 0
+    }
+  ],
+  "ablation": {
+    "mechanism": "decode-aware lifecycle occupancy under queue pressure",
+    "median_gain_over_no_decode_signal_pct": 70.23636502715492,
+    "positive_scenarios": 2,
+    "valid_execution": true,
+    "scenario_gains_pct": {
+      "burstgpt_test": 0.0,
+      "stress_test_moderate": 177.75927282955465,
+      "stress_test_severe": 70.23636502715492
+    }
+  },
+  "data": {
+    "burstgpt_commit": "d895a53bb7b8ec137d0d2fe203b335835a78c10a",
+    "burstgpt_csv_sha256": "46fc9480ef0b748ecb2b51d512ff08c196b031782cbe6f78e28044d768e86d5a",
+    "test_trace_sha256": "836d4e28cdf46797f862627b43eb3255f7520db30f27432091080769ca41898f"
+  },
+  "raw_evidence": "runs/frontier_local_evolution_v2/sim_winner/evidence.json",
+  "verification": {
+    "pytest": "705 passed, 3 skipped",
+    "ruff": "passed for src, tests, and integrations/frontier Python sources",
+    "real_frontier_e2e": "passed",
+    "frozen_enum_packaging": "16 passed",
+    "wheel_codex_assets": "present"
+  },
+  "doctrine": "A reproducible Frontier simulator win only; real-vLLM verification is still required."
+}

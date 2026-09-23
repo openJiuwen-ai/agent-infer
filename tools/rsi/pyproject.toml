@@ -1,0 +1,91 @@
+[build-system]
+requires = ["setuptools>=77.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vllm-evolve"
+version = "0.1.0"
+description = "A toolkit that makes LLM serving policies automatically optimizable"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+authors = [{name = "vllm-evolve contributors"}]
+dependencies = [
+    "typer>=0.9",
+    "rich>=13.0",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "numpy>=1.24",
+    "structlog>=23.0",
+    # validate_eval_result() imports jsonschema at RUNTIME on every native bench (not dev-only)
+    "jsonschema>=4.0",
+]
+
+[project.optional-dependencies]
+cli = [
+    "typer[all]>=0.12",
+    "rich>=13.0",
+    "plotly>=5.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-timeout>=2.0",
+    "pyflakes>=3.0",
+    "ruff>=0.4",
+    "tomli>=2.0; python_version < '3.11'",
+]
+all = ["vllm-evolve[cli]"]
+
+[project.scripts]
+# `ve` is the sole shipped CLI (renamed from `ar`). The module is split into a cli/ package in a
+# later step; the entrypoint target is kept stable here until then.
+ve = "vllm_evolve.cli.main:_entrypoint"
+
+[project.entry-points."vllm_evolve.targets"]
+# Third-party targets can register here
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.package-data]
+# Ship both Claude Code and Codex assets so `ve init --client ...` can materialize either client.
+vllm_evolve = [
+    "assets/claude/*.md",
+    "assets/claude/*.json",
+    "assets/claude/**/*.md",
+    "assets/claude/**/*.json",
+    "assets/claude/**/*.py",
+    "assets/codex/*.md",
+    "assets/codex/*.json",
+    "assets/codex/**/*.md",
+    "assets/codex/**/*.json",
+    "assets/codex/**/*.toml",
+    "assets/codex/**/*.py",
+    "knowledge/corpora/*.json",
+    # the eval_result JSON Schema is read at runtime via importlib.resources
+    # (bench/eval_result.load_schema); it MUST ship in the wheel/sdist or
+    # validate_eval_result() fails after a real bench.
+    "bench/schemas/*.json",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+# Intentionally-malformed policy files used to test that `ve verify` rejects
+# bad code; never lint them.
+extend-exclude = [
+    "tests/fixtures",
+    # Exact generated winner bytes are retained for SHA/provenance, not reformatted by ruff.
+    "reports/frontier_local_evolution/sim_winner",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+timeout = 120
