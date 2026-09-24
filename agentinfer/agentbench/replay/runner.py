@@ -27,6 +27,7 @@ from ..benchkit.metrics.vllm import aggregate_vllm_metrics
 from ..request_proxy.request_trace import RequestFact, RequestTraceWriter, load_request_facts
 from .analyzer import analyze_replay_trace, replay_analysis_to_dict
 from .config import ReplayBenchConfig
+from .converters.agentx import AgentXConverter, analyze_agentx_trace_ir
 from .converters.codex_swebenchpro import CodexSwebenchProConverter
 from .converters.tracelab import TraceLabConverter
 from .executor import ReplayExecutor, ReplayTaskExecution
@@ -100,6 +101,8 @@ def _execution_metadata(
     tasks: tuple[ReplayTaskExecution, ...],
     tolerance_tokens: int = 0,
     facts: tuple[RequestFact, ...] = (),
+    *,
+    snapshot_mode: bool = False,
 ) -> dict[str, object]:
     """Aggregate planned coverage, node outcomes, and Prompt calibration evidence."""
 
@@ -125,13 +128,21 @@ def _execution_metadata(
         fact
         for fact in cache_facts
         if planned_by_runtime_id.get(fact.request_id) is not None
-        and planned_by_runtime_id[fact.request_id].context_after is None
+        and (
+            planned_by_runtime_id[fact.request_id].prompt_kind in {"lead_main", "subagent_first"}
+            if snapshot_mode
+            else planned_by_runtime_id[fact.request_id].context_after is None
+        )
     ]
     continuation_cache_facts = [
         fact
         for fact in cache_facts
         if planned_by_runtime_id.get(fact.request_id) is not None
-        and planned_by_runtime_id[fact.request_id].context_after is not None
+        and (
+            planned_by_runtime_id[fact.request_id].prompt_kind not in {"lead_main", "subagent_first"}
+            if snapshot_mode
+            else planned_by_runtime_id[fact.request_id].context_after is not None
+        )
     ]
     return {
         "workload_fingerprint": plan.workload_fingerprint,
@@ -186,6 +197,8 @@ def _execution_metadata(
         "trimmed_filler_tokens": sum(int(item.get("trimmed_filler_tokens", 0)) for item in adjustments),
         "cache_usage_coverage_requests": len(cache_facts),
         "observed_cached_tokens": sum(fact.cached_tokens or 0 for fact in cache_facts),
+        "snapshot_cache_usage_coverage": len(cache_facts) if snapshot_mode else 0,
+        "snapshot_observed_cached_tokens": sum(fact.cached_tokens or 0 for fact in cache_facts) if snapshot_mode else 0,
         "first_request_cache_usage_coverage": len(first_cache_facts),
         "first_request_observed_cached_tokens": sum(fact.cached_tokens or 0 for fact in first_cache_facts),
         "continuation_cache_usage_coverage": len(continuation_cache_facts),
@@ -206,9 +219,6 @@ def _prepare_replay_source(
     if trace_type == "agentinfer":
         logger.info("Using AgentInfer Replay trace directly: trace_path=%s", trace_path)
         return trace_path, None, (), None
-    if trace_type == "agentX":
-        raise NotImplementedError(f"trace_type={trace_type} is reserved for future integration")
-
     convert_dir = output_dir / "convert_result"
     started = time.monotonic()
     logger.info(
@@ -217,7 +227,12 @@ def _prepare_replay_source(
         trace_path,
         convert_dir,
     )
-    if trace_type == "tracelab":
+    if trace_type == "agentX":
+        converter = AgentXConverter()
+        summary = converter.convert(trace_path, convert_dir)
+        trace_ir = validate_trace_ir(convert_dir / "requests.jsonl")
+        local_tokenizer = None
+    elif trace_type == "tracelab":
         converter = TraceLabConverter()
         summary = converter.convert(trace_path, convert_dir)
         trace_ir = validate_trace_ir(convert_dir / "requests.jsonl")
@@ -272,11 +287,12 @@ async def _run_replay(
         analysis_source, trace_ir, conversion_captures, local_tokenizer = _prepare_replay_source(config, output_dir)
         captures.extend(conversion_captures)
 
-        analysis = (
-            analyze_explicit_trace_ir(trace_ir)
-            if trace_ir is not None and trace_ir.prompt_source_kind == "token_recipe"
-            else analyze_replay_trace(analysis_source)
-        )
+        if trace_ir is not None and trace_ir.prompt_source_kind == "hash_snapshot":
+            analysis = analyze_agentx_trace_ir(trace_ir)
+        elif trace_ir is not None and trace_ir.prompt_source_kind == "token_recipe":
+            analysis = analyze_explicit_trace_ir(trace_ir)
+        else:
+            analysis = analyze_replay_trace(analysis_source)
         analysis_path = output_dir / "replay-source-analysis.json"
         atomic_write_json(analysis_path, replay_analysis_to_dict(analysis))
         captures.append(_capture("replay_source_analysis", analysis_path))
@@ -335,6 +351,7 @@ async def _run_replay(
             task_results,
             config.replay.prompt_calibration_tolerance_tokens,
             facts,
+            snapshot_mode=config.replay.prompt_shape == "agentX_snapshot",
         )
         atomic_write_json(
             execution_path,

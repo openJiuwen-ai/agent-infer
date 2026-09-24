@@ -42,7 +42,7 @@ def test_schema_overrides_metrics_url(tmp_path: Path) -> None:
         ("inferact_codex_swebenchpro", "inferact_synthetic"),
         ("agentinfer", "agentinfer_synthetic"),
         ("tracelab", "tracelab_synthetic"),
-        ("agentX", "agentX_synthetic"),
+        ("agentX", "agentX_snapshot"),
     ],
 )
 def test_replay_cli_derives_prompt_shape_after_trace_type_override(trace_type: str, shape: str) -> None:
@@ -55,7 +55,10 @@ def test_replay_cli_derives_prompt_shape_after_trace_type_override(trace_type: s
             }
         }
     )
-    args = _parser().parse_args(["replay", "--config", "replay.yaml", "--trace-type", trace_type])
+    arguments = ["replay", "--config", "replay.yaml", "--trace-type", trace_type]
+    if trace_type == "agentX":
+        arguments.extend(["--endpoint", "/v1/completions"])
+    args = _parser().parse_args(arguments)
 
     overridden = _apply_replay_cli_overrides(args, config)
 
@@ -226,7 +229,7 @@ replay:
             "/v1/chat/completions",
         ),
         ("tracelab", "replay_tracelab.yaml", "tracelab_synthetic", "/v1/chat/completions"),
-        ("agentX", "replay_agentX.yaml", "agentX_synthetic", "/v1/chat/completions"),
+        ("agentX", "replay_agentX.yaml", "agentX_snapshot", "/v1/completions"),
     ],
 )
 def test_replay_without_config_selects_builtin_template(

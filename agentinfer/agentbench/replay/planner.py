@@ -174,6 +174,8 @@ def _sha256_json(value: object) -> str:
 def _workload_config(config: ReplayBenchConfig, planner_version: str) -> dict[str, object]:
     replay = config.replay.model_dump(mode="json")
     replay.pop("trace_path", None)
+    if config.replay.trace_type != "agentX":
+        replay.pop("max_inflight_requests", None)
     return {
         "task_num": config.experiment.task_num,
         "max_concurrency": config.experiment.max_concurrency,
@@ -281,7 +283,9 @@ def _task_plan(
                     if request.replay_kind == "request"
                     else None
                 ),
-                response_validation="exact_tokens" if config.replay.prompt_shape == "tracelab_synthetic" else None,
+                response_validation=(
+                    "exact_tokens" if config.replay.prompt_shape in {"tracelab_synthetic", "agentX_snapshot"} else None
+                ),
             )
         )
     return ReplayTaskPlan(
@@ -316,7 +320,9 @@ def _validate_acyclic(nodes: Iterable[ReplayPlanNode]) -> None:
         visit(key)
 
 
-def _validate_task(task: ReplayTaskPlan, *, allow_unknown_context: bool = False) -> None:
+def _validate_task(
+    task: ReplayTaskPlan, *, allow_unknown_context: bool = False, allow_hash_snapshot: bool = False
+) -> None:
     nodes = task.requests
     keys = [node.source_key for node in nodes]
     if len(keys) != len(set(keys)):
@@ -331,6 +337,10 @@ def _validate_task(task: ReplayTaskPlan, *, allow_unknown_context: bool = False)
             ("context_after", node.context_after),
             ("prompt_recipe_key", node.prompt_recipe_key),
         ):
+            if field == "prompt_recipe_key" and allow_hash_snapshot:
+                if not reference.isdecimal():
+                    raise ValueError("hash snapshot prompt_recipe_key must be a byte offset")
+                continue
             if reference is not None and reference not in by_key:
                 raise ValueError(f"{field} reference {reference} is missing in {task.task_id}")
         if node.node_type == "request":
@@ -357,14 +367,16 @@ def _validate_task(task: ReplayTaskPlan, *, allow_unknown_context: bool = False)
     _validate_acyclic(nodes)
 
 
-def _validate_plan(tasks: Iterable[ReplayTaskPlan], *, allow_unknown_context: bool = False) -> None:
+def _validate_plan(
+    tasks: Iterable[ReplayTaskPlan], *, allow_unknown_context: bool = False, allow_hash_snapshot: bool = False
+) -> None:
     runtime_sessions: set[str] = set()
     for task in tasks:
         runtime_session_id = task.runtime_session_id
         if runtime_session_id in runtime_sessions:
             raise ValueError("runtime session ids must be unique")
         runtime_sessions.add(runtime_session_id)
-        _validate_task(task, allow_unknown_context=allow_unknown_context)
+        _validate_task(task, allow_unknown_context=allow_unknown_context, allow_hash_snapshot=allow_hash_snapshot)
 
 
 def build_replay_plan(
@@ -374,7 +386,7 @@ def build_replay_plan(
 ) -> ReplayPlan:
     """Build a deterministic structural plan without sending Backend requests."""
 
-    if config.replay.prompt_shape in {"inferact_synthetic", "tracelab_synthetic"}:
+    if config.replay.prompt_shape in {"inferact_synthetic", "tracelab_synthetic", "agentX_snapshot"}:
         if trace_ir is None:
             raise ValueError(f"{config.replay.prompt_shape} planning requires a validated unified Trace IR")
     elif trace_ir is not None:
@@ -388,6 +400,9 @@ def build_replay_plan(
     if config.replay.prompt_shape == "tracelab_synthetic":
         if trace_ir is None or trace_ir.prompt_source_kind != "token_recipe":
             raise ValueError("token_recipe planning requires token_recipe unified Trace IR")
+    if config.replay.prompt_shape == "agentX_snapshot":
+        if trace_ir is None or trace_ir.prompt_source_kind != "hash_snapshot":
+            raise ValueError("AgentX planning requires hash_snapshot unified Trace IR")
     planner_version = "agentinfer-replay-structural"
     workload_config = _workload_config(config, planner_version)
     plan_namespace = _sha256_json(
@@ -404,8 +419,20 @@ def build_replay_plan(
         seed=config.replay.sample_seed,
         plan_namespace=plan_namespace,
     )
+    if config.replay.prompt_shape == "agentX_snapshot":
+        for selected in sampled:
+            zero = next((request for request in selected.source.requests if request.output_tokens == 0), None)
+            if zero is not None:
+                raise ValueError(
+                    f"AgentX selected session {selected.source.source_session_id} contains zero-output request {zero.key}; "
+                    "zero-output generation is unsupported"
+                )
     tasks = tuple(_task_plan(config, sampled_session, interval_model) for sampled_session in sampled)
-    _validate_plan(tasks, allow_unknown_context=config.replay.prompt_shape == "tracelab_synthetic")
+    _validate_plan(
+        tasks,
+        allow_unknown_context=config.replay.prompt_shape == "tracelab_synthetic",
+        allow_hash_snapshot=config.replay.prompt_shape == "agentX_snapshot",
+    )
     workload = {
         "source_sha256": analysis.source_sha256,
         "source_bundle_sha256": trace_ir.bundle_sha256 if trace_ir is not None else None,
@@ -414,7 +441,7 @@ def build_replay_plan(
         "tasks": [task.to_dict() for task in tasks],
     }
     return ReplayPlan(
-        schema_version="2" if config.replay.prompt_shape == "tracelab_synthetic" else "1",
+        schema_version="2" if config.replay.prompt_shape in {"tracelab_synthetic", "agentX_snapshot"} else "1",
         plan_kind="structural",
         planner_version=planner_version,
         execution_ready=False,

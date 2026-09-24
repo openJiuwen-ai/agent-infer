@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
 BUNDLE_SCHEMA_VERSION = "2"
 TOKEN_RECIPE_SCHEMA_VERSION = "3"
+HASH_SNAPSHOT_SCHEMA_VERSION = "4"
 BUNDLE_MANIFEST_NAME = "manifest.json"
 
 
@@ -151,7 +152,7 @@ def _trace_ir_digest_payload(manifest: dict[str, object]) -> dict[str, object]:
         "texts": manifest.get("texts"),
         "summary": manifest.get("summary"),
     }
-    if manifest.get("schema_version") == TOKEN_RECIPE_SCHEMA_VERSION:
+    if manifest.get("schema_version") in {TOKEN_RECIPE_SCHEMA_VERSION, HASH_SNAPSHOT_SCHEMA_VERSION}:
         payload["prompt_source"] = manifest.get("prompt_source")
     return payload
 
@@ -169,17 +170,21 @@ def validate_trace_ir(requests_path: Path, text_dir: Path | None = None) -> Unif
     manifest_path = root / BUNDLE_MANIFEST_NAME
     manifest = _load_object(manifest_path, "unified Trace IR manifest")
     schema_version = manifest.get("schema_version")
-    if schema_version not in {BUNDLE_SCHEMA_VERSION, TOKEN_RECIPE_SCHEMA_VERSION}:
+    if schema_version not in {BUNDLE_SCHEMA_VERSION, TOKEN_RECIPE_SCHEMA_VERSION, HASH_SNAPSHOT_SCHEMA_VERSION}:
         raise ValueError(f"unsupported unified Trace IR schema_version: {manifest.get('schema_version')!r}")
     prompt_source = manifest.get("prompt_source")
     if schema_version == BUNDLE_SCHEMA_VERSION:
         prompt_source_kind = "text_turns"
         if prompt_source not in (None, {"kind": "text_turns"}):
             raise ValueError("text-turn Trace IR only supports prompt_source.kind=text_turns")
-    else:
+    elif schema_version == TOKEN_RECIPE_SCHEMA_VERSION:
         if prompt_source != {"kind": "token_recipe"}:
             raise ValueError("token-recipe Trace IR requires prompt_source.kind=token_recipe")
         prompt_source_kind = "token_recipe"
+    else:
+        if prompt_source != {"kind": "hash_snapshot"}:
+            raise ValueError("hash-snapshot Trace IR requires prompt_source.kind=hash_snapshot")
+        prompt_source_kind = "hash_snapshot"
     calculated_digest = canonical_sha256(_trace_ir_digest_payload(manifest))
     if manifest.get("bundle_sha256") != calculated_digest:
         raise ValueError("bundle_sha256 does not match manifest contents")
@@ -211,13 +216,15 @@ def validate_trace_ir(requests_path: Path, text_dir: Path | None = None) -> Unif
             extra = actual_paths - expected_paths
             raise ValueError(f"text manifest inventory mismatch: missing={len(missing)} extra={len(extra)}")
     elif text_dir is not None:
-        raise ValueError("token_recipe unified Trace IR must not supply a text directory")
+        raise ValueError("recipe unified Trace IR must not supply a text directory")
 
     request_rows = 0
     referenced_paths: set[Path] = set()
     references: set[PromptReference] = set()
     turns_by_session: dict[str, set[int]] = {}
     recipe_ids: set[str] = set()
+    hash_recipe_sessions: dict[str, str] = {}
+    hash_recipe_ends: dict[str, float] = {}
     recipe_sequences: dict[str, set[int]] = {}
     recipe_previous: dict[str, str | None] = {}
     with requests_path.open(encoding="utf-8") as handle:
@@ -243,7 +250,7 @@ def validate_trace_ir(requests_path: Path, text_dir: Path | None = None) -> Unif
                 if path.resolve() not in expected_paths:
                     raise ValueError(f"requests line {source_line} references an unmanifested text file")
                 referenced_paths.add(path.resolve())
-            else:
+            elif prompt_source_kind == "token_recipe":
                 request_id = row.get("request_id")
                 session_id = row.get("session_id")
                 sequence = row.get("sequence_index")
@@ -289,6 +296,56 @@ def validate_trace_ir(requests_path: Path, text_dir: Path | None = None) -> Unif
                 sequences.add(sequence)
                 recipe_ids.add(request_id)
                 recipe_previous[session_id] = request_id
+            else:
+                request_id = row.get("request_id")
+                session_id = row.get("session_id")
+                sequence = row.get("sequence_index")
+                if not isinstance(request_id, str) or not request_id or request_id in recipe_ids:
+                    raise ValueError(f"requests line {source_line} has invalid or duplicate request_id")
+                if not isinstance(session_id, str) or not session_id:
+                    raise ValueError(f"requests line {source_line} has invalid session_id")
+                sequences = recipe_sequences.setdefault(session_id, set())
+                if type(sequence) is not int or sequence < 0 or sequence in sequences:
+                    raise ValueError(f"requests line {source_line} has invalid sequence_index")
+                for field, minimum in (("input_tokens", 1), ("output_tokens", 0), ("block_size", 1)):
+                    value = row.get(field)
+                    if type(value) is not int or value < minimum:
+                        raise ValueError(f"requests line {source_line} has invalid {field}")
+                hashes = row.get("hash_ids")
+                if (
+                    not isinstance(hashes, list)
+                    or not hashes
+                    or any(type(value) is not int or value < 0 for value in hashes)
+                    or len(hashes) != (row["input_tokens"] + row["block_size"] - 1) // row["block_size"]
+                ):
+                    raise ValueError(f"requests line {source_line} has invalid hash_ids")
+                if row.get("hash_id_scope") != "local":
+                    raise ValueError(f"requests line {source_line} has invalid hash_id_scope")
+                if row.get("context_after") is not None or row.get("prompt_ref") is not None:
+                    raise ValueError(f"requests line {source_line} hash snapshot has context or text reference")
+                send_after = row.get("send_after")
+                if send_after is not None and send_after not in recipe_ids:
+                    raise ValueError(f"requests line {source_line} send_after must reference an earlier request")
+                for field in ("t", "api_time", "source_gap_seconds"):
+                    value = row.get(field)
+                    if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+                        raise ValueError(f"requests line {source_line} has invalid {field}")
+                if send_after is not None and (
+                    hash_recipe_sessions.get(send_after) != session_id or hash_recipe_ends[send_after] > row["t"]
+                ):
+                    raise ValueError(f"requests line {source_line} send_after has an invalid session or time")
+                actor = row.get("actor_id")
+                role = row.get("actor_role")
+                if not isinstance(actor, str) or not actor or role not in {"lead", "subagent"}:
+                    raise ValueError(f"requests line {source_line} has invalid actor identity")
+                if role == "subagent" and row.get("parent_actor_id") != "lead":
+                    raise ValueError(f"requests line {source_line} has invalid parent identity")
+                if not isinstance(row.get("source_model"), str) or not row["source_model"]:
+                    raise ValueError(f"requests line {source_line} has invalid source_model")
+                sequences.add(sequence)
+                recipe_ids.add(request_id)
+                hash_recipe_sessions[request_id] = session_id
+                hash_recipe_ends[request_id] = row["t"] + row["api_time"]
             request_rows += 1
     if request_rows != int(manifest["requests"]["lines"]):
         raise ValueError("requests row count does not match manifest")
@@ -336,7 +393,7 @@ def write_trace_ir_manifest(
         raise ValueError("converter output is missing requests.jsonl")
     if prompt_source_kind == "text_turns" and not text_dir.is_dir():
         raise ValueError("converter output is missing texts/")
-    if prompt_source_kind not in {"text_turns", "token_recipe"}:
+    if prompt_source_kind not in {"text_turns", "token_recipe", "hash_snapshot"}:
         raise ValueError(f"unsupported prompt source kind: {prompt_source_kind}")
 
     def entry(path: Path) -> dict[str, object]:
@@ -348,7 +405,13 @@ def write_trace_ir_manifest(
         }
 
     manifest_without_digest: dict[str, object] = {
-        "schema_version": BUNDLE_SCHEMA_VERSION if prompt_source_kind == "text_turns" else TOKEN_RECIPE_SCHEMA_VERSION,
+        "schema_version": (
+            BUNDLE_SCHEMA_VERSION
+            if prompt_source_kind == "text_turns"
+            else TOKEN_RECIPE_SCHEMA_VERSION
+            if prompt_source_kind == "token_recipe"
+            else HASH_SNAPSHOT_SCHEMA_VERSION
+        ),
         "converter": {"name": converter_name},
         "source": {
             "sha256": sha256_file(source_path),

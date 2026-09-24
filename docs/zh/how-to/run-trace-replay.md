@@ -68,7 +68,7 @@ CLI 路径相对于当前目录解析。
 | `agentinfer` | `replay_agentinfer.yaml` |
 | `inferact_codex_swebenchpro` | `replay_inferact.yaml` |
 | `tracelab` | `replay_tracelab.yaml` |
-| `agentX` | `replay_agentX.yaml`（预留，尚未实现执行） |
+| `agentX` | `replay_agentX.yaml` |
 
 回放直接使用 trace 中完整的输入和输出 token 目标值。
 `prompt_calibration_tolerance_tokens` 必须为 `0`。支持 `trace` 和 `lognormal` 间隔模式。
@@ -108,7 +108,7 @@ Inferact 仍保留源 Human 文本及实时 Assistant 历史；超出校准容�
 | `replay.trace_type: agentinfer` | 输入为 AgentInfer `requests.jsonl`；自动选择 `agentinfer_synthetic`。 |
 | `replay.trace_type: inferact_codex_swebenchpro` | 输入为 Inferact 原始 JSON；自动选择 `inferact_synthetic`，要求 `interval_mode: lognormal`、零校准容差和 `/v1/chat/completions`。 |
 | `replay.trace_type: tracelab` | 归一化、未压缩的 JSONL；`trace_path: null` 时自动下载并提取前 `task_num` 个完整 Session。自动选择 `tracelab_synthetic`，要求零校准容差和 `/v1/chat/completions`。 |
-| `replay.trace_type: agentX` | 自动选择 `agentX_synthetic`；为预留入口，执行时抛出 `NotImplementedError`。 |
+| `replay.trace_type: agentX` | 输入为嵌套 Session JSONL；使用完整 hash 块配方和 `/v1/completions` token ID 请求。选中包含零输出请求的 Session 时，规划阶段明确报错。 |
 | `replay.interval_mode` | `trace` 保留历史间隔，`lognormal` 按配置的分布生成间隔。 |
 | `replay.sample_seed` | 可重复的会话抽样和后端采样种子。 |
 | `replay.context_adjustment_mode` | `strict` 拒绝非追加上下文；`adaptive` 审计裁剪和上下文重置。 |
@@ -117,6 +117,19 @@ Inferact 仍保留源 Human 文本及实时 Assistant 历史；超出校准容�
 完整字段、默认值和约束见[Replay 配置模型](../../../agentinfer/agentbench/replay/config.py)与
 [示例 YAML](../../../agentinfer/agentbench/configs/replay_benchmark.yaml)。运行
 `vllm bench serve --agentinfer replay --help` 查看支持的 CLI 覆盖参数。
+
+### 回放 AgentX Hash 快照
+
+设置 `replay.trace_type: agentX`、本地 `replay.trace_path` 和
+`backend.endpoint: /v1/completions`。源文件每行是一个 Session；转换器展开主请求与子 agent 组内的请求，
+保留它们共享的会话时间轴。每条请求的 `hash_ids` 表示完整输入。实时输出只用于本轮测量，不追加到下一轮。
+所有 token ID 使用配置的 Backend 模型；来源模型名称保留在分析产物中，并用于隔离同一 Runtime Session
+内的块。重复采样会生成独立的 Runtime Session 和块内容。
+
+转换器用 `t`、`api_time` 推断开始前最近完成的调度前驱。该关系只是时间推断，不代表已恢复父子因果；
+子 agent 身份仍会传递，`blocks_parent` 设为 false。转换结果保留零输出请求；若采样选中含此类请求的
+Session，规划阶段明确失败。后端上下文窗口必须容纳选中请求的输入与输出目标。
+`replay.max_inflight_requests` 限制每个 Runtime Session 同时在途的 AgentX 请求数。
 
 ### 保留实时回答并对齐输入长度
 

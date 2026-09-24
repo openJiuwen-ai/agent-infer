@@ -49,7 +49,7 @@ class ReplayBackendConfig(ReplayStrictModel):
         "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
         json_schema_extra={"cli": True},
     )
-    endpoint: Literal["/v1/chat/completions", "/v1/messages"] = Field(
+    endpoint: Literal["/v1/chat/completions", "/v1/completions", "/v1/messages"] = Field(
         "/v1/chat/completions",
         json_schema_extra={"cli": True},
     )
@@ -107,6 +107,7 @@ class ReplayConfig(ReplayStrictModel):
     interval_mode: Literal["trace", "lognormal"] = Field("trace", json_schema_extra={"cli": True})
     interval_lognormal: ReplayIntervalLognormalConfig | None = None
     sample_seed: int = 0
+    max_inflight_requests: int = Field(8, ge=1, description="Per-session AgentX request limit.")
     lead_title_sys_shared_prefix: int = Field(0, ge=0)
     lead_name_sys_shared_prefix: int = Field(0, ge=0)
     lead_1st_sys_shared_prefix: int = Field(0, ge=0)
@@ -141,7 +142,7 @@ class ReplayConfig(ReplayStrictModel):
             "inferact_codex_swebenchpro": "inferact_synthetic",
             "agentinfer": "agentinfer_synthetic",
             "tracelab": "tracelab_synthetic",
-            "agentX": "agentX_synthetic",
+            "agentX": "agentX_snapshot",
         }[self.trace_type]
 
     @model_validator(mode="after")
@@ -161,6 +162,8 @@ class ReplayConfig(ReplayStrictModel):
         if self.trace_type == "tracelab":
             if self.prompt_calibration_tolerance_tokens != 0:
                 raise ValueError("tracelab requires prompt_calibration_tolerance_tokens=0")
+        if self.trace_type == "agentX" and self.prompt_calibration_tolerance_tokens != 0:
+            raise ValueError("agentX requires prompt_calibration_tolerance_tokens=0")
         return self
 
     def context_micro_trim_limit(self, target: int) -> int:
@@ -189,6 +192,12 @@ class ReplayBenchConfig(ReplayStrictModel):
             raise ValueError("inferact_codex_swebenchpro requires backend.endpoint=/v1/chat/completions")
         if self.replay.trace_type == "tracelab" and self.backend.endpoint != "/v1/chat/completions":
             raise ValueError("tracelab requires backend.endpoint=/v1/chat/completions")
+        if self.replay.trace_type == "agentX" and self.backend.endpoint != "/v1/completions":
+            raise ValueError("agentX requires backend.endpoint=/v1/completions")
+        if self.backend.endpoint == "/v1/completions" and self.replay.trace_type != "agentX":
+            raise ValueError("backend.endpoint=/v1/completions requires trace_type=agentX")
+        if self.replay.trace_type == "agentX" and self.backend.chat_template_kwargs:
+            raise ValueError("agentX token-ID prompts do not use chat_template_kwargs")
         return self
 
 

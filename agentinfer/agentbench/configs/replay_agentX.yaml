@@ -1,4 +1,4 @@
-# Trace Replay defaults for the reserved AgentX adapter.
+# Trace Replay defaults for AgentX full hash-block snapshots.
 
 experiment:
   task_num: null
@@ -12,7 +12,7 @@ backend:
   metrics_url: null
   tokenizer_base_url: null
   model: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8
-  endpoint: /v1/chat/completions
+  endpoint: /v1/completions
   chat_template_kwargs: {}
   api_key_env: null
 
@@ -23,6 +23,7 @@ replay:
   trace_same_agent_gap_offset_seconds: 0.0
   interval_mode: trace
   sample_seed: 0
+  max_inflight_requests: 8
   context_adjustment_mode: strict
   context_micro_trim_max_tokens: 64
   context_micro_trim_max_ratio: 0.005

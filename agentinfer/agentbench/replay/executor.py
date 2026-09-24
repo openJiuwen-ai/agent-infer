@@ -121,7 +121,10 @@ class ReplayExecutor:
         task: ReplayTaskPlan,
         results: list[NodeExecution],
     ) -> None:
-        roots = [node for node in task.requests if node.node_type == "request" and node.context_after is None]
+        agentx = self.config.replay.prompt_shape == "agentX_snapshot"
+        roots = [
+            node for node in task.requests if node.node_type == "request" and node.context_after is None and not agentx
+        ]
         prepared = await asyncio.gather(
             *(self.prompts.build(task, node, None) for node in roots),
             return_exceptions=True,
@@ -129,8 +132,9 @@ class ReplayExecutor:
         root_prompts = dict(zip((node.source_key for node in roots), prepared, strict=True))
         started = time.monotonic()
         completions = {node.source_key: asyncio.get_running_loop().create_future() for node in task.requests}
+        inflight = asyncio.Semaphore(self.config.replay.max_inflight_requests)
         running = [
-            asyncio.create_task(self._execute_node(task, node, started, root_prompts, completions, results))
+            asyncio.create_task(self._execute_node(task, node, started, root_prompts, completions, results, inflight))
             for node in task.requests
         ]
         try:
@@ -149,6 +153,7 @@ class ReplayExecutor:
         root_prompts: dict[str, SyntheticPrompt | BaseException],
         completions: dict[str, asyncio.Future[_NodeCompletion]],
         results: list[NodeExecution],
+        inflight: asyncio.Semaphore,
     ) -> None:
         """Execute one node and convert ordinary failures into terminal outcomes.
 
@@ -158,7 +163,7 @@ class ReplayExecutor:
         """
 
         try:
-            await self._execute_node_inner(task, node, task_started, root_prompts, completions, results)
+            await self._execute_node_inner(task, node, task_started, root_prompts, completions, results, inflight)
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
             status = "skipped_dependency_failed" if isinstance(exc, _DependencyFailed) else "failed"
@@ -203,6 +208,7 @@ class ReplayExecutor:
         root_prompts: dict[str, SyntheticPrompt | BaseException],
         completions: dict[str, asyncio.Future[_NodeCompletion]],
         results: list[NodeExecution],
+        inflight: asyncio.Semaphore,
     ) -> None:
         """Prepare, release, and send a node after its required context is ready.
 
@@ -214,7 +220,8 @@ class ReplayExecutor:
 
         predecessor_future = completions[node.send_after] if node.send_after else None
         prompt = None
-        if node.node_type == "request":
+        agentx = self.config.replay.prompt_shape == "agentX_snapshot"
+        if node.node_type == "request" and not agentx:
 
             async def prepare_prompt() -> SyntheticPrompt:
                 if node.context_after:
@@ -259,10 +266,16 @@ class ReplayExecutor:
             )
             return
 
-        assert prompt is not None
         await asyncio.sleep(max(0, release_clock - time.monotonic()))
-        sent_clock = time.monotonic()
-        response = await self.transport.send(task, node, prompt)
+        if agentx:
+            async with inflight:
+                prompt = await self.prompts.build(task, node, None)
+                sent_clock = time.monotonic()
+                response = await self.transport.send(task, node, prompt)
+        else:
+            assert prompt is not None
+            sent_clock = time.monotonic()
+            response = await self.transport.send(task, node, prompt)
         exchange = (
             PromptExchange(prompt, response.assistant_content, response.assistant_reasoning_content)
             if response.success
