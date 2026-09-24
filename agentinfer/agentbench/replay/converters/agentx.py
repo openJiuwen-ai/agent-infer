@@ -161,7 +161,7 @@ class AgentXConverter(ReplayDatasetConverter):
             not isinstance(hashes, list)
             or not hashes
             or any(type(item) is not int or item < 0 for item in hashes)
-            or len(hashes) != math.ceil(input_tokens / block_size)
+            or len(hashes) != (input_tokens + block_size - 1) // block_size
         ):
             raise ValueError(f"AgentX {location} hash_ids do not match in/block_size")
         return {

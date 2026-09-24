@@ -116,6 +116,36 @@ def test_agentx_zero_output_is_retained_and_selected_plan_fails(tmp_path: Path) 
         build_replay_plan(_config(source), analysis, ir)
 
 
+def test_agentx_hash_block_count_uses_exact_integer_division(tmp_path: Path) -> None:
+    block_size = 2**53 + 1
+    source = tmp_path / "source.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "id": "large-token-target",
+                "block_size": block_size,
+                "hash_id_scope": "local",
+                "requests": [
+                    {
+                        "t": 0,
+                        "api_time": 1,
+                        "in": block_size + 1,
+                        "out": 1,
+                        "hash_ids": [0, 1],
+                        "model": "source-model",
+                        "type": "n",
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    summary, ir, _ = _converted(source, tmp_path / "convert")
+    assert summary.requests == 1
+    assert validate_trace_ir(ir.requests_path).prompt_source_kind == "hash_snapshot"
+
+
 @pytest.mark.parametrize("mutation", ["hash_count", "scope", "foreign_edge", "missing_hash"])
 def test_agentx_ir_rejects_broken_recipes(tmp_path: Path, mutation: str) -> None:
     source = tmp_path / "source.jsonl"

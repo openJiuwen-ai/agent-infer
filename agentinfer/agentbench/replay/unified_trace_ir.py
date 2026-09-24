@@ -316,7 +316,7 @@ def validate_trace_ir(requests_path: Path, text_dir: Path | None = None) -> Unif
                     not isinstance(hashes, list)
                     or not hashes
                     or any(type(value) is not int or value < 0 for value in hashes)
-                    or len(hashes) != math.ceil(row["input_tokens"] / row["block_size"])
+                    or len(hashes) != (row["input_tokens"] + row["block_size"] - 1) // row["block_size"]
                 ):
                     raise ValueError(f"requests line {source_line} has invalid hash_ids")
                 if row.get("hash_id_scope") != "local":
