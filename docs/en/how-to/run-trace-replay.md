@@ -36,7 +36,7 @@ YAML paths resolve relative to that file; CLI paths resolve relative to the curr
 | `agentinfer` | `replay_agentinfer.yaml` |
 | `inferact_codex_swebenchpro` | `replay_inferact.yaml` |
 | `tracelab` | `replay_tracelab.yaml` |
-| `agentX` | `replay_agentX.yaml` (reserved; execution is not implemented) |
+| `agentX` | `replay_agentX.yaml` |
 
 Replay uses the full input and output token targets from the trace.
 `prompt_calibration_tolerance_tokens` must be zero. Both `trace` and `lognormal` intervals are supported.
@@ -113,7 +113,7 @@ recording sources. The backend context window must accommodate the request targe
 | `replay.trace_type: agentinfer` | AgentInfer `requests.jsonl` input; automatically selects `agentinfer_synthetic`. |
 | `replay.trace_type: inferact_codex_swebenchpro` | Raw Inferact JSON; automatically selects `inferact_synthetic`. Requires `interval_mode: lognormal`, zero calibration tolerance, and `/v1/chat/completions`. |
 | `replay.trace_type: tracelab` | Normalized, uncompressed JSONL; a null `trace_path` downloads and extracts the first `task_num` complete sessions. Automatically selects `tracelab_synthetic`. Requires zero calibration tolerance and `/v1/chat/completions`. |
-| `replay.trace_type: agentX` | Automatically selects `agentX_synthetic`; reserved, execution raises `NotImplementedError`. |
+| `replay.trace_type: agentX` | Nested session JSONL with 64-token local hash blocks; uses complete token-ID snapshots and `/v1/completions`. A selected zero-output request fails planning. |
 | `replay.interval_mode` | `trace` preserves historical intervals; `lognormal` generates configured intervals. |
 | `replay.sample_seed` | Reproducible session selection and backend sampling seed. |
 | `replay.context_adjustment_mode` | `strict` rejects non-append-only context; `adaptive` audits trims and context resets. |
@@ -123,6 +123,25 @@ For all fields, defaults, and constraints see the [Replay configuration
 model](../../../agentinfer/agentbench/replay/config.py)
 and [example YAML](../../../agentinfer/agentbench/configs/replay_benchmark.yaml).
 Run `vllm bench serve --agentinfer replay --help` to list supported CLI overrides.
+
+### Replay AgentX hash snapshots
+
+Set `replay.trace_type: agentX`, an explicit local `replay.trace_path`, and
+`backend.endpoint: /v1/completions`. Each source line is a session. The converter
+expands lead requests and the requests nested inside subagent groups, retaining
+their shared session timeline. A request's `hash_ids` describes its complete input;
+live output is measured but never appended to the next input. The configured
+Backend model supplies all token IDs. Source model names remain in analysis and
+partition generated blocks within a runtime session. Repeated samples have
+different runtime session IDs and different token blocks.
+
+The source's `t` and `api_time` infer the most recently completed scheduling
+predecessor. This is a timing relationship, not proof of parent/child causality;
+subagent identity is retained while `blocks_parent` is false. The converter
+keeps zero-output records for coverage, and planning fails if a selected session
+contains one. Set the Backend context limit high enough for the selected
+request's `input_tokens + output_tokens`. `replay.max_inflight_requests` bounds
+simultaneous AgentX requests within each runtime session.
 
 ### Align input lengths while retaining live answers
 

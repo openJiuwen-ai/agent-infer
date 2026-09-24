@@ -81,6 +81,7 @@ class ReplayRequest:
     same_agent_gap_seconds: float | None
     parallel_with: tuple[str, ...]
     source_evidence: ReplaySourceEvidence | None = None
+    source_details: dict[str, object] | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Serialize timestamps and tuples for JSON artifacts."""

@@ -169,13 +169,16 @@ def test_null_trace_path_requires_tracelab_and_task_num() -> None:
         ("inferact_codex_swebenchpro", "inferact_synthetic"),
         ("agentinfer", "agentinfer_synthetic"),
         ("tracelab", "tracelab_synthetic"),
-        ("agentX", "agentX_synthetic"),
+        ("agentX", "agentX_snapshot"),
     ],
 )
 def test_replay_yaml_derives_prompt_shape_and_round_trips(tmp_path: Path, trace_type: str, shape: str) -> None:
     config_path = tmp_path / "replay.yaml"
+    endpoint = "/v1/completions" if trace_type == "agentX" else "/v1/chat/completions"
     config_path.write_text(
         f"""
+backend:
+  endpoint: {endpoint}
 replay:
   trace_type: {trace_type}
   trace_path: source.json

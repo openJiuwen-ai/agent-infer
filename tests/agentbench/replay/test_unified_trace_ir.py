@@ -527,13 +527,6 @@ def test_current_turn_replay_repeats_targets_with_different_live_answers(tmp_pat
         assert all(item["pad"] == item["trim"] == 8 for item in adjustments)
 
 
-def test_reserved_agentx_trace_type_fails_explicitly(tmp_path: Path) -> None:
-    config = ReplayBenchConfig.model_validate({"replay": {"trace_type": "agentX", "trace_path": tmp_path / "trace"}})
-
-    with pytest.raises(NotImplementedError, match="reserved for future integration"):
-        _prepare_replay_source(config, tmp_path / "result")
-
-
 def test_runtime_converter_uses_configured_backend_chat_template(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, dict[str, object]]] = []
 

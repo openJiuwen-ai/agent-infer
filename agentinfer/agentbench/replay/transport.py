@@ -185,10 +185,25 @@ class ReplayTransport:
             session_id=task.runtime_session_id,
             agent_id=node.actor_id,
             parent_program_id=(f"{task.runtime_session_id}:{node.parent_actor_id}" if node.parent_actor_id else None),
-            blocks_parent=node.actor_role == "subagent",
+            blocks_parent=node.actor_role == "subagent" and self.config.replay.trace_type != "agentX",
             agent_role=node.actor_role,
             request_id=node.runtime_request_id,
         )
+        if self.config.backend.endpoint == "/v1/completions":
+            if prompt.token_ids is None or len(prompt.token_ids) != node.planned_input_tokens:
+                raise ValueError("AgentX completion requires exact planned token IDs")
+            return {
+                "model": self.config.backend.model,
+                "prompt": list(prompt.token_ids),
+                "add_special_tokens": False,
+                "max_tokens": node.planned_output_tokens,
+                "min_tokens": node.planned_output_tokens,
+                "ignore_eos": True,
+                "seed": node.backend_sampling_seed,
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                "vllm_xargs": {"agentic_context": encode_agent_identity(identity)},
+            }
         if self.config.backend.endpoint == "/v1/chat/completions":
             messages = ([{"role": "system", "content": prompt.system}] if prompt.system else []) + list(prompt.messages)
             body: dict[str, object] = {
@@ -231,6 +246,11 @@ class ReplayTransport:
             raw_usage = message.get("usage") if isinstance(message, dict) else None
         if isinstance(raw_usage, dict):
             usage.update(_normalize_usage(raw_usage))
+        if self.config.backend.endpoint == "/v1/completions":
+            choices = payload.get("choices")
+            if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+                return ""
+            return str(choices[0].get("text") or "")
         if self.config.backend.endpoint == "/v1/chat/completions":
             choices = payload.get("choices")
             if not isinstance(choices, list) or not choices:
