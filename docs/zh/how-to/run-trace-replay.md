@@ -100,11 +100,13 @@ vllm bench serve --agentinfer replay \
 TraceLab 的处理顺序如下：
 
 1. Converter 严格校验每一行，以 Provider 和 Session 分组，再按 `round_index` 排序。重复的
-   `(provider, session_id, round_index)`、非法 token 数、工具结构、时间戳或事件结构都会使转换失败；
+   `(provider, session_id, round_index)`、`round_index` 未从 0 连续递增、非法 token 数、工具结构、
+   时间戳或事件结构都会使转换失败；
    缺少可用的输入/输出时间事件则记录为 timing 不可用。
 2. Converter 把每个 round 写成 token 配方 IR。首轮的 `context_after` 和 `send_after` 为空；后续轮次
-   两者都指向前一 round。转换产物位于结果目录的 `convert_result/requests.jsonl` 和
-   `convert_result/manifest.json`，TraceLab 不生成文本 sidecar。
+   两者都指向前一 round。转换时取文件中所有 Session 的 `round_index=0` 请求的最大 `prefix_tokens`，
+   加 1 后写入 `convert_result/manifest.json` 的 `summary.warmup_input_tokens`。
+   转换产物还包括 `convert_result/requests.jsonl`；TraceLab 不生成文本 sidecar。
 3. Planner 使用 `sample_seed` 对可回放 Session 做确定性的哈希乱序，并生成 Runtime Session、请求 ID、
    后端采样 seed、依赖和发送间隔。相同源数据和配置产生相同计划身份。
 4. Executor 最多并行运行 `max_concurrency` 个 Runtime Session；同一 Session 内的节点按
@@ -130,35 +132,45 @@ round 无法得到有效 gap（包括缺少可用时间事件或出现负的源�
 
 ### Prompt 构造、请求和失败传播
 
-回放直接使用源 trace 的 `input_tokens_total` 和 `output_tokens` 作为每轮精确目标。
-`prefix_tokens`、`newly_append_tokens`、工具数量和错误数量只作为来源审计信息；源工具不会执行，
-`prefix_tokens` 也不是运行时精确 LCP 目标。
+回放直接使用源 trace 的 `input_tokens_total` 和 `output_tokens` 作为每轮目标。
+TraceLab 允许 `output_tokens: 0`；由于当前 vLLM 不接受零生成长度，这类请求实际发送并生成
+1 个 token。结果中的请求级 `output_tokens` 和汇总输出 token 数均记录实际值 1；计划仍保留源值 0，
+并用 `effective_output_tokens: 1` 标明发送目标。后续轮使用该实际生成 token 构造前缀。
+`prefix_tokens` 决定要复用的输入前缀；工具数量和错误数量仍只作为来源审计信息，源工具不会执行。
+`newly_append_tokens` 保留为源字段；如果上一轮 token 不足，本轮实际新增长度可能大于它。
 
-首轮从一条空的合成 `user` 消息开始。续接轮复制已经发送的消息，追加后端刚返回的实时
-`assistant` 正文和独立的 `reasoning_content`，再追加新的合成 `user` 消息。后端 tokenizer 对完整
-Chat Template 计数，校准器只向合成 user 文本加入确定性 filler，直到达到计划输入 token 数。
+正式回放前先发送一条共享预热请求：其输入 token 数等于转换文件中所有 Session 首轮请求的最大
+`prefix_tokens` 加 1，与本次抽样选中的 Session 无关。
+所有 Session 首轮从这条预热输入截取指定长度的前缀，再补齐至 `input_tokens_total`。
+后续轮从同 Session 上一轮的完整输入 token 和后端实际生成的输出 token 拼接后截取：
 
-`prompt_calibration_tolerance_tokens` 对 TraceLab 必须为 `0`：
+```text
+实际复用长度 = min(prefix_tokens, 上一轮输入 token 数 + 上一轮输出 token 数)
+实际新增长度 = input_tokens_total - 实际复用长度
+```
 
-- `strict` 模式下，只要已有上下文超过下一轮目标就失败。
-- `adaptive` 模式仅在超量不超过
-  `max(context_micro_trim_max_tokens, ceil(target * context_micro_trim_max_ratio))` 时，允许裁剪历史合成
-  user 文本；不会裁剪实时 Assistant 内容，也不会重置上下文。
-- filler 修复仍无法精确达到目标时，该节点在发送前失败。
+新增 token 从指定位置分叉。预热请求单独写入 `evidence/tracelab_warmup.json`，不进入正式请求、
+token、延迟和吞吐统计；服务端缓存会继续保留。TraceLab 用 `/v1/completions` 发送预先构造的
+token ID 数组，以避免 Chat Template 再编码改变前缀或长度。因此 `chat_template_kwargs` 不作用于
+TraceLab 的正式请求。后端必须支持 Completions 的 token ID 输入以及 `return_token_ids` 流式输出。
 
-向 `/v1/chat/completions` 发送请求时，Replay 同时设置 `max_tokens` 和 `min_tokens` 为计划输出长度，
-设置 `ignore_eos: true`，启用流式 usage，并传递确定性的采样 seed。一次 TraceLab 请求只有在 HTTP 成功、
-收到 SSE `[DONE]`，且后端 usage 中的输入和输出 token 数都与计划完全相等时才算成功。
+Replay 同时设置 `max_tokens` 和 `min_tokens` 为实际发送目标长度（源值为 0 时设为 1），
+设置 `ignore_eos: true`，
+启用流式 usage，并传递确定性的采样 seed。请求只有在 HTTP 成功、收到 SSE `[DONE]`，
+且后端 usage 与实际输出 token ID 都匹配发送目标长度时才算成功。`prompt_calibration_tolerance_tokens`
+对 TraceLab 必须为 `0`，`context_adjustment_mode` 不参与上述 token 级前缀构造。
 
 `send_after` 只要求前驱结束，因此时间依赖的后继即使在前驱失败后仍可继续；`context_after` 必须获得
 成功的实时回答。上下文前驱失败、请求失败或 Prompt 构造失败时，依赖该上下文的后续节点标记为
 `skipped_dependency_failed`，同一 Session 中不相关的节点仍可运行。单 Session 受
-`task_timeout_seconds` 限制，整个运行可选地受 `run_timeout_seconds` 限制，每个 HTTP 请求受
+`task_timeout_seconds` 限制；设为 `null` 可关闭单 Session 总超时，以便完整回放长间隔 Session。
+整个运行可选地受 `run_timeout_seconds` 限制，每个 HTTP 请求受
 `request_timeout_seconds` 限制。
 
 缓存 usage 缺失不会单独终止运行，但对应缓存指标记为不可用。首轮和续接轮的缓存统计按
 `context_after` 分组。保留实时回答后，实际前缀可能不同于源 trace，因此不同运行的比较不能把源
-`prefix_tokens` 当作精确命中目标。
+`prefix_tokens` 当作实际缓存命中目标。运行结果另记录原始前缀、实际构造的复用前缀和不足量；
+若任务或请求未全部成功，运行状态标记为失败，不能把部分请求统计当作完整 Trace 回放。
 
 ## 输入与配置
 
@@ -170,14 +182,14 @@ Chat Template 计数，校准器只向合成 user 文本加入确定性 filler�
 | --- | --- |
 | `replay.trace_type: agentinfer` | 输入为 AgentInfer `requests.jsonl`；`trace_path: null` 时使用包内 8-Session 数据集。自动选择 `agentinfer_synthetic`。 |
 | `replay.trace_type: inferact_codex_swebenchpro` | 输入为 Inferact 原始 JSON；`trace_path: null` 时下载固定版本并缓存前 `task_num` 条完整记录。自动选择 `inferact_synthetic`，要求 `interval_mode: lognormal`、零校准容差和 `/v1/chat/completions`。 |
-| `replay.trace_type: tracelab` | 归一化、未压缩的 JSONL；`trace_path: null` 时自动下载并提取前 `task_num` 个完整 Session。自动选择 `tracelab_synthetic`，要求零校准容差和 `/v1/chat/completions`。 |
+| `replay.trace_type: tracelab` | 归一化、未压缩的 JSONL；`trace_path: null` 时自动下载并提取前 `task_num` 个完整 Session。自动选择 `tracelab_synthetic`，要求零校准容差。配置中的 Backend endpoint 为 `/v1/chat/completions`，实际 token 请求使用同一服务的 `/v1/completions`。 |
 | `replay.trace_type: agentX` | 自动选择 `agentX_synthetic`；为预留入口，执行时抛出 `NotImplementedError`。 |
 | `replay.interval_mode` | `trace` 保留历史间隔，`lognormal` 按配置的分布生成间隔。 |
 | `replay.sample_seed` | 可重复的会话抽样、间隔抽样和后端采样 seed。 |
-| `replay.context_adjustment_mode` | `strict` 拒绝超过 token 目标的上下文；`adaptive` 允许有限裁剪。TraceLab 始终保持追加上下文，不执行 reset。 |
+| `replay.context_adjustment_mode` | 非 TraceLab 合成 Prompt 的上下文校准策略；TraceLab 使用上述 token 前缀规则。 |
 | `experiment.task_num` | 必填正整数；Runtime Session 数，也是默认数据源最多截取的完整源 Session/记录数。 |
 | `experiment.max_concurrency` | 同时运行的 Runtime Session 上限，默认 `1`。 |
-| `experiment.task_timeout_seconds` | 单个 Runtime Session 的超时。 |
+| `experiment.task_timeout_seconds` | 单个 Runtime Session 的超时；`null` 表示不设置，TraceLab 示例配置默认如此。 |
 | `experiment.run_timeout_seconds` | 整次 Replay 的可选超时；`null` 表示不设置。 |
 | `replay.request_timeout_seconds` | 单请求超时。 |
 

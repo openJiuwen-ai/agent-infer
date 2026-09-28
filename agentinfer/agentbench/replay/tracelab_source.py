@@ -43,17 +43,9 @@ def _write_session_subset(source: Path, destination: Path, task_num: int) -> Non
     """Write every round belonging to the first ``task_num`` encountered sessions."""
 
     selected: set[tuple[str, str]] = set()
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=destination.parent,
-            prefix=f".{destination.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as output:
-            temporary_path = Path(output.name)
+    with tempfile.TemporaryDirectory(dir=destination.parent, prefix=f".{destination.name}.") as staging_dir:
+        staged = Path(staging_dir) / destination.name
+        with staged.open("w", encoding="utf-8") as output:
             with gzip.open(source, mode="rt", encoding="utf-8") as rows:
                 for source_line, line in enumerate(rows, start=1):
                     try:
@@ -67,11 +59,7 @@ def _write_session_subset(source: Path, destination: Path, task_num: int) -> Non
                         output.write(line if line.endswith("\n") else f"{line}\n")
         if not selected:
             raise ValueError("TraceLab dataset contains no sessions")
-        os.replace(temporary_path, destination)
-        temporary_path = None
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+        os.replace(staged, destination)
 
 
 def materialize_tracelab_source(task_num: int, *, cache_dir: Path | None = None) -> Path:

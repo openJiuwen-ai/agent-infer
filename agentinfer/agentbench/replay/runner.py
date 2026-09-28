@@ -135,12 +135,19 @@ def _execution_metadata(
         if planned_by_runtime_id.get(fact.request_id) is not None
         and planned_by_runtime_id[fact.request_id].context_after is not None
     ]
+    zero_output_nodes = [node for node in planned_nodes if getattr(node, "planned_output_tokens", None) == 0]
+    zero_output_runtime_ids = {node.runtime_request_id for node in zero_output_nodes}
     return {
         "workload_fingerprint": plan.workload_fingerprint,
         "planned_tasks": len(plan.tasks),
         "completed_tasks": sum(task.status == "completed" for task in tasks),
         "failed_tasks": sum(task.status != "completed" for task in tasks),
         "planned_requests": sum(node.node_type == "request" for task in plan.tasks for node in task.requests),
+        "source_zero_output_requests": len(zero_output_nodes),
+        "zero_output_requests_observed_one_token": sum(
+            fact.request_id in zero_output_runtime_ids and fact.status == "success" and fact.output_tokens == 1
+            for fact in facts
+        ),
         "planned_timing_dependency_nodes": sum(
             node.node_type == "timing_dependency" for task in plan.tasks for node in task.requests
         ),
@@ -186,6 +193,10 @@ def _execution_metadata(
         "backend_input_requests_over_tolerance": sum(value > tolerance_tokens for value in backend_residuals),
         "backend_input_max_absolute_residual_tokens": max(backend_residuals, default=0),
         "trimmed_filler_tokens": sum(int(item.get("trimmed_filler_tokens", 0)) for item in adjustments),
+        "source_prefix_tokens": sum(int(item.get("source_prefix_tokens") or 0) for item in calibrations),
+        "effective_prefix_tokens": sum(int(item.get("effective_prefix_tokens") or 0) for item in calibrations),
+        "prefix_shortfall_tokens": sum(int(item.get("prefix_shortfall_tokens") or 0) for item in calibrations),
+        "requests_with_prefix_shortfall": sum(bool(item.get("prefix_shortfall_tokens")) for item in calibrations),
         "cache_usage_coverage_requests": len(cache_facts),
         "observed_cached_tokens": sum(fact.cached_tokens or 0 for fact in cache_facts),
         "first_request_cache_usage_coverage": len(first_cache_facts),
@@ -267,6 +278,7 @@ async def _run_replay(
     transport: ReplayTransport | None = None
     writer_started = False
     trace_ir: UnifiedTraceIR | None = None
+    measured_started_at = manifest.created_at
     try:
         write_text(requests_path, "")
         captures.append(_capture("request_trace", requests_path))
@@ -298,6 +310,21 @@ async def _run_replay(
         atomic_write_json(plan_path, plan.to_dict())
         captures.append(_capture("replay_plan", plan_path))
 
+        prompts: PromptBuilder | None = None
+        if config.replay.prompt_shape == "tracelab_synthetic":
+            tokenizer = TokenizerClient(config, local_tokenizer)
+            prompts = PromptBuilder(config, tokenizer, trace_ir)
+            transport = ReplayTransport(config, output_dir.name, None)
+            warmup_ids = await prompts.prepare_tracelab_warmup(plan)
+            await transport.validate_tracelab_context(plan, len(warmup_ids))
+            warmup = await transport.warmup(warmup_ids)
+            warmup_path = evidence_dir / "tracelab_warmup.json"
+            atomic_write_json(warmup_path, warmup)
+            captures.append(_capture("tracelab_warmup", warmup_path))
+            await transport.close()
+            transport = None
+            measured_started_at = utc_now()
+
         vllm_start_capture = await capture_vllm_metrics(config.backend.effective_metrics_url)
         vllm_start = str(vllm_start_capture.metadata.get("text")) if vllm_start_capture.available else None
         vllm_start_path = evidence_dir / "vllm_metrics_start.prom"
@@ -310,9 +337,12 @@ async def _run_replay(
         writer = RequestTraceWriter(requests_path)
         await writer.start()
         writer_started = True
-        tokenizer = TokenizerClient(config, local_tokenizer)
+        if tokenizer is None:
+            tokenizer = TokenizerClient(config, local_tokenizer)
+        if prompts is None:
+            prompts = PromptBuilder(config, tokenizer, trace_ir)
         transport = ReplayTransport(config, output_dir.name, writer)
-        execution = ReplayExecutor(config, plan, PromptBuilder(config, tokenizer, trace_ir), transport).execute()
+        execution = ReplayExecutor(config, plan, prompts, transport).execute()
         if config.experiment.run_timeout_seconds:
             task_results = await asyncio.wait_for(execution, config.experiment.run_timeout_seconds)
         else:
@@ -392,7 +422,13 @@ async def _run_replay(
         captures.append(_capture("vllm_end", vllm_end_path, vllm_end_capture.available, vllm_end_capture.reason))
 
         finished_at = utc_now()
-        run_wall_time = max((finished_at - manifest.created_at).total_seconds(), 1e-9)
+        run_wall_time = max((finished_at - measured_started_at).total_seconds(), 1e-9)
+        complete_replay = config.replay.prompt_shape != "tracelab_synthetic" or (
+            execution_metadata["failed_tasks"] == 0
+            and execution_metadata["successful_requests"] == execution_metadata["planned_requests"]
+            and len(facts) == execution_metadata["planned_requests"]
+        )
+        run_status = "completed" if complete_replay else "failed"
         summary = build_run_summary(
             output_dir.name,
             aggregate_task_results(_task_result(result, config.backend.endpoint) for result in task_results),
@@ -400,7 +436,11 @@ async def _run_replay(
             aggregate_vllm_metrics(vllm_start, vllm_end),
             {"available": False, "reason": "not applicable to Replay", "metadata": {}},
             evaluate_captures(captures),
-            {"status": "completed", "error": None, "proxy_close": None},
+            {
+                "status": run_status,
+                "error": None if complete_replay else "Replay did not complete all planned requests",
+                "proxy_close": None,
+            },
             run_wall_time,
             execution={"available": True, "reason": None, "metadata": execution_metadata},
         ).to_dict()
@@ -410,7 +450,7 @@ async def _run_replay(
         finalized = finalize_run_manifest(
             manifest,
             tuple(_capture_dict(capture) for capture in captures),
-            status="completed",
+            status=run_status,
             finished_at=finished_at,
         )
         atomic_write_json(manifest_path, finalized.to_dict())

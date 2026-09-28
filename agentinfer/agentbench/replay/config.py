@@ -34,7 +34,7 @@ class ReplayExperimentConfig(ReplayStrictModel):
     task_num: int | None = Field(None, ge=1, json_schema_extra={"cli": True})
     result_dir: Path = Field(Path("replay-results"), json_schema_extra={"cli": True})
     max_concurrency: int = Field(1, ge=1, json_schema_extra={"cli": True})
-    task_timeout_seconds: int = Field(3600, ge=1)
+    task_timeout_seconds: int | None = Field(3600, ge=1)
     run_timeout_seconds: int | None = Field(None, ge=1)
 
 

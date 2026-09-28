@@ -3,7 +3,7 @@
 experiment:
   task_num: null  # required: set a positive integer in YAML or pass --task-num
   max_concurrency: 1
-  task_timeout_seconds: 3600
+  task_timeout_seconds: null  # preserve complete long-gap sessions
   run_timeout_seconds: null
 
 backend:
