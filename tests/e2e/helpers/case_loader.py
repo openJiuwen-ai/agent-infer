@@ -79,8 +79,8 @@ class BenchmarkCase:
 
 
 @dataclass(frozen=True)
-class E2EPerfConfig:
-    """Runtime state for one standalone baseline or agentinfer benchmark case."""
+class E2EConfig:
+    """Runtime state for one E2E case (perf benchmark or shared vLLM serve lifecycle)."""
 
     case: BenchmarkCase
     scenario: PerfScenario
@@ -118,7 +118,7 @@ class E2EPerfConfig:
         return str(self.case.benchmark_params.get("model", "glm-5"))
 
     @classmethod
-    def from_case(cls, case: BenchmarkCase, *, repo: Path | None = None) -> E2EPerfConfig:
+    def from_case(cls, case: BenchmarkCase, *, repo: Path | None = None) -> E2EConfig:
         repo = repo or _repo_root()
         benchmark = case.benchmark_params
         run_tag = _make_run_tag()
@@ -208,7 +208,7 @@ class E2EPerfConfig:
     def uses_default_base_url(self) -> bool:
         return self.base_url.rstrip("/") == DEFAULT_BASE_URL
 
-    def with_benchmark_load(self, *, task_num: int | None = None, max_concurrency: int | None = None) -> E2EPerfConfig:
+    def with_benchmark_load(self, *, task_num: int | None = None, max_concurrency: int | None = None) -> E2EConfig:
         updates: dict[str, int] = {}
         if task_num is not None:
             updates["task_num"] = task_num
@@ -221,7 +221,7 @@ class E2EPerfConfig:
         *,
         benchmark_run_as_user: str | None = None,
         benchmark_run_as_user_set: bool = False,
-    ) -> E2EPerfConfig:
+    ) -> E2EConfig:
         if not benchmark_run_as_user_set:
             return self
         return replace(self, benchmark_run_as_user=benchmark_run_as_user)
@@ -240,7 +240,7 @@ class E2EPerfConfig:
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[4]
+    return Path(__file__).resolve().parents[3]
 
 
 def _resolve_repo_path(path: Path, repo: Path) -> Path:
@@ -532,7 +532,7 @@ def _chown_tree_for_user(path: Path, run_as_user: str) -> None:
         _apply(path)
 
 
-def prepare_runs_as_root(config: E2EPerfConfig, *, effective_uid: int | None = None) -> bool:
+def prepare_runs_as_root(config: E2EConfig, *, effective_uid: int | None = None) -> bool:
     """Return whether dataset prepare/repo-cache should run as the invoking user (root)."""
 
     if os.name == "nt":
@@ -548,7 +548,7 @@ def prepare_runs_as_root(config: E2EPerfConfig, *, effective_uid: int | None = N
 
 
 def grant_benchmark_user_dataset_access(
-    config: E2EPerfConfig,
+    config: E2EConfig,
     *,
     repo_cache_dir: Path | None = None,
 ) -> None:
@@ -655,7 +655,7 @@ def maybe_wrap_argv(
     )
 
 
-def _scenario_serve_args(config: E2EPerfConfig) -> dict[str, Any]:
+def _scenario_serve_args(config: E2EConfig) -> dict[str, Any]:
     spec = config.deploy()
     serve_args = dict(spec.serve_args)
     if config.scenario is PerfScenario.AGENTINFER:
@@ -677,13 +677,13 @@ def _scenario_serve_args(config: E2EPerfConfig) -> dict[str, Any]:
     return serve_args
 
 
-def build_vllm_serve_argv(config: E2EPerfConfig) -> list[str]:
+def build_vllm_serve_argv(config: E2EConfig) -> list[str]:
     spec = config.deploy()
     serve_args = _scenario_serve_args(config)
     return serve_args_to_argv(spec.model, serve_args, spec.middleware)
 
 
-def build_vllm_serve_env(config: E2EPerfConfig) -> dict[str, str]:
+def build_vllm_serve_env(config: E2EConfig) -> dict[str, str]:
     env = os.environ.copy()
     env.update(config.deploy().serve_env)
     if config.scenario is PerfScenario.AGENTINFER:
@@ -691,7 +691,7 @@ def build_vllm_serve_env(config: E2EPerfConfig) -> dict[str, str]:
     return env
 
 
-def build_benchmark_argv(config: E2EPerfConfig, result_dir: Path) -> list[str]:
+def build_benchmark_argv(config: E2EConfig, result_dir: Path) -> list[str]:
     params = dict(config.case.benchmark_params)
     params["task-num"] = config.task_num
     params["max-concurrency"] = config.max_concurrency
@@ -708,7 +708,7 @@ def build_benchmark_argv(config: E2EPerfConfig, result_dir: Path) -> list[str]:
     )
 
 
-def build_prepare_argv(config: E2EPerfConfig) -> list[str]:
+def build_prepare_argv(config: E2EConfig) -> list[str]:
     """Build the dataset prepare command.
 
     Prepare is not sudo-wrapped; it runs as the invoking pytest user (often root

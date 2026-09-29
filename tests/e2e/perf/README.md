@@ -89,6 +89,12 @@ vllm bench serve --agentinfer compare \
 | Module | Role |
 | ------ | ---- |
 | `run_benchmark.py` | Pytest entry: `test_benchmark_completes` |
-| `helpers/case_loader.py` | JSON parsing, `E2EPerfConfig`, argv/env builders, `sudo -u` wrapping |
+| [`../helpers/`](../helpers/) | Shared with `function/`: case JSON, vLLM lifecycle, run validation |
+
+Shared helper modules:
+
+| Module | Role |
+| ------ | ---- |
+| `helpers/case_loader.py` | JSON parsing, `E2EConfig`, argv/env builders, `sudo -u` wrapping |
 | `helpers/server.py` | vLLM lifecycle, ready wait, port cleanup, log streaming |
 | `helpers/benchmark.py` | Dataset prepare, BenchKit run orchestration, run validation |
