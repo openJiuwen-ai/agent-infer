@@ -240,7 +240,7 @@ class E2EPerfConfig:
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+    return Path(__file__).resolve().parents[4]
 
 
 def _resolve_repo_path(path: Path, repo: Path) -> Path:
