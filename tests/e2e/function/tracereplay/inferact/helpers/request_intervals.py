@@ -5,13 +5,14 @@
 from __future__ import annotations
 
 import json
-import math
 import statistics
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+
+from numpy import quantile
 
 
 @dataclass(frozen=True)
@@ -74,18 +75,6 @@ def load_request_intervals(path: Path) -> tuple[float, ...]:
     return tuple(intervals)
 
 
-def percentile(sorted_values: list[float], fraction: float) -> float:
-    if len(sorted_values) == 1:
-        return sorted_values[0]
-    position = (len(sorted_values) - 1) * fraction
-    lower = math.floor(position)
-    upper = math.ceil(position)
-    if lower == upper:
-        return sorted_values[lower]
-    weight = position - lower
-    return sorted_values[lower] * (1.0 - weight) + sorted_values[upper] * weight
-
-
 def distribution(values: Sequence[float]) -> Distribution:
     if not values:
         return Distribution(0, None, None, None, None, None, None, None)
@@ -94,10 +83,10 @@ def distribution(values: Sequence[float]) -> Distribution:
         count=len(ordered),
         minimum=ordered[0],
         mean=statistics.fmean(ordered),
-        p50=percentile(ordered, 0.50),
-        p90=percentile(ordered, 0.90),
-        p95=percentile(ordered, 0.95),
-        p99=percentile(ordered, 0.99),
+        p50=float(quantile(ordered, 0.50)),
+        p90=float(quantile(ordered, 0.90)),
+        p95=float(quantile(ordered, 0.95)),
+        p99=float(quantile(ordered, 0.99)),
         maximum=ordered[-1],
     )
 
