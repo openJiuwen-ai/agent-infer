@@ -128,7 +128,10 @@ class ReplayE2EConfig:
                     hardware_slug = mark_slug
         host_slug = "local" if self.host in {"127.0.0.1", "localhost"} else self.host.replace(".", "-")
         name = f"run-{hardware_slug}-{host_slug}-replay-{self.task_num}-{self.max_concurrency}-{self.run_tag}"
-        ensure_directory(self.result_root)
+        ensure_directory(
+            self.result_root,
+            run_as_user=self.to_e2e_config().effective_benchmark_run_as_user(),
+        )
         return self.result_root / name
 
     def validate_prerequisites(self) -> list[str]:
