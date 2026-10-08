@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
-"""Execute one Inferact replay E2E case."""
+"""Cold vLLM + replay bench cycles for Inferact functional E2E."""
 
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ from .replay_config import ReplayE2EConfig, build_replay_argv, build_replay_env
 
 
 def run_replay_case(config: ReplayE2EConfig) -> Path:
+    """One cold vLLM start, one replay bench run, validated result directory."""
+
     blockers = config.validate_prerequisites()
     if blockers:
         raise RuntimeError("; ".join(blockers))
@@ -42,11 +44,18 @@ def run_replay_case(config: ReplayE2EConfig) -> Path:
     return output_dir
 
 
-def run_replay_two_cold_starts(config: ReplayE2EConfig) -> tuple[Path, Path]:
-    """Run the same case twice; stop vLLM between runs so each replay starts cold."""
+def run_replay_cold_starts(config: ReplayE2EConfig, *, cold_runs: int) -> tuple[Path, ...]:
+    """Run the same case ``cold_runs`` times; stop vLLM between runs for a cold start each time."""
 
-    baseline_dir = run_replay_case(config)
-    print(f"[replay] cold run 1/2 completed: dir={baseline_dir}", flush=True)
-    candidate_dir = run_replay_case(config.with_fresh_run())
-    print(f"[replay] cold run 2/2 completed: dir={candidate_dir}", flush=True)
-    return baseline_dir, candidate_dir
+    if cold_runs < 1:
+        raise ValueError("cold_runs must be >= 1")
+
+    result_dirs: list[Path] = []
+    current = config
+    for index in range(cold_runs):
+        run_dir = run_replay_case(current)
+        print(f"[replay] cold run {index + 1}/{cold_runs} completed: dir={run_dir}", flush=True)
+        result_dirs.append(run_dir)
+        if index + 1 < cold_runs:
+            current = current.with_fresh_run()
+    return tuple(result_dirs)

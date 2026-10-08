@@ -31,6 +31,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="Override benchmark_params max-concurrency",
     )
     group.addoption(
+        "--cold-runs",
+        action="store",
+        type=int,
+        default=2,
+        help="Number of cold vLLM + replay cycles (default: 2; compare uses runs 1 and 2)",
+    )
+    group.addoption(
         "--stability-tolerance",
         action="store",
         type=float,
