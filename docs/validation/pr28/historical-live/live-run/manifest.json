@@ -1,0 +1,122 @@
+{
+  "schema_version": "1",
+  "run_id": "live-run",
+  "status": "completed",
+  "created_at": "2026-09-28T11:30:04.755555+00:00",
+  "finished_at": "2026-09-28T11:30:05.671791+00:00",
+  "config": {
+    "experiment": {
+      "task_num": 8,
+      "result_dir": "/home/yangjianjuan/trace-replay-tracelab-0928/validation-20260928-8x4-zero-output/test_tracelab_live_eight_tasks0/live-run",
+      "max_concurrency": 4,
+      "task_timeout_seconds": null,
+      "run_timeout_seconds": null
+    },
+    "backend": {
+      "type": "vllm",
+      "base_url": "http://127.0.0.1:8020",
+      "metrics_url": null,
+      "tokenizer_base_url": null,
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+      "endpoint": "/v1/chat/completions",
+      "chat_template_kwargs": {},
+      "api_key_env": null
+    },
+    "replay": {
+      "trace_type": "tracelab",
+      "trace_path": "/home/yangjianjuan/trace-replay-tracelab-0928/validation-20260928-8x4-zero-output/test_tracelab_live_eight_tasks0/live-eight-sessions.jsonl",
+      "trace_same_agent_gap_scale": 0.0,
+      "trace_same_agent_gap_offset_seconds": 0.0,
+      "interval_mode": "trace",
+      "interval_lognormal": null,
+      "sample_seed": 0,
+      "lead_title_sys_shared_prefix": 0,
+      "lead_name_sys_shared_prefix": 0,
+      "lead_1st_sys_shared_prefix": 0,
+      "lead_1st_sys_session_prefix": 0,
+      "lead_1st_tool_shared_prefix": 0,
+      "lead_1st_msg_shared_prefix": 0,
+      "lead_1st_trailing_system_prefix": 0,
+      "subagent_tool_1st_shared_prefix": 0,
+      "subagent_1st_sys_shared_prefix": 0,
+      "subagent_1st_sys_session_prefix": 0,
+      "subagent_1st_msg_shared_prefix": 0,
+      "lead_continuation_extra_system_ratio": 0.0,
+      "subagent_continuation_extra_system_ratio": 0.0,
+      "lead_continuation_system_tokens": 0,
+      "subagent_continuation_system_tokens": 0,
+      "context_adjustment_mode": "strict",
+      "context_micro_trim_max_tokens": 64,
+      "context_micro_trim_max_ratio": 0.005,
+      "prompt_calibration_tolerance_tokens": 0,
+      "request_timeout_seconds": 3600
+    },
+    "implementation_stage": "executable"
+  },
+  "evidence": [
+    {
+      "source": "request_trace",
+      "path": "/home/yangjianjuan/trace-replay-tracelab-0928/validation-20260928-8x4-zero-output/test_tracelab_live_eight_tasks0/live-run/requests.jsonl",
+      "available": true,
+      "reason": null,
+      "metadata": {},
+      "applicable": true
+    },
+    {
+      "source": "replay_conversion_manifest",
+      "path": "/home/yangjianjuan/trace-replay-tracelab-0928/validation-20260928-8x4-zero-output/test_tracelab_live_eight_tasks0/live-run/convert_result/manifest.json",
+      "available": true,
+      "reason": null,
+      "metadata": {},
+      "applicable": true
+    },
+    {
+      "source": "replay_source_analysis",
+      "path": "/home/yangjianjuan/trace-replay-tracelab-0928/validation-20260928-8x4-zero-output/test_tracelab_live_eight_tasks0/live-run/replay-source-analysis.json",
+      "available": true,
+      "reason": null,
+      "metadata": {},
+      "applicable": true
+    },
+    {
+      "source": "replay_plan",
+      "path": "/home/yangjianjuan/trace-replay-tracelab-0928/validation-20260928-8x4-zero-output/test_tracelab_live_eight_tasks0/live-run/replay-plan.json",
+      "available": true,
+      "reason": null,
+      "metadata": {},
+      "applicable": true
+    },
+    {
+      "source": "tracelab_warmup",
+      "path": "/home/yangjianjuan/trace-replay-tracelab-0928/validation-20260928-8x4-zero-output/test_tracelab_live_eight_tasks0/live-run/evidence/tracelab_warmup.json",
+      "available": true,
+      "reason": null,
+      "metadata": {},
+      "applicable": true
+    },
+    {
+      "source": "vllm_start",
+      "path": "/home/yangjianjuan/trace-replay-tracelab-0928/validation-20260928-8x4-zero-output/test_tracelab_live_eight_tasks0/live-run/evidence/vllm_metrics_start.prom",
+      "available": true,
+      "reason": null,
+      "metadata": {},
+      "applicable": true
+    },
+    {
+      "source": "replay_execution",
+      "path": "/home/yangjianjuan/trace-replay-tracelab-0928/validation-20260928-8x4-zero-output/test_tracelab_live_eight_tasks0/live-run/replay-execution.json",
+      "available": true,
+      "reason": null,
+      "metadata": {},
+      "applicable": true
+    },
+    {
+      "source": "vllm_end",
+      "path": "/home/yangjianjuan/trace-replay-tracelab-0928/validation-20260928-8x4-zero-output/test_tracelab_live_eight_tasks0/live-run/evidence/vllm_metrics_end.prom",
+      "available": true,
+      "reason": null,
+      "metadata": {},
+      "applicable": true
+    }
+  ]
+}

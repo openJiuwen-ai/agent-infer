@@ -55,9 +55,15 @@ vllm bench serve --agentinfer replay \
 
 - `agentinfer` 使用随 Python 包发布的 `agentinfer/agentbench/data/agentinfer_trace_requests.jsonl`；该文件包含
   8 个完整 Session，运行时由 Planner 按 `task_num` 选择或循环复用 Session。
-- `inferact_codex_swebenchpro` 下载固定版本的 `Inferact/codex_swebenchpro_traces`，取前
+- `inferact_codex_swebenchpro` 流式读取固定版本的 `Inferact/codex_swebenchpro_traces`，取前
   `min(task_num, 数据集记录数)` 个完整顶层 JSON 对象生成本地 JSON 数组。
 - `tracelab` 下载固定版本的 TraceLab，并取前 `min(task_num, 数据集 Session 数)` 个完整 Session 及其全部 round。
+
+Inferact 读取满 `task_num` 条完整记录后立即关闭远端响应；网络分块可能少量预读，但不会主动下载整个
+源文件。子集以 JSON 数组原子写入
+`~/.cache/agentinfer/datasets/inferact_codex_swebenchpro/<revision>/first-<task_num>-records.json`
+（支持 `XDG_CACHE_HOME`）。已有子集直接复用；Hugging Face 已缓存的完整源文件也可离线复用。
+设置 `HF_HUB_OFFLINE=1` 且没有可用缓存时明确报错。未读取的源文件后缀不参与 JSON 校验。
 
 显式 `trace_path` 始终优先，路径无效时不会退回默认数据集。`agentX` 仍为预留入口，执行时抛出
 `NotImplementedError`。

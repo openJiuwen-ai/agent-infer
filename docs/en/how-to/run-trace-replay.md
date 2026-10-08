@@ -34,6 +34,13 @@ An explicit `--trace-path` always wins
 and disables download. With `--config`, all CLI overrides are optional and explicitly supplied overrides take precedence.
 YAML paths resolve relative to that file; CLI paths resolve relative to the current directory.
 
+For Inferact with `trace_path: null`, Replay streams the pinned JSON array and closes the response after
+`task_num` complete records. Network chunks may read slightly ahead; the unread suffix is not validated.
+The subset is written atomically to
+`~/.cache/agentinfer/datasets/inferact_codex_swebenchpro/<revision>/first-<task_num>-records.json`
+(respecting `XDG_CACHE_HOME`). Existing subsets and complete Hugging Face cache files are reused without
+downloading. `HF_HUB_OFFLINE=1` fails explicitly when neither cache is available.
+
 | `--trace-type` | Packaged template |
 | --- | --- |
 | `agentinfer` | `replay_agentinfer.yaml` |
