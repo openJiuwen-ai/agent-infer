@@ -11,97 +11,99 @@ weights, and (for replay) trace files.
 tests/e2e/
 ├── helpers/          # shared: case JSON, vLLM lifecycle, validate_completed_run
 ├── perf/             # BenchKit plan-subagent; baseline vs AgentInfer
-└── function/         # this tree — replay repeatability, future serve smoke, etc.
+└── function/         # replay repeatability, future serve smoke, etc.
     └── tracereplay/
-        └── inferact/ # only implemented suite today
+        └── inferact/ # Inferact Codex trace replay (only suite today)
 ```
 
 | Concern | `perf/` | `function/` (Inferact replay) |
 | ------- | ------- | ----------------------------- |
-| Bench command | `vllm bench serve --agentinfer run` (BenchKit) | `vllm bench serve --agentinfer replay` |
+| Bench command | `vllm bench serve --agentinfer run` | `vllm bench serve --agentinfer replay` |
 | Default YAML | `swebench_vllm.yaml` (in case) | `replay_inferact.yaml` |
-| Pass criteria | Completes; perf compare elsewhere | Completes + optional **cold-start repeatability** |
-| Case JSON | `scenario`: baseline / agentinfer | `scenario`: **baseline** + `workload`: **inferact-replay** |
+| Pass criteria | Completes; perf compare elsewhere | Cold replay × N + compare run 1 vs 2 |
+| Case JSON | `scenario`: baseline / agentinfer | `scenario`: baseline + `workload`: inferact-replay` |
 
 Both reuse [`../helpers/`](../helpers/) for loading case JSON and managing `vllm serve`.
 
-## Directory layout
+## Inferact layout (`tracereplay/inferact/`)
 
 ```text
-function/
-├── README.md
-├── __init__.py
-└── tracereplay/
-    ├── __init__.py
-    └── inferact/
-        ├── README.md           # commands, stability table, case matrix
-        ├── conftest.py         # pytest CLI options
-        ├── run_replay.py       # test_inferact_replay
-        ├── cases/*.json        # serve + replay parameters
-        └── helpers/            # Inferact-only harness (not shared with perf)
-            ├── replay_config.py
-            ├── replay_run.py
-            ├── stability.py
-            └── request_intervals.py
+inferact/
+├── test_inferact_replay.py   # pytest entry (test_inferact_replay)
+├── conftest.py               # CLI options
+├── cases/*.json
+└── helpers/
+    ├── replay_config.py      # ReplayE2EConfig, replay CLI
+    ├── replay_executor.py    # cold vLLM + replay cycles (N times)
+    ├── replay_compare.py     # compare two run dirs + report
+    └── request_intervals.py
 ```
 
-Add another replay trace type as **`tracereplay/<name>/`** (sibling of `inferact/`), with its own
-cases, bench YAML, and helpers—or shared repeatability helpers if the criteria match.
+| File | Role |
+| ---- | ---- |
+| `test_inferact_replay.py` | Pytest: N cold replays, then repeatability assert (run 1 vs run 2) |
+| `replay_executor.py` | `run_replay_cold_starts(config, cold_runs=N)` |
+| `replay_compare.py` | `compare_replay_stability`, `format_stability_report` |
 
-## Inferact replay flow (summary)
+Add another trace family under `tracereplay/<name>/` with its own cases and helpers.
 
-1. **Load** case JSON → `ReplayE2EConfig` (`replay_config.py` + `../helpers/case_loader.py`).
-2. **Check** model path, `vllm` on PATH, `replay_inferact.yaml`, `benchmark_params.trace-path`.
-3. **Serve** vLLM via `managed_vllm` (`../helpers/server.py`) using `server_params` from the case.
-4. **Replay** subprocess: `vllm bench serve --agentinfer replay` with CLI overrides (trace, model, base URL, task-num, max-concurrency).
-5. **Validate** result dir (`../helpers/benchmark.py` → `validate_completed_run`).
-6. **Repeatability** (optional): run step 3–5 twice with a full vLLM stop between runs; compare
-   summaries + `requests.jsonl` intervals (`stability.py`).
+## Trace data
 
-```mermaid
-flowchart LR
-  subgraph shared ["tests/e2e/helpers"]
-    CL[case_loader]
-    SV[server]
-    BM[benchmark]
-  end
-  subgraph inferact ["function/tracereplay/inferact"]
-    RC[replay_config]
-    RR[replay_run]
-    ST[stability]
-  end
-  CaseJSON --> RC
-  CL --> RC
-  RC --> RR
-  SV --> RR
-  BM --> RR
-  RR --> ST
+Download [`codex_swebenchpro.json`](https://huggingface.co/datasets/Inferact/codex_swebenchpro_traces/tree/main)
+from Hugging Face. Set `benchmark_params.trace-path` in each case JSON (absolute path or relative to
+repo root). Cases default to `"/your/path/codex_swebenchpro.json"`.
+
+Replay bench defaults:
+[`agentinfer/agentbench/configs/replay_inferact.yaml`](../../agentinfer/agentbench/configs/replay_inferact.yaml).
+E2E overrides model, base URL, trace path, task count, and concurrency via CLI.
+
+## Run Inferact replay E2E
+
+```bash
+pytest -s -v tests/e2e/function/tracereplay/inferact/test_inferact_replay.py::test_inferact_replay \
+  --test-config-file tests/e2e/function/tracereplay/inferact/cases/glm52_8x4_inferact_replay.json \
+  --cold-runs 2 \
+  --stability-tolerance 0.05
 ```
 
-## Pytest entrypoint (Inferact)
+| CLI option | Meaning |
+| ---------- | ------- |
+| `--test-config-file` | **Required.** Case JSON path |
+| `--cold-runs` | Cold vLLM + replay cycles (default **2**); compare uses runs **1** and **2** |
+| `--stability-tolerance` | Max relative metric gap (default **0.05**) |
+| `--task-num` / `--max-concurrency` | Override case JSON load |
 
-Single test **`test_inferact_replay`**: two cold vLLM + replay cycles, then stability comparison.
+Case matrix (edit `server_params.model` on your host):
 
-See [`tracereplay/inferact/README.md`](tracereplay/inferact/README.md) for the command and metric tiers.
+| Case JSON | task-num | max-concurrency |
+| --------- | -------- | --------------- |
+| `glm52_8x4_inferact_replay.json` | 8 | 4 |
+| `glm52_16x8_inferact_replay.json` | 16 | 8 |
+| `glm52_24x12_inferact_replay.json` | 24 | 12 |
+| `glm52_32x16_inferact_replay.json` | 32 | 16 |
 
-## Case JSON contract (Inferact)
+Results: `test-results/replay/run-<hardware>-local-replay-<tasks>-<concurrency>-<tag>/` plus
+`test-results/replay/vllm-logs/`. Each cold cycle stops vLLM between runs; cold start is checked via
+`evidence/vllm_metrics_start.prom`.
+
+## Repeatability criteria (default 5%)
+
+Compare **first** and **second** cold run directories.
+
+| Tier | Checks |
+| ---- | ------ |
+| Exact | `requests.requests`, `tasks.failed`, input/output tokens |
+| Primary | Task duration mean / p50 / p95 / p99 within tolerance |
+| Secondary | Latency & TTFT percentiles, prefix-cache hit rate, `run_wall_time_seconds` |
+| Intervals | Adjacent-request interval stats from `requests.jsonl` |
+
+Interval: `current.started_at - previous.finished_at` per `(session_id, actor_id)`.
+
+## Case JSON (Inferact)
 
 | Section | Role |
 | ------- | ---- |
-| `serve_env` | Extra env for `vllm serve` (Ascend/HCCL, etc.) |
-| `server_params` | Model path, middleware (empty for replay E2E), `serve_args` (port, TP, scheduler, …) |
-| `result_root` | Parent dir for `run-<hardware>-local-replay-...` folders |
-| `benchmark_params.workload` | Must be `inferact-replay` (harness guard) |
-| `benchmark_params.trace-path` | Full Inferact JSON passed to `--trace-path` |
-| `benchmark_params.host/port/model` | Replay client targets |
-| `benchmark_params.task-num` / `max-concurrency` | Overridable via pytest `--task-num` / `--max-concurrency` |
-
-Agentbench replay semantics (trace adapter, interval mode) stay in
-**`agentinfer/agentbench/configs/replay_inferact.yaml`**; the E2E harness does not fork that file.
-
-## External artifacts
-
-| Artifact | Role |
-| -------- | ---- |
-| [`replay_inferact.yaml`](../../../agentinfer/agentbench/configs/replay_inferact.yaml) | `trace_type: inferact_codex_swebenchpro`, backend, intervals |
-| [Inferact `codex_swebenchpro.json`](https://huggingface.co/datasets/Inferact/codex_swebenchpro_traces) | Trace source; path set in case JSON |
+| `serve_env` / `server_params` | vLLM serve (Inferact E2E: `middleware: []`, `scenario: baseline`) |
+| `benchmark_params.workload` | Must be `inferact-replay` |
+| `benchmark_params.trace-path` | Full trace file for `--trace-path` |
+| `result_root` | Usually `test-results/replay` |
