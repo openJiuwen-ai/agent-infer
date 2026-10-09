@@ -12,7 +12,7 @@ from typing import Any
 from agentinfer.agentbench.benchkit.compare import load_summary
 
 from .case_loader import (
-    E2EPerfConfig,
+    E2EConfig,
     build_benchmark_argv,
     build_benchmark_env,
     build_prepare_argv,
@@ -25,7 +25,7 @@ from .server import managed_vllm
 
 
 def run_benchmark(
-    config: E2EPerfConfig,
+    config: E2EConfig,
     *,
     result_dir: Path | None = None,
 ) -> Path:
@@ -49,7 +49,7 @@ def run_benchmark(
     return output_dir
 
 
-def _invoke_benchmark(config: E2EPerfConfig, argv: list[str]) -> None:
+def _invoke_benchmark(config: E2EConfig, argv: list[str]) -> None:
     prefix = f"[benchmark:{config.scenario.value}] "
     if len(argv) >= 2 and argv[0] == "sudo":
         print(f"{prefix}running bench via sudo -u {argv[2]}", flush=True)
@@ -86,7 +86,7 @@ def dataset_is_ready(output_dir: Path) -> bool:
     return all(path.exists() for path in dataset_marker_paths(output_dir))
 
 
-def ensure_benchmark_inputs_prepared(config: E2EPerfConfig) -> Path:
+def ensure_benchmark_inputs_prepared(config: E2EConfig) -> Path:
     """Prepare dataset metadata and repo-cache inputs before the benchmark run."""
 
     output_dir = ensure_dataset_prepared(config)
@@ -95,7 +95,7 @@ def ensure_benchmark_inputs_prepared(config: E2EPerfConfig) -> Path:
     return output_dir
 
 
-def ensure_dataset_prepared(config: E2EPerfConfig) -> Path:
+def ensure_dataset_prepared(config: E2EConfig) -> Path:
     """Prepare dataset inputs when missing, using the case-configured prepare dataset."""
 
     output_dir = config.dataset_output_dir.resolve()
@@ -135,7 +135,7 @@ def ensure_dataset_prepared(config: E2EPerfConfig) -> Path:
     return output_dir
 
 
-def ensure_repo_cache_prepared(config: E2EPerfConfig) -> Path | None:
+def ensure_repo_cache_prepared(config: E2EConfig) -> Path | None:
     """Warm the shared SWE-bench repo cache as root before a sudo-wrapped benchmark run."""
 
     if not prepare_runs_as_root(config):
