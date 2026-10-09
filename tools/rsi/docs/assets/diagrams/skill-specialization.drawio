@@ -1,0 +1,62 @@
+<mxfile host="app.diagrams.net" modified="2026-03-15T00:00:00.000Z" agent="vllm-evolve" version="21.0.0">
+  <diagram name="skill-specialization" id="skill-specialization">
+    <mxGraphModel dx="1422" dy="762" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="900" pageHeight="500" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="title" value="Why Skills Exist" style="text;html=1;align=center;verticalAlign=middle;resizable=0;strokeColor=none;fillColor=none;fontSize=18;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="250" y="20" width="400" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" value="" style="text;html=1;align=center;verticalAlign=middle;resizable=0;strokeColor=none;fillColor=none;fontSize=10;fontColor=#888;" vertex="1" parent="1">
+          <mxGeometry x="150" y="50" width="600" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- LEFT: Any LLM Agent -->
+        <mxCell id="agent" value="&lt;b style=&apos;color:#6c8ebf;&apos;&gt;Any LLM Agent&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=1.5;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="90" width="160" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- Context inputs -->
+        <mxCell id="contract" value="&lt;b style=&apos;font-size:9px;color:#7a5e00;&apos;&gt;Framework Contract&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="40" y="220" width="160" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="target-ctx" value="&lt;b style=&apos;font-size:9px;color:#7a5e00;&apos;&gt;Target Context&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="40" y="280" width="160" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="failures" value="&lt;b style=&apos;font-size:9px;color:#7a5e00;&apos;&gt;Failure History&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="40" y="340" width="160" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- CENTER: /evolve skill -->
+        <mxCell id="skill" value="&lt;b style=&apos;font-size:18px;color:#7a5e00;&apos;&gt;/evolve&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="340" y="120" width="200" height="180" as="geometry" />
+        </mxCell>
+
+        <!-- RIGHT: Output -->
+        <mxCell id="output" value="&lt;b style=&apos;color:#82b366;&apos;&gt;Valid Mutation&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=1.5;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="670" y="120" width="180" height="180" as="geometry" />
+        </mxCell>
+
+        <!-- Edges -->
+        <mxCell id="e-agent" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6c8ebf;strokeWidth=1.6;" edge="1" source="agent" target="skill" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-contract" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#d6b656;strokeWidth=1.4;" edge="1" source="contract" target="skill" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-tctx" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#d6b656;strokeWidth=1.4;" edge="1" source="target-ctx" target="skill" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-fail" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#d6b656;strokeWidth=1.4;" edge="1" source="failures" target="skill" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-out" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#82b366;strokeWidth=1.8;" edge="1" source="skill" target="output" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

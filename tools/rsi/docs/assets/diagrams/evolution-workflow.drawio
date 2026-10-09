@@ -1,0 +1,88 @@
+<mxfile host="app.diagrams.net" modified="2026-03-15" agent="vllm-evolve" version="24.0">
+  <diagram name="Evolution Workflow" id="evolution-workflow">
+    <mxGraphModel dx="1100" dy="680" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="680" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- Title -->
+        <mxCell id="title" value="Evolution Workflow" style="text;html=1;fontSize=20;fontStyle=1;fillColor=none;align=center;verticalAlign=middle;strokeColor=none;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="350" y="20" width="400" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- Step 1: Seed Policy -->
+        <mxCell id="seed" value="&lt;b&gt;Seed Policy&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;arcSize=20;" vertex="1" parent="1">
+          <mxGeometry x="80" y="100" width="160" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- Step 2: LLM Proposes Mutation -->
+        <mxCell id="llm" value="&lt;b&gt;LLM Provider&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;arcSize=20;" vertex="1" parent="1">
+          <mxGeometry x="320" y="100" width="200" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- Step 3: Mutator -->
+        <mxCell id="mutator" value="&lt;b&gt;Mutator&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13;arcSize=20;" vertex="1" parent="1">
+          <mxGeometry x="600" y="100" width="200" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- Step 4: Evaluator -->
+        <mxCell id="evaluator" value="&lt;b&gt;Evaluator&lt;/b&gt;&lt;br&gt;Simulator / Live" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;arcSize=20;" vertex="1" parent="1">
+          <mxGeometry x="600" y="240" width="200" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- Step 5: Fitness Scoring -->
+        <mxCell id="fitness" value="&lt;b&gt;Fitness Scoring&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=13;arcSize=20;" vertex="1" parent="1">
+          <mxGeometry x="320" y="240" width="200" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- Step 6: Population -->
+        <mxCell id="population" value="&lt;b&gt;Population&lt;/b&gt;&lt;br&gt;MAP-Elites + Islands" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;arcSize=20;" vertex="1" parent="1">
+          <mxGeometry x="80" y="240" width="160" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- Arrows -->
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#666666;strokeWidth=2;fontSize=11;" edge="1" source="seed" target="llm" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#666666;strokeWidth=2;fontSize=11;" edge="1" source="llm" target="mutator" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#666666;strokeWidth=2;fontSize=11;" edge="1" source="mutator" target="evaluator" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#666666;strokeWidth=2;fontSize=11;" edge="1" source="evaluator" target="fitness" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#666666;strokeWidth=2;fontSize=11;" edge="1" source="fitness" target="population" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Loop back arrow -->
+        <mxCell id="e6" value="next generation" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#E65100;strokeWidth=2;fontSize=11;fontStyle=2;dashed=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" source="population" target="llm" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="160" y="80"/>
+              <mxPoint x="320" y="80"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Output -->
+        <mxCell id="output" value="&lt;b&gt;Discovered Policies&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E65100;fontColor=#ffffff;strokeColor=#E65100;fontSize=13;arcSize=20;" vertex="1" parent="1">
+          <mxGeometry x="80" y="380" width="200" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#666666;strokeWidth=2;" edge="1" source="population" target="output" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Annotations -->
+        <mxCell id="ann1" value="" style="text;html=1;fontSize=11;fontStyle=2;fillColor=none;align=left;verticalAlign=middle;strokeColor=none;fontColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="810" y="250" width="120" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="ann2" value="" style="text;html=1;fontSize=11;fontStyle=2;fillColor=none;align=center;verticalAlign=middle;strokeColor=none;fontColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="350" y="165" width="120" height="20" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

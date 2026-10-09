@@ -1,0 +1,13 @@
+name: evolve_real
+regime: replay
+description: Exact-token replay of the three held-out Frontier scenarios on real vLLM.
+workload:
+  kind: materialized_json
+  arrival: trace
+slo:
+  ttft_ms: 200
+primary_metric: goodput_req_s
+primary_higher_is_better: true
+seeds: [0, 1, 2]
+seed_tiers: [3]
+cv_threshold: 0.10

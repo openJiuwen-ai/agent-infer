@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "manifest": {
+      "type": "object",
+      "properties": {
+        "candidate_sha": {
+          "type": "string"
+        },
+        "parent_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mechanism_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "hypothesis": {
+          "type": "string",
+          "minLength": 1
+        },
+        "structural_change": {
+          "type": "string",
+          "minLength": 1
+        },
+        "affected_symbols": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expected_gain_regimes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expected_neutral_regimes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expected_regression_regimes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "risks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required_controls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "parameter_only": {
+          "type": "boolean"
+        },
+        "research_snapshot_hash": {
+          "type": "string"
+        },
+        "author_kind": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer"
+        },
+        "source_citations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "proposal_only": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "candidate_sha",
+        "parent_sha",
+        "mechanism_ids",
+        "hypothesis",
+        "structural_change",
+        "affected_symbols",
+        "expected_gain_regimes",
+        "expected_neutral_regimes",
+        "expected_regression_regimes",
+        "risks",
+        "required_controls",
+        "parameter_only",
+        "research_snapshot_hash",
+        "author_kind",
+        "generation",
+        "source_citations",
+        "proposal_only"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "source",
+    "manifest"
+  ],
+  "additionalProperties": false
+}

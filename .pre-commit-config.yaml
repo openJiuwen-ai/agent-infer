@@ -4,6 +4,10 @@ default_install_hook_types:
 default_stages:
   - pre-commit
   - manual
+# RSI is an imported standalone project, including frozen policy/provenance artifacts.
+# Its maintained code is linted and tested by .github/workflows/rsi.yml instead of
+# applying the parent project's auto-formatters to the entire source snapshot.
+exclude: ^tools/rsi/
 repos:
 - repo: https://github.com/astral-sh/ruff-pre-commit
   rev: v0.14.0

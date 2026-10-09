@@ -1,0 +1,704 @@
+{
+  "metadata": {
+    "target": "scheduling",
+    "reviewed_at": "2026-07-27T00:00:00Z",
+    "review_policy": "Primary conference or author paper pages only; summaries are mechanism-oriented paraphrases, not measured vllm-evolve results.",
+    "unexplored_mechanism_gaps": [
+      "online response-length uncertainty calibration",
+      "joint TTFT/TPOT slack accounting",
+      "prefix-reuse-aware admission under KV pressure",
+      "multi-tenant fairness combined with deadline goodput",
+      "preemption cost prediction from recomputation and KV residency"
+    ]
+  },
+  "sources": [
+    {
+      "source_id": "paper:orca-osdi22",
+      "title": "Orca: A Distributed Serving System for Transformer-Based Generative Models",
+      "authors": [
+        "Gyeong-In Yu",
+        "Joo Seong Jeong",
+        "Geon-Woo Kim",
+        "Soojeong Kim",
+        "Byung-Gon Chun"
+      ],
+      "year": 2022,
+      "date": "2022-07",
+      "source_kind": "paper",
+      "canonical_url": "https://www.usenix.org/conference/osdi22/presentation/yu",
+      "identifier": "USENIX-OSDI22-280922",
+      "freshness": "classic",
+      "retrieval_time": "2026-07-27T00:00:00Z",
+      "primary_source": true,
+      "summary": "Introduces iteration-level scheduling and selective batching so an autoregressive serving batch can change after every model iteration instead of waiting for whole requests to finish.",
+      "relevance": 0.0,
+      "citation_status": "verified_primary",
+      "provider": "curated_corpus"
+    },
+    {
+      "source_id": "paper:vllm-pagedattention-2023",
+      "title": "Efficient Memory Management for Large Language Model Serving with PagedAttention",
+      "authors": [
+        "Woosuk Kwon",
+        "Zhuohan Li",
+        "Siyuan Zhuang",
+        "Ying Sheng",
+        "Lianmin Zheng",
+        "Cody Hao Yu",
+        "Joseph E. Gonzalez",
+        "Hao Zhang",
+        "Ion Stoica"
+      ],
+      "year": 2023,
+      "date": "2023-09-12",
+      "source_kind": "paper",
+      "canonical_url": "https://arxiv.org/abs/2309.06180",
+      "identifier": "arXiv:2309.06180",
+      "freshness": "classic",
+      "retrieval_time": "2026-07-27T00:00:00Z",
+      "primary_source": true,
+      "summary": "Introduces paged KV-cache allocation and sharing, making sequence residency and available KV blocks first-class scheduling constraints for continuous batching.",
+      "relevance": 0.0,
+      "citation_status": "verified_primary",
+      "provider": "curated_corpus"
+    },
+    {
+      "source_id": "paper:sarathi-serve-osdi24",
+      "title": "Taming Throughput-Latency Tradeoff in LLM Inference with Sarathi-Serve",
+      "authors": [
+        "Amey Agrawal",
+        "Nitin Kedia",
+        "Ashish Panwar",
+        "Jayashree Mohan",
+        "Nipun Kwatra",
+        "Bhargav Gulavani",
+        "Alexey Tumanov",
+        "Ramachandran Ramjee"
+      ],
+      "year": 2024,
+      "date": "2024-07",
+      "source_kind": "paper",
+      "canonical_url": "https://www.usenix.org/conference/osdi24/presentation/agrawal",
+      "identifier": "USENIX-OSDI24-SARATHI",
+      "freshness": "classic",
+      "retrieval_time": "2026-07-27T00:00:00Z",
+      "primary_source": true,
+      "summary": "Uses chunked prefills and stall-free schedules to admit prompt work without creating long decode stalls, balancing throughput and latency.",
+      "relevance": 0.0,
+      "citation_status": "verified_primary",
+      "provider": "curated_corpus"
+    },
+    {
+      "source_id": "paper:vtc-osdi24",
+      "title": "Fairness in Serving Large Language Models",
+      "authors": [
+        "Ying Sheng",
+        "Shiyi Cao",
+        "Dacheng Li",
+        "Banghua Zhu",
+        "Zhuohan Li",
+        "Danyang Zhuo",
+        "Joseph E. Gonzalez",
+        "Ion Stoica"
+      ],
+      "year": 2024,
+      "date": "2024-07",
+      "source_kind": "paper",
+      "canonical_url": "https://www.usenix.org/conference/osdi24/presentation/sheng",
+      "identifier": "USENIX-OSDI24-298768",
+      "freshness": "classic",
+      "retrieval_time": "2026-07-27T00:00:00Z",
+      "primary_source": true,
+      "summary": "Defines token-cost fairness for continuous batching and introduces a work-conserving Virtual Token Counter that bounds service differences among backlogged clients.",
+      "relevance": 0.0,
+      "citation_status": "verified_primary",
+      "provider": "curated_corpus"
+    },
+    {
+      "source_id": "paper:sola-mlsys25",
+      "title": "SOLA: Optimizing SLO Attainment for Large Language Model Serving with State-Aware Scheduling",
+      "authors": [
+        "Ke Hong",
+        "Xiuhong Li",
+        "Lufang Chen",
+        "Qiuli Mao",
+        "Guohao Dai",
+        "Xuefei Ning",
+        "Shengen Yan",
+        "Yun Liang",
+        "Yu Wang"
+      ],
+      "year": 2025,
+      "date": "2025",
+      "source_kind": "paper",
+      "canonical_url": "https://proceedings.mlsys.org/paper_files/paper/2025/hash/bc82dbfbfa43232be85b8d9838f49c3e-Abstract-Conference.html",
+      "identifier": "MLSys2025-bc82dbfb",
+      "freshness": "recent",
+      "retrieval_time": "2026-07-27T00:00:00Z",
+      "primary_source": true,
+      "summary": "Uses per-request and system state at iteration granularity to balance TTFT and TPOT SLO attainment rather than applying one fixed priority rule throughout a request lifecycle.",
+      "relevance": 0.0,
+      "citation_status": "verified_primary",
+      "provider": "curated_corpus"
+    },
+    {
+      "source_id": "paper:fastserve-nsdi26",
+      "title": "FastServe: Iteration-Level Preemptive Scheduling for Large Language Model Inference",
+      "authors": [
+        "Bingyang Wu",
+        "Yinmin Zhong",
+        "Zili Zhang",
+        "Shengyu Liu",
+        "Fangyue Liu",
+        "Yuanhang Sun",
+        "Gang Huang",
+        "Xuanzhe Liu",
+        "Xin Jin"
+      ],
+      "year": 2026,
+      "date": "2026-05",
+      "source_kind": "paper",
+      "canonical_url": "https://www.usenix.org/conference/nsdi26/presentation/wu-bingyang",
+      "identifier": "USENIX-NSDI26-316044",
+      "freshness": "recent",
+      "retrieval_time": "2026-07-27T00:00:00Z",
+      "primary_source": true,
+      "summary": "Combines output-token-granularity preemption with a skip-join multi-level feedback queue and explicit state movement to reduce head-of-line blocking under unknown response lengths.",
+      "relevance": 0.0,
+      "citation_status": "verified_primary",
+      "provider": "curated_corpus"
+    },
+    {
+      "source_id": "paper:jitserve-nsdi26",
+      "title": "JITServe: SLO-aware LLM Serving with Imprecise Request Information",
+      "authors": [
+        "Wei Zhang",
+        "Zhiyu Wu",
+        "Yi Mu",
+        "Rui Ning",
+        "Banruo Liu",
+        "Nikhil Sarda",
+        "Myungjin Lee",
+        "Fan Lai"
+      ],
+      "year": 2026,
+      "date": "2026-05",
+      "source_kind": "paper",
+      "canonical_url": "https://www.usenix.org/conference/nsdi26/presentation/zhang-wei",
+      "identifier": "USENIX-NSDI26-316748",
+      "freshness": "recent",
+      "retrieval_time": "2026-07-27T00:00:00Z",
+      "primary_source": true,
+      "summary": "Allocates just enough serving bandwidth to requests near SLO risk, updates uncertain request information as generation progresses, and uses residual capacity for efficient batches.",
+      "relevance": 0.0,
+      "citation_status": "verified_primary",
+      "provider": "curated_corpus"
+    },
+    {
+      "source_id": "paper:libra-nsdi26",
+      "title": "Libra: Flexible Request Partitioning and Scheduling for Serving Unbalanced and Dynamic LLM Workloads",
+      "authors": [
+        "Chaoyi Ruan",
+        "Yinhe Chen",
+        "Dongqi Tian",
+        "Yandong Shi",
+        "Yongji Wu",
+        "Jialin Li",
+        "Cheng Li"
+      ],
+      "year": 2026,
+      "date": "2026-05",
+      "source_kind": "paper",
+      "canonical_url": "https://www.usenix.org/conference/nsdi26/presentation/ruan-libra",
+      "identifier": "USENIX-NSDI26-316696",
+      "freshness": "recent",
+      "retrieval_time": "2026-07-27T00:00:00Z",
+      "primary_source": true,
+      "summary": "Splits requests at token boundaries into cooperating micro-requests and coordinates global split selection with local SLO-aware batch formation for imbalanced prefill/decode workloads.",
+      "relevance": 0.0,
+      "citation_status": "verified_primary",
+      "provider": "curated_corpus"
+    },
+    {
+      "source_id": "framework:vllm-async-scheduler-v0.21",
+      "title": "vLLM v0.21 AsyncScheduler implementation surface",
+      "authors": [
+        "vLLM project contributors"
+      ],
+      "year": 2026,
+      "date": "2026",
+      "source_kind": "code",
+      "canonical_url": "https://github.com/vllm-project/vllm/tree/v0.21.0/vllm/v1/core/sched",
+      "identifier": "vllm:v0.21.0:async-scheduler",
+      "freshness": "recent",
+      "retrieval_time": "2026-07-27T00:00:00Z",
+      "primary_source": true,
+      "summary": "Upstream scheduler code corresponding to the real plugin bridge used by this repository; applicability must be rechecked when the served vLLM version changes.",
+      "relevance": 0.0,
+      "citation_status": "verified_primary",
+      "provider": "curated_corpus"
+    }
+  ],
+  "mechanism_cards": [
+    {
+      "mechanism_id": "iteration_level_continuous_batching",
+      "name": "Iteration-level continuous batching",
+      "source_ids": [
+        "paper:orca-osdi22"
+      ],
+      "problem": "Run-to-completion batches block arrivals and completed requests at request granularity.",
+      "core_mechanism": "Rebuild the runnable batch every decoding iteration so arrivals, prefills and completed sequences can enter or leave without waiting for an entire request batch.",
+      "assumptions": [
+        "autoregressive decoding exposes an iteration boundary",
+        "scheduler overhead is small relative to model iteration time"
+      ],
+      "applicable_workloads": [
+        "mixed prompt and response lengths",
+        "bursty online serving"
+      ],
+      "applicable_hardware": [
+        "single or multi-GPU continuous batching"
+      ],
+      "applicable_software": [
+        "vLLM continuous batching",
+        "Frontier iterative simulator"
+      ],
+      "expected_improved_metrics": [
+        "throughput_req_s",
+        "TTFT"
+      ],
+      "possible_regressions": [
+        "scheduler CPU overhead"
+      ],
+      "complexity_cost": "O(n log n) ordering is acceptable; avoid nested scans",
+      "resource_cost": "no additional KV state by itself",
+      "failure_modes": [
+        "hot-path policy overhead dominates at low load"
+      ],
+      "implementation_hooks": [
+        "targets/scheduling/skeleton.py:schedule_batch",
+        "integrations/frontier/ve_policy_api.py:ScheduleDecision"
+      ],
+      "required_controls": [
+        "stock FCFS iterative scheduler",
+        "inactive-policy fast path"
+      ],
+      "incompatibilities": [],
+      "confidence": "high",
+      "evidence_type": "peer_reviewed_system",
+      "structural_change": "Change runnable-set membership at every iteration rather than choose one static request batch.",
+      "template_recipe": {
+        "order": "fcfs",
+        "gate": "none",
+        "switch": false
+      }
+    },
+    {
+      "mechanism_id": "kv_residency_aware_admission",
+      "name": "KV-residency-aware admission",
+      "source_ids": [
+        "paper:vllm-pagedattention-2023",
+        "framework:vllm-async-scheduler-v0.21"
+      ],
+      "problem": "Admitting work without considering finite KV residency can trigger eviction and recomputation cascades.",
+      "core_mechanism": "Use free KV blocks, cached-prefix value and per-request residency cost to gate admission before memory is exhausted.",
+      "assumptions": [
+        "KV availability and per-request cost signals are trustworthy",
+        "deferred work remains bounded against starvation"
+      ],
+      "applicable_workloads": [
+        "long contexts",
+        "high prefix reuse",
+        "memory-saturated serving"
+      ],
+      "applicable_hardware": [
+        "GPU with bounded KV cache"
+      ],
+      "applicable_software": [
+        "vLLM 0.21",
+        "Frontier with KV block signals"
+      ],
+      "expected_improved_metrics": [
+        "completion rate",
+        "goodput_req_s"
+      ],
+      "possible_regressions": [
+        "TTFT for deferred requests",
+        "under-utilization from conservative admission"
+      ],
+      "complexity_cost": "one queue ordering and bounded admission pass",
+      "resource_cost": "none beyond existing request metadata",
+      "failure_modes": [
+        "stale KV estimate",
+        "defer starvation",
+        "cache-affinity monopolization"
+      ],
+      "implementation_hooks": [
+        "targets/scheduling/skeleton.py:RequestInfo.kv_blocks_used",
+        "targets/scheduling/skeleton.py:RequestInfo.prefix_cached_tokens",
+        "targets/scheduling/skeleton.py:schedule_batch.available_kv_blocks",
+        "integrations/frontier/ve_policy_api.py:ScheduleDecision.defer_ids"
+      ],
+      "required_controls": [
+        "same ordering without KV gate",
+        "gate with prefix signal removed"
+      ],
+      "incompatibilities": [
+        "simulators that do not expose real KV occupancy"
+      ],
+      "confidence": "high",
+      "evidence_type": "paper_plus_upstream_code",
+      "structural_change": "Add a resource-state admission branch before the prefill loop.",
+      "template_recipe": {
+        "order": "cache_first",
+        "gate": "burst_tail",
+        "switch": true
+      }
+    },
+    {
+      "mechanism_id": "stall_free_chunked_prefill",
+      "name": "Stall-free chunked prefill",
+      "source_ids": [
+        "paper:sarathi-serve-osdi24"
+      ],
+      "problem": "Large prefills create long iterations that stall active decode requests.",
+      "core_mechanism": "Bound prefill work per iteration and reserve decode progress while using residual token budget for prompt chunks.",
+      "assumptions": [
+        "prefill can be chunked safely",
+        "decode latency matters alongside throughput"
+      ],
+      "applicable_workloads": [
+        "long prompt and active decode mix",
+        "pipeline parallel inference"
+      ],
+      "applicable_hardware": [
+        "compute-saturated GPUs"
+      ],
+      "applicable_software": [
+        "vLLM chunked prefill",
+        "Frontier token-budget model"
+      ],
+      "expected_improved_metrics": [
+        "TPOT",
+        "serving capacity"
+      ],
+      "possible_regressions": [
+        "TTFT when chunks are too small"
+      ],
+      "complexity_cost": "token-budget partitioning per iteration",
+      "resource_cost": "additional scheduler state for partial prefills",
+      "failure_modes": [
+        "fixed chunk size mismatches hardware",
+        "decode reservation leaves tokens idle"
+      ],
+      "implementation_hooks": [
+        "targets/scheduling/skeleton.py:schedule_batch.max_num_batched_tokens",
+        "targets/scheduling/plugin_template.py:EvolvedScheduler.schedule"
+      ],
+      "required_controls": [
+        "unchunked prefill",
+        "chunking without decode reservation"
+      ],
+      "incompatibilities": [],
+      "confidence": "high",
+      "evidence_type": "peer_reviewed_system",
+      "structural_change": "Partition each iteration's token budget between incumbent decode and bounded prefill work.",
+      "template_recipe": {
+        "order": "total_work",
+        "gate": "seq_reserve",
+        "switch": true
+      }
+    },
+    {
+      "mechanism_id": "virtual_token_fairness",
+      "name": "Virtual-token tenant fairness",
+      "source_ids": [
+        "paper:vtc-osdi24"
+      ],
+      "problem": "Request-count fairness ignores large differences in prompt and generated token cost.",
+      "core_mechanism": "Account served token cost in a virtual counter and prioritize backlogged clients with lower accumulated service.",
+      "assumptions": [
+        "tenant identity is available",
+        "fairness is an explicit objective or constraint"
+      ],
+      "applicable_workloads": [
+        "multi-tenant serving",
+        "heterogeneous prompt and response lengths"
+      ],
+      "applicable_hardware": [
+        "any continuous batching GPU"
+      ],
+      "applicable_software": [
+        "scheduler exposes tenant identity and token counts"
+      ],
+      "expected_improved_metrics": [
+        "fairness",
+        "tail service isolation"
+      ],
+      "possible_regressions": [
+        "aggregate TTFT goodput"
+      ],
+      "complexity_cost": "per-tenant counters plus priority selection",
+      "resource_cost": "small persistent tenant state",
+      "failure_modes": [
+        "missing tenant identity",
+        "fairness objective conflicts with pure short-job goodput"
+      ],
+      "implementation_hooks": [
+        "targets/scheduling/skeleton.py:RequestInfo",
+        "targets/scheduling/plugin_template.py:EvolvedScheduler"
+      ],
+      "required_controls": [
+        "FCFS",
+        "request-count round robin",
+        "token-cost accounting disabled"
+      ],
+      "incompatibilities": [
+        "anonymous single-tenant traces"
+      ],
+      "confidence": "high",
+      "evidence_type": "peer_reviewed_algorithm",
+      "structural_change": "Introduce persistent per-tenant service state instead of one global request ordering.",
+      "template_recipe": {
+        "order": "starvation",
+        "gate": "none",
+        "switch": false
+      }
+    },
+    {
+      "mechanism_id": "state_aware_dual_slo",
+      "name": "Per-request and system-state SLO scheduling",
+      "source_ids": [
+        "paper:sola-mlsys25"
+      ],
+      "problem": "A fixed priority rule cannot balance TTFT and TPOT as requests move through different lifecycle states.",
+      "core_mechanism": "Switch scheduling decisions using both request lifecycle state and aggregate queue/load state, prioritizing the SLO currently at risk.",
+      "assumptions": [
+        "TTFT and TPOT budgets are declared",
+        "waiting age and decode progress are observable"
+      ],
+      "applicable_workloads": [
+        "mixed latency SLOs",
+        "bursty heterogeneous serving"
+      ],
+      "applicable_hardware": [
+        "single or multi-GPU serving"
+      ],
+      "applicable_software": [
+        "vLLM scheduler plugin",
+        "Frontier state-aware policy API"
+      ],
+      "expected_improved_metrics": [
+        "SLO attainment",
+        "goodput_req_s"
+      ],
+      "possible_regressions": [
+        "raw request throughput",
+        "policy hot-path overhead"
+      ],
+      "complexity_cost": "bounded state classification plus one ordering pass",
+      "resource_cost": "request age/progress metadata",
+      "failure_modes": [
+        "oscillation between TTFT and TPOT regimes",
+        "stale SLO slack estimate"
+      ],
+      "implementation_hooks": [
+        "targets/scheduling/skeleton.py:RequestInfo.waiting_age_s",
+        "targets/scheduling/skeleton.py:RequestInfo.generated_output_tokens",
+        "targets/scheduling/skeleton.py:schedule_batch"
+      ],
+      "required_controls": [
+        "request state only",
+        "system state only",
+        "fixed FCFS policy"
+      ],
+      "incompatibilities": [],
+      "confidence": "high",
+      "evidence_type": "peer_reviewed_system",
+      "structural_change": "Add a lifecycle-aware top-level regime switch instead of applying one score to every iteration.",
+      "template_recipe": {
+        "order": "fcfs",
+        "gate": "none",
+        "switch": true,
+        "dispersion_guard": true
+      }
+    },
+    {
+      "mechanism_id": "iteration_level_preemption",
+      "name": "Iteration-level bounded preemption",
+      "source_ids": [
+        "paper:fastserve-nsdi26",
+        "framework:vllm-async-scheduler-v0.21"
+      ],
+      "problem": "Long decode residency causes head-of-line blocking when all sequence slots are occupied.",
+      "core_mechanism": "At an output-token boundary, preempt selected long-residency requests and preserve enough state to let latency-sensitive arrivals make progress.",
+      "assumptions": [
+        "preemption state movement or recomputation cost is bounded",
+        "victim selection prevents ping-pong and starvation"
+      ],
+      "applicable_workloads": [
+        "elephant and mouse response lengths",
+        "sequence-slot saturation"
+      ],
+      "applicable_hardware": [
+        "GPU with KV offload or bounded recomputation"
+      ],
+      "applicable_software": [
+        "vLLM 0.21 AsyncScheduler bridge",
+        "Frontier active-preemption patch"
+      ],
+      "expected_improved_metrics": [
+        "TTFT SLO attainment",
+        "goodput_req_s"
+      ],
+      "possible_regressions": [
+        "TPOT",
+        "throughput_req_s",
+        "recomputation"
+      ],
+      "complexity_cost": "victim selection plus lifecycle transition",
+      "resource_cost": "KV movement or prompt recomputation",
+      "failure_modes": [
+        "preemption ping-pong",
+        "long-request starvation",
+        "inactive-path overhead"
+      ],
+      "implementation_hooks": [
+        "integrations/frontier/ve_policy_api.py:ScheduleDecision.preempt_ids",
+        "targets/scheduling/plugin_template.py:EvolvedScheduler._preempt_request",
+        "targets/scheduling/skeleton.py:RequestInfo.remaining_output_tokens"
+      ],
+      "required_controls": [
+        "same ordering without preemption",
+        "random victim",
+        "long-to-long preemption disabled"
+      ],
+      "incompatibilities": [
+        "bridges without real active-preemption support"
+      ],
+      "confidence": "high",
+      "evidence_type": "peer_reviewed_system_plus_upstream_surface",
+      "structural_change": "Add a bounded running-to-waiting lifecycle transition that creates an admission slot.",
+      "template_recipe": {
+        "order": "total_work",
+        "gate": "none",
+        "switch": true
+      }
+    },
+    {
+      "mechanism_id": "just_in_time_slo_margin",
+      "name": "Just-in-time SLO margin allocation",
+      "source_ids": [
+        "paper:jitserve-nsdi26"
+      ],
+      "problem": "Unknown response lengths make static deadline priorities either too conservative or too late.",
+      "core_mechanism": "Allocate only the capacity needed to keep at-risk requests within a conservative SLO margin, then refine estimates as generation reveals more information.",
+      "assumptions": [
+        "per-request SLOs are available",
+        "runtime progress can update uncertainty"
+      ],
+      "applicable_workloads": [
+        "chat",
+        "agentic pipelines",
+        "mixed request-level SLOs"
+      ],
+      "applicable_hardware": [
+        "continuous batching accelerators"
+      ],
+      "applicable_software": [
+        "scheduler with per-request SLO and progress state"
+      ],
+      "expected_improved_metrics": [
+        "service goodput",
+        "resource efficiency"
+      ],
+      "possible_regressions": [
+        "best-effort throughput",
+        "complexity"
+      ],
+      "complexity_cost": "online slack and uncertainty update",
+      "resource_cost": "per-request estimator state",
+      "failure_modes": [
+        "miscalibrated uncertainty",
+        "compound-request dependency unavailable"
+      ],
+      "implementation_hooks": [
+        "targets/scheduling/skeleton.py:RequestInfo.waiting_age_s",
+        "targets/scheduling/skeleton.py:RequestInfo.remaining_output_tokens",
+        "targets/scheduling/plugin_template.py:EvolvedScheduler"
+      ],
+      "required_controls": [
+        "fixed deadline priority",
+        "margin refinement disabled"
+      ],
+      "incompatibilities": [
+        "workloads without meaningful SLO metadata"
+      ],
+      "confidence": "medium",
+      "evidence_type": "peer_reviewed_system",
+      "structural_change": "Maintain evolving request slack and uncertainty state across scheduling iterations.",
+      "template_recipe": {
+        "order": "total_work",
+        "gate": "burst_tail",
+        "switch": true,
+        "dispersion_guard": true
+      }
+    },
+    {
+      "mechanism_id": "micro_request_partitioning",
+      "name": "Micro-request partitioning and two-level scheduling",
+      "source_ids": [
+        "paper:libra-nsdi26"
+      ],
+      "problem": "Unbalanced prefill/decode phases cannot always be handled by one colocated batch boundary.",
+      "core_mechanism": "Split requests at token boundaries and coordinate global partition decisions with local SLO-aware batch formation.",
+      "assumptions": [
+        "KV state can transfer across instances",
+        "multi-instance scheduler is in scope"
+      ],
+      "applicable_workloads": [
+        "dynamic unbalanced prompt/response lengths",
+        "hybrid colocated/disaggregated serving"
+      ],
+      "applicable_hardware": [
+        "A100/H100-class multi-GPU deployment"
+      ],
+      "applicable_software": [
+        "multi-instance serving controller"
+      ],
+      "expected_improved_metrics": [
+        "goodput",
+        "serving capacity"
+      ],
+      "possible_regressions": [
+        "KV transfer overhead",
+        "single-GPU complexity without benefit"
+      ],
+      "complexity_cost": "global and local scheduler coordination",
+      "resource_cost": "cross-instance KV transfer",
+      "failure_modes": [
+        "network bandwidth bottleneck",
+        "partitioning overhead exceeds imbalance benefit"
+      ],
+      "implementation_hooks": [
+        "src/vllm_evolve/engine/targets.py",
+        "targets/scheduling/plugin_template.py:EvolvedScheduler"
+      ],
+      "required_controls": [
+        "colocated unsplit requests",
+        "fixed split point"
+      ],
+      "incompatibilities": [
+        "current single-GPU Frontier policy surface"
+      ],
+      "confidence": "high",
+      "evidence_type": "peer_reviewed_system",
+      "structural_change": "Expand the optimization surface from local ordering to cross-instance request partitioning.",
+      "template_recipe": {
+        "order": "total_work",
+        "gate": "seq_reserve",
+        "switch": true
+      }
+    }
+  ]
+}

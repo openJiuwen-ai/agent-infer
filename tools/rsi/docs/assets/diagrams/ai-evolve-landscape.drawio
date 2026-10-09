@@ -1,0 +1,112 @@
+<mxfile host="Electron" agent="Claude Code" version="29.6.1">
+  <diagram id="landscape" name="AI-Driven Performance Optimization">
+    <mxGraphModel dx="900" dy="400" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="900" pageHeight="320" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" parent="1" style="text;html=1;align=center;verticalAlign=middle;strokeColor=none;fillColor=none;fontSize=14;fontStyle=1;fontColor=#2C3E50;" value="AI-Driven Performance Optimization for Ascend Clusters" vertex="1">
+          <mxGeometry x="100" y="2" width="600" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- Kernel Layer -->
+        <mxCell id="k_bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EBF5FB;strokeColor=#2980B9;strokeWidth=2;arcSize=6;" value="" vertex="1">
+          <mxGeometry x="10" y="28" width="385" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="k_title" parent="1" style="text;html=1;align=left;verticalAlign=middle;strokeColor=none;fillColor=none;fontSize=12;fontStyle=1;fontColor=#1A5276;" value="Kernel Layer — single-step compute" vertex="1">
+          <mxGeometry x="20" y="32" width="280" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="k_proj" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#85C1E9;strokeColor=#2471A3;arcSize=8;fontSize=11;fontStyle=1;" value="AscendOpGenAgent" vertex="1">
+          <mxGeometry x="20" y="52" width="140" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="k1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D6EAF8;strokeColor=#2980B9;arcSize=10;fontSize=9;" value="Attention" vertex="1">
+          <mxGeometry x="20" y="82" width="60" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="k2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D6EAF8;strokeColor=#2980B9;arcSize=10;fontSize=9;" value="GEMM" vertex="1">
+          <mxGeometry x="86" y="82" width="50" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="k3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D6EAF8;strokeColor=#2980B9;arcSize=10;fontSize=9;" value="Comm" vertex="1">
+          <mxGeometry x="142" y="82" width="45" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="k4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D6EAF8;strokeColor=#2980B9;arcSize=10;fontSize=9;" value="Activation" vertex="1">
+          <mxGeometry x="193" y="82" width="60" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="k5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D6EAF8;strokeColor=#2980B9;arcSize=10;fontSize=9;" value="..." vertex="1">
+          <mxGeometry x="259" y="82" width="25" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="k_out" parent="1" style="text;html=1;align=left;verticalAlign=middle;strokeColor=none;fillColor=none;fontSize=9;fontColor=#1A5276;" value="faster kernel → universal speedup" vertex="1">
+          <mxGeometry x="20" y="108" width="250" height="14" as="geometry" />
+        </mxCell>
+
+        <!-- Policy Layer -->
+        <mxCell id="p_bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5EEF8;strokeColor=#7D3C98;strokeWidth=2;arcSize=6;" value="" vertex="1">
+          <mxGeometry x="420" y="28" width="385" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="p_title" parent="1" style="text;html=1;align=left;verticalAlign=middle;strokeColor=none;fillColor=none;fontSize=12;fontStyle=1;fontColor=#4A235A;" value="Policy Layer — global orchestration" vertex="1">
+          <mxGeometry x="430" y="32" width="280" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="p_proj" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C39BD3;strokeColor=#7D3C98;arcSize=8;fontSize=11;fontStyle=1;fontColor=#4A235A;" value="vllm-evolve" vertex="1">
+          <mxGeometry x="430" y="52" width="100" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="p1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8DAEF;strokeColor=#7D3C98;arcSize=10;fontSize=9;" value="Scheduling" vertex="1">
+          <mxGeometry x="430" y="82" width="65" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="p2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8DAEF;strokeColor=#7D3C98;arcSize=10;fontSize=9;" value="KV evict" vertex="1">
+          <mxGeometry x="501" y="82" width="55" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="p3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8DAEF;strokeColor=#7D3C98;arcSize=10;fontSize=9;" value="Routing" vertex="1">
+          <mxGeometry x="562" y="82" width="50" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="p4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8DAEF;strokeColor=#7D3C98;arcSize=10;fontSize=9;" value="Admission" vertex="1">
+          <mxGeometry x="618" y="82" width="58" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="p5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8DAEF;strokeColor=#7D3C98;arcSize=10;fontSize=9;" value="..." vertex="1">
+          <mxGeometry x="682" y="82" width="25" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="p_out" parent="1" style="text;html=1;align=left;verticalAlign=middle;strokeColor=none;fillColor=none;fontSize=9;fontColor=#4A235A;" value="workload-adaptive → best for YOUR traffic" vertex="1">
+          <mxGeometry x="430" y="108" width="300" height="14" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow -->
+        <mxCell id="syn" edge="1" parent="1" style="endArrow=classic;startArrow=classic;strokeColor=#C0392B;strokeWidth=2;fontSize=9;fontStyle=1;fontColor=#C0392B;" value="orthogonal">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="400" y="83" as="sourcePoint" />
+            <mxPoint x="416" y="83" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Hardware -->
+        <mxCell id="hw_bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F9EBEA;strokeColor=#C0392B;strokeWidth=2;arcSize=6;" value="" vertex="1">
+          <mxGeometry x="10" y="148" width="795" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="hw_lbl" parent="1" style="text;html=1;align=left;verticalAlign=middle;strokeColor=none;fillColor=none;fontSize=10;fontStyle=1;fontColor=#922B21;" value="Hardware" vertex="1">
+          <mxGeometry x="20" y="153" width="65" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="hw1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5B7B1;strokeColor=#C0392B;arcSize=10;fontSize=10;fontStyle=1;" value="Ascend A2" vertex="1">
+          <mxGeometry x="90" y="153" width="78" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="hw2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5B7B1;strokeColor=#C0392B;arcSize=10;fontSize=10;fontStyle=1;" value="Ascend A3" vertex="1">
+          <mxGeometry x="175" y="153" width="78" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="hw3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5B7B1;strokeColor=#C0392B;arcSize=10;fontSize=10;fontStyle=1;" value="Ascend A5" vertex="1">
+          <mxGeometry x="260" y="153" width="78" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="hw4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FADBD8;strokeColor=#C0392B;arcSize=10;fontSize=9;" value="A3+A5 Hybrid" vertex="1">
+          <mxGeometry x="345" y="153" width="85" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="hw5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FADBD8;strokeColor=#C0392B;arcSize=10;fontSize=9;" value="NVIDIA GPU" vertex="1">
+          <mxGeometry x="437" y="153" width="78" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="hw6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FADBD8;strokeColor=#C0392B;arcSize=10;fontSize=9;dashed=1;" value="+ XPU" vertex="1">
+          <mxGeometry x="522" y="153" width="50" height="22" as="geometry" />
+        </mxCell>
+
+        <!-- Combined -->
+        <mxCell id="combo" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#2C3E50;strokeColor=#1A252F;arcSize=6;fontColor=#ECF0F1;fontSize=10;strokeWidth=2;" value="&lt;b&gt;Combined:&lt;/b&gt; faster steps + smarter orchestration = maximum cluster throughput" vertex="1">
+          <mxGeometry x="10" y="190" width="795" height="24" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

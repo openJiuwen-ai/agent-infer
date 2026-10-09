@@ -1,0 +1,18 @@
+{
+  "description": "vllm-evolve phase and protected-path guard",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|exec_command|apply_patch|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__VE_PYTHON__ \"__VE_HOOK__\"",
+            "timeout": 30,
+            "statusMessage": "Checking vllm-evolve phase"
+          }
+        ]
+      }
+    ]
+  }
+}

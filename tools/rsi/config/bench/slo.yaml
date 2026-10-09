@@ -1,0 +1,5 @@
+# Default SLO thresholds (milliseconds). Each profile may override these in its
+# own `slo:` block; this file is the fallback / documentation of the defaults.
+ttft_ms: 2000     # max acceptable time-to-first-token
+tpot_ms: 100      # max acceptable time-per-output-token (inter-token latency)
+# e2e_ms: null    # optional end-to-end bound (unset = not enforced)

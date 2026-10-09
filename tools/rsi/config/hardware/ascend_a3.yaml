@@ -1,0 +1,21 @@
+name: ascend_a3
+family: ascend_npu
+compute:
+  fp16_tflops: 320
+  bf16_tflops: 320
+memory:
+  hbm_gb: 64
+  bandwidth_gb_s: 1600
+interconnect:
+  intra_node: hccs
+  intra_node_bw_gb_s: 400
+  inter_node: rdma
+  inter_node_bw_gb_s: 25
+timing_model:
+  prefill_alpha: 3.5e-7
+  prefill_beta: 2.1e-4
+  prefill_gamma: 1.2e-3
+  decode_beta: 4.5e-5
+  decode_gamma: 0.03
+  graph_compile_overhead_ms: 15.0
+  graph_cache_hit_rate: 0.85
