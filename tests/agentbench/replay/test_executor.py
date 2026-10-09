@@ -33,7 +33,10 @@ def _node(
 def test_parallel_lead_roots_start_together_and_only_main_supplies_context() -> None:
     async def execute() -> tuple[object, list[tuple[str, float]], list[tuple[str, str | None]]]:
         config = ReplayBenchConfig.model_validate(
-            {"experiment": {"task_timeout_seconds": 5}, "replay": {"trace_path": "source.jsonl"}}
+            {
+                "experiment": {"task_num": 1, "task_timeout_seconds": 5},
+                "replay": {"trace_path": "source.jsonl"},
+            }
         )
         title = _node("title", "lead_title")
         main = _node("main", "lead_main")
@@ -78,7 +81,7 @@ def test_interval_release_waits_for_predecessor_completion() -> None:
     async def execute() -> dict[str, float]:
         config = ReplayBenchConfig.model_validate(
             {
-                "experiment": {"task_timeout_seconds": 5},
+                "experiment": {"task_num": 1, "task_timeout_seconds": 5},
                 "replay": {"trace_path": "source.jsonl"},
             }
         )
@@ -120,7 +123,10 @@ def test_interval_release_waits_for_predecessor_completion() -> None:
 def test_node_failure_skips_dependents_without_cancelling_independent_siblings() -> None:
     async def execute() -> tuple[object, list[str]]:
         config = ReplayBenchConfig.model_validate(
-            {"experiment": {"task_timeout_seconds": 5}, "replay": {"trace_path": "source.jsonl"}}
+            {
+                "experiment": {"task_num": 1, "task_timeout_seconds": 5},
+                "replay": {"trace_path": "source.jsonl"},
+            }
         )
         failing = _node("failing", "lead_main")
         independent = _node("independent", "lead_title", send_after="failing")

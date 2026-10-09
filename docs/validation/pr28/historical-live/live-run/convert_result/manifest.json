@@ -1,0 +1,28 @@
+{
+  "schema_version": "3",
+  "converter": {
+    "name": "tracelab"
+  },
+  "source": {
+    "sha256": "11e46b00aafd3f5396e75d2fc9ea99ad5cc51d4ecaf4ec1496f03ad5564682a8",
+    "bytes": 7128
+  },
+  "requests": {
+    "path": "requests.jsonl",
+    "sha256": "3f72a10540c22ff0fe7d9d7c9220b1a211c2e6055b3208acca418ccbe9e38f57",
+    "lines": 16,
+    "bytes": 17847
+  },
+  "summary": {
+    "dataset": "tracelab",
+    "sessions": 8,
+    "requests": 16,
+    "text_files": 0
+  },
+  "prompt_source": {
+    "kind": "token_recipe"
+  },
+  "text_dir": null,
+  "texts": null,
+  "bundle_sha256": "577b25db2ddc0de3d031ae24734c0ea4abd2c22287800973164e155f4578c1e0"
+}
