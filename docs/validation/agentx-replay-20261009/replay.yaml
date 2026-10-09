@@ -1,0 +1,22 @@
+experiment:
+  task_num: 8
+  max_concurrency: 4
+  task_timeout_seconds: 7200
+  run_timeout_seconds: null
+
+backend:
+  type: vllm
+  base_url: http://127.0.0.1:8020
+  model: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8
+  endpoint: /v1/completions
+
+replay:
+  trace_type: agentX
+  trace_path: /home/yangjianjuan/trace-dataset/agentx-l20-8sessions.jsonl
+  sample_seed: 0
+  interval_mode: trace
+  trace_same_agent_gap_scale: 0
+  trace_same_agent_gap_offset_seconds: 0
+  max_inflight_requests: 1
+  prompt_calibration_tolerance_tokens: 0
+  request_timeout_seconds: 3600

@@ -99,7 +99,7 @@ Inferact 读取满 `task_num` 条完整记录后立即关闭远端响应；网�
 | `agentinfer` | `replay_agentinfer.yaml` |
 | `inferact_codex_swebenchpro` | `replay_inferact.yaml` |
 | `tracelab` | `replay_tracelab.yaml` |
-| `agentX` | `replay_agentX.yaml`（预留；执行时抛出 `NotImplementedError`） |
+| `agentX` | `replay_agentX.yaml` |
 
 ### 从源数据到执行计划
 
@@ -189,7 +189,7 @@ Replay 同时设置 `max_tokens` 和 `min_tokens` 为实际发送目标长度（
 | `replay.trace_type: agentinfer` | 输入为 AgentInfer `requests.jsonl`；`trace_path: null` 时使用包内 8-Session 数据集。自动选择 `agentinfer_synthetic`。 |
 | `replay.trace_type: inferact_codex_swebenchpro` | 输入为 Inferact 原始 JSON；`trace_path: null` 时下载固定版本并缓存前 `task_num` 条完整记录。自动选择 `inferact_synthetic`，要求 `interval_mode: lognormal`、零校准容差和 `/v1/chat/completions`。 |
 | `replay.trace_type: tracelab` | 归一化、未压缩的 JSONL；`trace_path: null` 时自动下载并提取前 `task_num` 个完整 Session。自动选择 `tracelab_synthetic`，要求零校准容差。配置中的 Backend endpoint 为 `/v1/chat/completions`，实际 token 请求使用同一服务的 `/v1/completions`。 |
-| `replay.trace_type: agentX` | 自动选择 `agentX_synthetic`；为预留入口，执行时抛出 `NotImplementedError`。 |
+| `replay.trace_type: agentX` | 输入为嵌套 Session JSONL；使用完整 hash 块配方和 `/v1/completions` token ID 请求。源请求的 `out=0` 在回放执行时生成 1 个 token。 |
 | `replay.interval_mode` | `trace` 保留历史间隔，`lognormal` 按配置的分布生成间隔。 |
 | `replay.sample_seed` | 可重复的会话抽样、间隔抽样和后端采样 seed。 |
 | `replay.context_adjustment_mode` | 非 TraceLab 合成 Prompt 的上下文校准策略；TraceLab 使用上述 token 前缀规则。 |
@@ -202,6 +202,25 @@ Replay 同时设置 `max_tokens` 和 `min_tokens` 为实际发送目标长度（
 完整字段、默认值和约束见[Replay 配置模型](../../../agentinfer/agentbench/replay/config.py)与
 [示例 YAML](../../../agentinfer/agentbench/configs/replay_benchmark.yaml)。运行
 `vllm bench serve --agentinfer replay --help` 查看支持的 CLI 覆盖参数。
+
+### 回放 AgentX Hash 快照
+
+设置 `replay.trace_type: agentX`、本地 `replay.trace_path` 和
+`backend.endpoint: /v1/completions`。源文件每行是一个 Session；转换器展开主请求与子 agent 组内的请求，
+保留它们共享的会话时间轴。每条请求的 `hash_ids` 表示完整输入。实时输出只用于本轮测量，不追加到下一轮。
+所有 token ID 使用配置的 Backend 模型；来源模型名称保留在分析产物中，并用于隔离同一 Runtime Session
+内的块。重复采样会生成独立的 Runtime Session 和块内容。
+AgentX 要求 `prompt_calibration_tolerance_tokens=0`。默认值已是 `0`，AgentX YAML 无需填写；
+序列化配置再次加载时，显式的 `0` 仍然有效。
+
+转换器用 `t`、`api_time` 推断开始前最近完成的调度前驱。该关系只是时间推断，不代表已恢复父子因果；
+子 agent 身份仍会传递，`blocks_parent` 设为 false。转换结果保留零输出请求；规划时将其执行输出目标
+映射为 1 个 token，发送请求和响应校验均使用该目标，分析产物中的来源输出数量仍为 0。
+后端上下文窗口必须容纳选中请求的输入与规划输出目标。
+`replay.max_inflight_requests` 限制每个 Runtime Session 同时在途的 AgentX 请求数。
+请求到达计划释放时间并取得会话内信号量后，才读取 hash 配方和构建 token 快照，以限制同时持有的
+大输入数量；完成后不保留输入快照或实时回答作为后续上下文。`scheduler_lag_seconds` 包括信号量等待
+和快照构建耗时，因此实际发送时间可能晚于计划释放时间。该指标不是纯 HTTP 或后端推理耗时。
 
 ### 保留实时回答并对齐输入长度
 

@@ -1,0 +1,12 @@
+{
+  "sessions": 393,
+  "requests": 68266,
+  "analyzed_requests": 68266,
+  "row_analysis": {
+    "zero_output_requests": 28,
+    "subagent_requests": 39822,
+    "overlapping_request_pairs": 84898
+  },
+  "duration_seconds": 180.0364664820372,
+  "source_sha256": "fd8d7fd17cf2f5027f68a255d2d2e46327c08529e79f7a1e423f47cc1d1faa96"
+}

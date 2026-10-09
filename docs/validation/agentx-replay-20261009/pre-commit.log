@@ -1,0 +1,9 @@
+ruff check...............................................................Passed
+ruff format..............................................................Passed
+typos....................................................................Passed
+markdownlint-cli2........................................................Passed
+Suggestion...............................................................Passed
+- hook id: suggestion
+- duration: 0s
+
+To bypass all the pre-commit hooks, add --no-verify to git commit. To skip a specific hook, prefix the commit command with SKIP=<hook-id>.

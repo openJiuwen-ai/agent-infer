@@ -190,15 +190,18 @@ def test_replay_requires_positive_task_num(experiment: dict[str, object]) -> Non
         ("inferact_codex_swebenchpro", "inferact_synthetic"),
         ("agentinfer", "agentinfer_synthetic"),
         ("tracelab", "tracelab_synthetic"),
-        ("agentX", "agentX_synthetic"),
+        ("agentX", "agentX_snapshot"),
     ],
 )
 def test_replay_yaml_derives_prompt_shape_and_round_trips(tmp_path: Path, trace_type: str, shape: str) -> None:
     config_path = tmp_path / "replay.yaml"
+    endpoint = "/v1/completions" if trace_type == "agentX" else "/v1/chat/completions"
     config_path.write_text(
         f"""
 experiment:
   task_num: 1
+backend:
+  endpoint: {endpoint}
 replay:
   trace_type: {trace_type}
   trace_path: source.json
@@ -376,6 +379,21 @@ def test_tracelab_requires_exact_calibration_and_chat_endpoint() -> None:
         payload[section][field] = value
         with pytest.raises(ValidationError, match=message):
             ReplayBenchConfig.model_validate(payload)
+
+
+@pytest.mark.parametrize("tolerance", [None, 0, 1])
+def test_agentx_tolerance_is_fixed_to_zero_and_round_trips(tolerance: int | None) -> None:
+    replay = {"trace_type": "agentX", "trace_path": "source.jsonl"}
+    if tolerance is not None:
+        replay["prompt_calibration_tolerance_tokens"] = tolerance
+    payload = {"backend": {"endpoint": "/v1/completions"}, "replay": replay}
+    if tolerance == 1:
+        with pytest.raises(ValidationError, match="agentX requires prompt_calibration_tolerance_tokens=0"):
+            ReplayBenchConfig.model_validate(payload)
+        return
+    config = ReplayBenchConfig.model_validate(payload)
+    assert config.replay.prompt_calibration_tolerance_tokens == 0
+    assert ReplayBenchConfig.model_validate(config.model_dump(mode="json")).replay.prompt_shape == "agentX_snapshot"
 
 
 def test_trace_path_is_resolved_relative_to_yaml(tmp_path: Path) -> None:
