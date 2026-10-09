@@ -80,11 +80,12 @@ def _cross_agent_followup(tmp_path: Path):
 def _config(tmp_path: Path, *, scale: float, offset_seconds: float) -> ReplayBenchConfig:
     return ReplayBenchConfig.model_validate(
         {
+            "experiment": {"task_num": 1},
             "replay": {
                 "trace_path": tmp_path / "requests.jsonl",
                 "trace_same_agent_gap_scale": scale,
                 "trace_same_agent_gap_offset_seconds": offset_seconds,
-            }
+            },
         }
     )
 
@@ -126,6 +127,7 @@ def test_trace_cross_agent_delay_is_not_adjusted(tmp_path: Path) -> None:
 def test_three_quantile_lognormal_is_deterministic_and_matches_distribution() -> None:
     config = ReplayBenchConfig.model_validate(
         {
+            "experiment": {"task_num": 1},
             "replay": {
                 "trace_path": "requests.jsonl",
                 "interval_mode": "lognormal",
@@ -134,7 +136,7 @@ def test_three_quantile_lognormal_is_deterministic_and_matches_distribution() ->
                     "p95_seconds": 30,
                     "p99_seconds": 90,
                 },
-            }
+            },
         }
     )
     model = build_interval_model(config.replay)
@@ -167,11 +169,12 @@ def test_three_quantile_lognormal_is_deterministic_and_matches_distribution() ->
 def test_three_quantile_lognormal_rejects_inconsistent_anchors() -> None:
     config = ReplayBenchConfig.model_validate(
         {
+            "experiment": {"task_num": 1},
             "replay": {
                 "trace_path": "requests.jsonl",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 1, "p95_seconds": 2, "p99_seconds": 100},
-            }
+            },
         }
     )
 

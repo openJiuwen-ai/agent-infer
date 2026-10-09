@@ -59,7 +59,7 @@ def test_materialize_tracelab_source_keeps_first_complete_sessions(
     assert materialize_tracelab_source(2, cache_dir=tmp_path / "cache") == result
 
 
-def test_materialize_tracelab_source_rejects_too_few_sessions(
+def test_materialize_tracelab_source_keeps_all_when_fewer_than_requested(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -70,10 +70,31 @@ def test_materialize_tracelab_source_rejects_too_few_sessions(
         lambda **kwargs: str(source),
     )
 
-    with pytest.raises(ValueError, match="contains only 1 sessions; requested task_num=2"):
-        materialize_tracelab_source(2, cache_dir=tmp_path / "cache")
+    result = materialize_tracelab_source(2, cache_dir=tmp_path / "cache")
 
-    assert not (tmp_path / "cache" / "first-2-sessions.jsonl").exists()
+    assert [json.loads(line)["session_id"] for line in result.read_text().splitlines()] == ["only"]
+
+
+def test_materialize_tracelab_source_cleans_staging_after_invalid_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.jsonl.gz"
+    first = {"provider": "claude", "session_id": "first", "round_index": 0}
+    with gzip.open(source, mode="wt", encoding="utf-8") as output:
+        output.write(json.dumps(first) + "\n")
+        output.write("not json\n")
+    monkeypatch.setattr("agentinfer.agentbench.replay.tracelab_source.hf_hub_download", lambda **kwargs: str(source))
+    cache_dir = tmp_path / "cache"
+
+    with pytest.raises(ValueError, match="invalid TraceLab dataset JSON at line 2"):
+        materialize_tracelab_source(1, cache_dir=cache_dir)
+    assert list(cache_dir.iterdir()) == []
+
+    _write_gzip(source, [first])
+    result = materialize_tracelab_source(1, cache_dir=cache_dir)
+    assert result.read_text(encoding="utf-8") == json.dumps(first) + "\n"
+    assert list(cache_dir.iterdir()) == [result]
 
 
 def test_resolve_replay_source_updates_copy_with_downloaded_path(

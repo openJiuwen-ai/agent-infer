@@ -9,6 +9,7 @@ SWE-bench correctness. Synthetic prompts do not establish exact text or performa
 Each input line describes one LLM round with `provider`, `session_id`, `round_index`,
 `input_tokens_total`, `prefix_tokens`, `newly_append_tokens`, `output_tokens`, `timing_events`, and `tools`.
 The converter preserves source token counts, groups rounds by provider and session, and emits ordered token-recipe IR requests.
+Within each session, `round_index` must start at 0 and increase contiguously; missing rounds fail conversion.
 Input and output targets come from their total counts; prefix and appended counts are retained without checking their sum.
 Tool metadata is retained for auditing; source tools are not executed.
 
@@ -22,14 +23,23 @@ vllm bench serve --agentinfer replay \
   --result-dir results/replay-tracelab-8x4
 ```
 
-Without `--config`, `--trace-type`, `--task-num`, `--max-concurrency`, `--base-url`, and `--model` are required.
+Without `--config`, `--trace-type`, `--task-num`, `--base-url`, and `--model` are required; `--max-concurrency`
+defaults to `1`. `task_num` is required for every Replay type and must be a positive integer.
 When TraceLab has `trace_path: null`, Replay downloads the pinned `v0.0.2` snapshot of `UW-SyFI/TraceLab` and
 extracts the first `task_num` complete sessions in first-seen source order. Every round belonging to those sessions is
 retained. The uncompressed JSONL is cached at
 `~/.cache/agentinfer/datasets/tracelab/v0.0.2/first-<task_num>-sessions.jsonl`, or below `XDG_CACHE_HOME` when set,
-and reused by later runs. Automatic download requires a non-null `task_num`. An explicit `--trace-path` always wins
+and reused by later runs. If fewer source sessions exist, the planner cycles them deterministically to `task_num`.
+An explicit `--trace-path` always wins
 and disables download. With `--config`, all CLI overrides are optional and explicitly supplied overrides take precedence.
 YAML paths resolve relative to that file; CLI paths resolve relative to the current directory.
+
+For Inferact with `trace_path: null`, Replay streams the pinned JSON array and closes the response after
+`task_num` complete records. Network chunks may read slightly ahead; the unread suffix is not validated.
+The subset is written atomically to
+`~/.cache/agentinfer/datasets/inferact_codex_swebenchpro/<revision>/first-<task_num>-records.json`
+(respecting `XDG_CACHE_HOME`). Existing subsets and complete Hugging Face cache files are reused without
+downloading. `HF_HUB_OFFLINE=1` fails explicitly when neither cache is available.
 
 | `--trace-type` | Packaged template |
 | --- | --- |
@@ -38,24 +48,30 @@ YAML paths resolve relative to that file; CLI paths resolve relative to the curr
 | `tracelab` | `replay_tracelab.yaml` |
 | `agentX` | `replay_agentX.yaml` (reserved; execution is not implemented) |
 
-Replay uses the full input and output token targets from the trace.
+Replay uses the trace's input and output token targets. TraceLab accepts `output_tokens: 0`; vLLM requires at least
+one generated token, so such a round is sent with `max_tokens: 1` and records one actual output token. The plan
+retains the source value and records `effective_output_tokens: 1`.
 `prompt_calibration_tolerance_tokens` must be zero. Both `trace` and `lognormal` intervals are supported.
 Task count and concurrency refer to runtime sessions; repeated samples have distinct identities and private content.
 
-The first round sends a synthetic user message. Each continuation uses `context_after` to retain the previous
-messages, append the live assistant response, and add a new synthetic user message. `send_after` still controls
-release after predecessor completion plus the configured interval. The shared graph executor requires a successful
-predecessor response; failed requests or prompt construction failures cause context-dependent successors to skip.
+A single warmup request uses `max(prefix_tokens at round_index=0 across all converted sessions) + 1` input tokens,
+regardless of which sessions the planner selects. The converter records this as `summary.warmup_input_tokens` in the
+IR manifest. Each selected session's first round takes its requested prefix from that warmup input. Later rounds
+take the first
+`min(prefix_tokens, previous input length + actual previous output length)` token IDs from the prior request in the
+same session, then add new tokens to reach `input_tokens_total`. Source and effective prefix lengths and any
+shortfall are recorded. Warmup usage and time are excluded from measured Replay results.
 
-The backend tokenizer counts the full conversation with its chat template. Calibration changes synthetic user text
-to meet the input target; it does not truncate live assistant responses. Strict mode fails when history alone exceeds
-the target. Adaptive mode may trim a bounded amount of historical synthetic user text, but TraceLab never resets
-or silently discards the assistant history to fit the target. An unreachable target fails the request.
-Missing SSE `[DONE]`, missing usage, or input/output token mismatches also fail the request.
+TraceLab sends token ID arrays to `/v1/completions`; the backend must return generated token IDs when
+`return_token_ids` is requested. The configured chat endpoint identifies the OpenAI backend, while
+`chat_template_kwargs` do not apply to TraceLab token ID requests. The model context window must fit the warmup
+and every input plus output target. Set `experiment.task_timeout_seconds: null` to avoid truncating long sessions;
+the packaged TraceLab template does this by default.
 
-Source `prefix_tokens` remain audit evidence, not an exact LCP target: retaining live conversation history can produce
-a different prefix from the source trace. Fixed-prefix template profiles and exact-LCP metrics are no longer emitted.
-Missing backend cache usage remains unavailable; first/continuation cache groups now follow `context_after`.
+`send_after` still controls release after predecessor completion plus the configured interval. The shared graph
+executor requires a successful predecessor response; failed requests cause dependent successors to skip. Missing
+SSE `[DONE]`, missing usage or generated token IDs, and input/output token mismatches fail a request. An incomplete
+TraceLab run is marked failed. Backend cache hits may still differ from the constructed prefix lengths.
 
 TraceLab IR uses `requests.jsonl` and `manifest.json` without text sidecars. Explicit analysis lives in
 `unified_trace_ir.py`; the existing analyzer and Inferact text IR remain supported. Regenerate earlier TraceLab IR and
@@ -66,8 +82,8 @@ workload fingerprints, runtime identities, and seeds. Historical prefix-copy run
 Prompt shape is derived automatically from `replay.trace_type`. Remove `replay.prompt_shape` from existing YAML
 files and remove `--prompt-shape` from commands; explicit prompt-shape configuration is rejected.
 Removing the field from serialized configuration changes workload fingerprints and runtime identities.
-IR `prompt_source.kind=token_recipe` is unchanged; its token targets now describe synthetic user turns with live
-assistant context. Changes to plans or prompt construction affect workload fingerprints and runtime identities.
+IR `prompt_source.kind=token_recipe` is unchanged; its token targets drive the synthetic token prefix tree.
+Changes to plans or prompt construction affect workload fingerprints and runtime identities.
 Inferact still preserves source human text and live assistant history; calibration residuals remain diagnostics
 in `trace-record-validation.json`, without rewriting that text or terminating the session for those residuals.
 
@@ -96,9 +112,8 @@ Run from the repository root, replacing `MODEL_NAME` with the actual served mode
 ```bash
 vllm bench serve --agentinfer replay \
   --config agentinfer/agentbench/configs/replay_benchmark.yaml \
-  --trace-path tests/agentbench/replay/claude_trace_8session_requests.jsonl \
   --base-url http://127.0.0.1:8000 \
-  --model MODEL_NAME --task-num 1 \
+  --model MODEL_NAME --task-num 8 --max-concurrency 4 \
   --result-dir results/replay-smoke
 ```
 
@@ -110,13 +125,14 @@ recording sources. The backend context window must accommodate the request targe
 
 | Configuration | Meaning |
 | --- | --- |
-| `replay.trace_type: agentinfer` | AgentInfer `requests.jsonl` input; automatically selects `agentinfer_synthetic`. |
-| `replay.trace_type: inferact_codex_swebenchpro` | Raw Inferact JSON; automatically selects `inferact_synthetic`. Requires `interval_mode: lognormal`, zero calibration tolerance, and `/v1/chat/completions`. |
-| `replay.trace_type: tracelab` | Normalized, uncompressed JSONL; a null `trace_path` downloads and extracts the first `task_num` complete sessions. Automatically selects `tracelab_synthetic`. Requires zero calibration tolerance and `/v1/chat/completions`. |
+| `replay.trace_type: agentinfer` | AgentInfer `requests.jsonl` input; a null `trace_path` uses the packaged eight-session dataset. Automatically selects `agentinfer_synthetic`. |
+| `replay.trace_type: inferact_codex_swebenchpro` | Raw Inferact JSON; a null `trace_path` downloads a pinned revision and caches up to the first `task_num` records. Automatically selects `inferact_synthetic`. Requires `interval_mode: lognormal`, zero calibration tolerance, and `/v1/chat/completions`. |
+| `replay.trace_type: tracelab` | Normalized, uncompressed JSONL; a null `trace_path` downloads and extracts the first `task_num` complete sessions. Automatically selects `tracelab_synthetic`. Requires zero calibration tolerance; uses token IDs through `/v1/completions` on the configured vLLM service. |
 | `replay.trace_type: agentX` | Automatically selects `agentX_synthetic`; reserved, execution raises `NotImplementedError`. |
 | `replay.interval_mode` | `trace` preserves historical intervals; `lognormal` generates configured intervals. |
 | `replay.sample_seed` | Reproducible session selection and backend sampling seed. |
-| `replay.context_adjustment_mode` | `strict` rejects non-append-only context; `adaptive` audits trims and context resets. |
+| `replay.context_adjustment_mode` | Controls generic synthetic prompt calibration; TraceLab uses the token prefix rule above. |
+| `experiment.task_timeout_seconds` | Per-session timeout; `null` disables it. |
 | `replay.request_timeout_seconds` | Per-request timeout. |
 
 For all fields, defaults, and constraints see the [Replay configuration

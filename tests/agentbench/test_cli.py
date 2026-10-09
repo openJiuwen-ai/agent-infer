@@ -48,11 +48,12 @@ def test_schema_overrides_metrics_url(tmp_path: Path) -> None:
 def test_replay_cli_derives_prompt_shape_after_trace_type_override(trace_type: str, shape: str) -> None:
     config = ReplayBenchConfig.model_validate(
         {
+            "experiment": {"task_num": 1},
             "replay": {
                 "trace_path": "source.json",
                 "interval_mode": "lognormal",
                 "interval_lognormal": {"p50_seconds": 2, "p95_seconds": 30, "p99_seconds": 90},
-            }
+            },
         }
     )
     args = _parser().parse_args(["replay", "--config", "replay.yaml", "--trace-type", trace_type])
@@ -284,8 +285,9 @@ def test_replay_without_config_requires_selection_arguments(capsys) -> None:
 
     error = capsys.readouterr().err
     assert "replay without --config requires" in error
-    for flag in ("--trace-type", "--task-num", "--max-concurrency", "--base-url", "--model"):
+    for flag in ("--trace-type", "--task-num", "--base-url", "--model"):
         assert flag in error
+    assert "--max-concurrency" not in error
 
 
 def test_replay_without_config_allows_tracelab_dataset_download(
@@ -305,8 +307,6 @@ def test_replay_without_config_allows_tracelab_dataset_download(
                 "tracelab",
                 "--task-num",
                 "3",
-                "--max-concurrency",
-                "2",
                 "--base-url",
                 "http://backend:8000",
                 "--model",
@@ -317,6 +317,7 @@ def test_replay_without_config_allows_tracelab_dataset_download(
     )
 
     assert calls[0].replay.trace_path is None
+    assert calls[0].experiment.max_concurrency == 1
 
 
 def test_compare_delegates_to_owned_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
