@@ -126,7 +126,7 @@ Workflow / Pipeline（工作流/流水线）
                  ▼
           ┌──────────────────────────────┐
           │  Jenkins Controller          │  ← 主节点（只做调度，不做构建）
-          │  (Controler / 以前叫 Master) │     • 8C/16G 够用
+          │  (Controller / 以前叫 Master)│     • 8C/16G 够用
           │                               │     • 装 Jenkins 本体程序
           │                               │     • 存所有流水线配置
           │    任务队列 + 派单逻辑        │     • 80/443 端口暴露 Web UI

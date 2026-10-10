@@ -46,7 +46,7 @@ downloading. `HF_HUB_OFFLINE=1` fails explicitly when neither cache is available
 | `agentinfer` | `replay_agentinfer.yaml` |
 | `inferact_codex_swebenchpro` | `replay_inferact.yaml` |
 | `tracelab` | `replay_tracelab.yaml` |
-| `agentX` | `replay_agentX.yaml` (reserved; execution is not implemented) |
+| `agentX` | `replay_agentX.yaml` |
 
 Replay uses the trace's input and output token targets. TraceLab accepts `output_tokens: 0`; vLLM requires at least
 one generated token, so such a round is sent with `max_tokens: 1` and records one actual output token. The plan
@@ -128,7 +128,7 @@ recording sources. The backend context window must accommodate the request targe
 | `replay.trace_type: agentinfer` | AgentInfer `requests.jsonl` input; a null `trace_path` uses the packaged eight-session dataset. Automatically selects `agentinfer_synthetic`. |
 | `replay.trace_type: inferact_codex_swebenchpro` | Raw Inferact JSON; a null `trace_path` downloads a pinned revision and caches up to the first `task_num` records. Automatically selects `inferact_synthetic`. Requires `interval_mode: lognormal`, zero calibration tolerance, and `/v1/chat/completions`. |
 | `replay.trace_type: tracelab` | Normalized, uncompressed JSONL; a null `trace_path` downloads and extracts the first `task_num` complete sessions. Automatically selects `tracelab_synthetic`. Requires zero calibration tolerance; uses token IDs through `/v1/completions` on the configured vLLM service. |
-| `replay.trace_type: agentX` | Automatically selects `agentX_synthetic`; reserved, execution raises `NotImplementedError`. |
+| `replay.trace_type: agentX` | Nested session JSONL with 64-token local hash blocks; uses complete token-ID snapshots and `/v1/completions`. Source requests with `out=0` generate one token during Replay. |
 | `replay.interval_mode` | `trace` preserves historical intervals; `lognormal` generates configured intervals. |
 | `replay.sample_seed` | Reproducible session selection and backend sampling seed. |
 | `replay.context_adjustment_mode` | Controls generic synthetic prompt calibration; TraceLab uses the token prefix rule above. |
@@ -139,6 +139,32 @@ For all fields, defaults, and constraints see the [Replay configuration
 model](../../../agentinfer/agentbench/replay/config.py)
 and [example YAML](../../../agentinfer/agentbench/configs/replay_benchmark.yaml).
 Run `vllm bench serve --agentinfer replay --help` to list supported CLI overrides.
+
+### Replay AgentX hash snapshots
+
+Set `replay.trace_type: agentX`, an explicit local `replay.trace_path`, and
+`backend.endpoint: /v1/completions`. Each source line is a session. The converter
+expands lead requests and the requests nested inside subagent groups, retaining
+their shared session timeline. A request's `hash_ids` describes its complete input;
+live output is measured but never appended to the next input. The configured
+Backend model supplies all token IDs. Source model names remain in analysis and
+partition generated blocks within a runtime session. Repeated samples have
+different runtime session IDs and different token blocks.
+AgentX requires `prompt_calibration_tolerance_tokens=0`. The default already supplies zero, so omit it from
+the AgentX YAML; an explicit zero remains valid when serialized configurations are reloaded.
+
+The source's `t` and `api_time` infer the most recently completed scheduling
+predecessor. This is a timing relationship, not proof of parent/child causality;
+subagent identity is retained while `blocks_parent` is false. The converter
+keeps zero-output records for coverage; planning maps their output target to one
+token for Backend execution and exact response validation. The source output count
+remains zero in analysis. Set the Backend context limit high enough for the selected
+request's `input_tokens + planned_output_tokens`. `replay.max_inflight_requests` bounds
+simultaneous AgentX requests within each runtime session.
+Snapshots are read and rendered after the planned release time and inside the session semaphore,
+bounding the number of prepared large inputs. Completed requests do not retain snapshots or live answers
+as continuation context. `scheduler_lag_seconds` includes semaphore wait and snapshot rendering, so
+actual sends can occur after their planned release time; it is not an HTTP or Backend-only latency.
 
 ### Align input lengths while retaining live answers
 

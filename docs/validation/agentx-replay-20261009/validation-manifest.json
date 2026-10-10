@@ -1,0 +1,183 @@
+{
+  "host": "zhike",
+  "gpu": [
+    "NVIDIA L20, 46068 MiB, 580.178.04",
+    "NVIDIA L20, 46068 MiB, 580.178.04"
+  ],
+  "model_path": "/home/models/Qwen3-Coder-30B-A3B-Instruct-FP8",
+  "server_environment": "agent-detector==2.0.0\naiohappyeyeballs==2.7.1\naiohttp==3.14.4\naiosignal==1.4.0\nannotated-doc==0.0.5\nannotated-types==0.8.0\nanthropic==1.12.1\nanyio==4.15.1\napache-tvm-ffi==0.1.14.post1\nastor==0.8.1\nattrs==26.1.0\nblake3==1.0.11\ncachetools==7.2.1\ncbor2==6.1.5\ncertifi==2026.7.22\ncffi==2.1.1\ncharset-normalizer==3.5.2\nclick==8.5.0\ncloudpickle==3.1.2\ncompressed-tensors==0.14.0.1\ncryptography==50.0.2\ncuda-bindings==12.9.4\ncuda-pathfinder==1.8.3\ndepyf==0.20.0\ndetect-installer==0.2.1\ndill==0.4.1\ndiskcache==5.6.3\ndnspython==2.8.0\ndocstring-parser==0.18.0\neinops==0.8.2\nemail-validator==2.3.0\nfastapi==0.115.12\nfastapi-cli==0.0.32\nfastapi-cloud-cli==0.26.0\nfastar==0.12.0\nfilelock==4.0.12\nflashinfer-cubin==0.6.6\nflashinfer-python==0.6.6\nfrozenlist==1.8.0\nfsspec==2026.9.0\ngguf==0.19.0\ngoogleapis-common-protos==1.75.5\ngrpcio==1.84.0\nh11==0.16.0\nhf-xet==1.7.0\nhttpcore==1.0.9\nhttpcore2==2.13.1\nhttptools==0.8.0\nhttpx==0.28.1\nhttpx2==2.13.1\nhuggingface-hub==0.36.2\nidna==3.20\nijson==3.5.1\ninteregular==0.3.3\njinja2==3.1.6\njiter==0.17.0\njmespath==1.1.0\njsonschema==4.26.0\njsonschema-specifications==2025.9.1\nlark==1.2.2\nllguidance==1.3.0\nllvmlite==0.44.0\nlm-format-enforcer==0.11.3\nloguru==0.7.3\nmarkdown-it-py==4.2.0\nmarkupsafe==3.0.4\nmcp==2.3.0\nmcp-types==2.3.0\nmdurl==0.1.2\nmistral-common==1.12.0\nmodel-hosting-container-standards==0.1.16\nmpmath==1.3.0\nmsgspec==0.22.0\nmultidict==6.9.1\nnetworkx==3.6.1\nninja==1.13.2\nnumba==0.61.2\nnumpy==2.2.6\nnvidia-cublas-cu12==12.8.4.1\nnvidia-cuda-cupti-cu12==12.8.90\nnvidia-cuda-nvrtc-cu12==12.8.93\nnvidia-cuda-runtime-cu12==12.8.90\nnvidia-cudnn-cu12==9.10.2.21\nnvidia-cudnn-frontend==1.18.0\nnvidia-cufft-cu12==11.3.3.83\nnvidia-cufile-cu12==1.13.1.3\nnvidia-curand-cu12==10.3.9.90\nnvidia-cusolver-cu12==11.7.3.90\nnvidia-cusparse-cu12==12.5.8.93\nnvidia-cusparselt-cu12==0.7.1\nnvidia-cutlass-dsl==4.8.0\nnvidia-cutlass-dsl-libs-base==4.8.0\nnvidia-cutlass-dsl-libs-core==4.8.0\nnvidia-cutlass-dsl-libs-cu12==4.8.0\nnvidia-ml-py==13.615.71\nnvidia-nccl-cu12==2.27.5\nnvidia-nvjitlink-cu12==12.8.93\nnvidia-nvshmem-cu12==3.4.5\nnvidia-nvtx-cu12==12.8.90\nopenai==3.26.1\nopenai-harmony==0.0.8\nopencv-python-headless==5.0.0.93\nopentelemetry-api==1.45.1\nopentelemetry-exporter-http-transport==0.66b1\nopentelemetry-exporter-otlp==1.45.1\nopentelemetry-exporter-otlp-common==0.66b1\nopentelemetry-exporter-otlp-proto-common==1.45.1\nopentelemetry-exporter-otlp-proto-grpc==1.45.1\nopentelemetry-exporter-otlp-proto-http==1.45.1\nopentelemetry-proto==1.45.1\nopentelemetry-sdk==1.45.1\nopentelemetry-semantic-conventions==0.66b1\nopentelemetry-semantic-conventions-ai==0.5.1\noutlines-core==0.2.11\npackaging==26.3\npartial-json-parser==0.2.1.1.post7\npillow==12.3.0\nprometheus-client==0.26.0\nprometheus-fastapi-instrumentator==7.1.0\npropcache==0.5.4\nprotobuf==7.36.2\npsutil==7.2.2\npy-cpuinfo==9.0.0\npybase64==1.5.1\npycountry==26.2.16\npycparser==3.1\npydantic==2.13.5\npydantic-core==2.46.5\npydantic-extra-types==2.11.1\npydantic-settings==2.15.0\npygments==2.21.0\npyjwt==2.15.1\npython-dotenv==1.2.4\npython-json-logger==4.2.0\npython-multipart==0.0.32\npyyaml==6.0.3\npyzmq==27.2.0\nquack-kernels==0.6.5\nreferencing==0.37.0\nregex==2026.9.29\nrequests==2.34.2\nrich==15.0.0\nrich-toolkit==0.20.6\nrignore==0.8.1\nrpds-py==2026.9.1\nsafetensors==0.8.0\nsentencepiece==0.2.2\nsentry-sdk==2.71.0\nsetproctitle==1.3.8\nsetuptools==84.0.0\nshellingham==1.5.4\nsniffio==1.3.1\nsse-starlette==3.5.0\nstarlette==0.46.2\nsupervisor==4.3.0\nsympy==1.14.0\ntabulate==0.10.0\ntiktoken==0.14.0\ntokenizers==0.22.2\ntorch==2.10.0\ntorch-c-dlpack-ext==0.1.5\ntorchaudio==2.10.0\ntorchvision==0.25.0\ntqdm==4.70.1\ntransformers==4.57.6\ntriton==3.6.0\ntruststore==0.10.4\ntyper==0.27.3\ntyping-extensions==4.16.0\ntyping-inspection==0.4.4\nurllib3==2.8.0\nuvicorn==0.54.0\nuvloop==0.23.0\nvllm==0.19.0\nwatchfiles==1.3.0\nwebsockets==17.2\nxgrammar==0.2.8\nyarl==1.25.1",
+  "client_environment": "-e file:///home/yangjianjuan/agent-infer\naiohappyeyeballs==2.7.1\naiohttp==3.14.4\naiosignal==1.4.0\nannotated-doc==0.0.5\nannotated-types==0.8.0\nanyio==4.15.1\nattrs==26.1.0\ncertifi==2026.7.22\ncfgv==3.5.0\nclick==8.5.0\ncontourpy==1.3.3\ncycler==0.12.1\ndatasets==5.1.0\ndill==0.4.1\ndistlib==0.4.3\nfastapi==0.143.0\nfilelock==4.0.12\nfonttools==4.66.1\nfrozenlist==1.8.0\nfsspec==2026.7.0\nh11==0.16.0\nhf-xet==1.7.0\nhttpcore==1.0.9\nhttpcore2==2.13.1\nhttpx==0.28.1\nhttpx2==2.13.1\nhuggingface-hub==2.2.0\nidentify==2.6.20\nidna==3.20\niniconfig==2.3.1\nkiwisolver==1.5.1\nmatplotlib==3.11.2\nmultidict==6.9.1\nmultiprocess==0.70.19\nnodeenv==1.11.0\nnumpy==2.4.6\nopentelemetry-api==1.45.1\npackaging==26.3\npandas==3.0.6\npillow==12.3.0\nplatformdirs==4.12.4\npluggy==1.6.0\npre-commit==4.6.2\nprometheus-client==0.26.0\npropcache==0.5.4\npyarrow==25.0.1\npydantic==2.14.0\npydantic-core==2.50.0\npygments==2.21.0\npyparsing==3.3.3\npytest==9.1.1\npytest-timeout==2.4.0\npython-dateutil==2.9.0.post0\npython-discovery==1.6.1\npyyaml==6.0.3\nruff==0.14.0\nsix==1.17.0\nstarlette==1.7.0\ntqdm==4.70.1\ntruststore==0.10.4\ntyping-extensions==4.16.0\ntyping-inspection==0.4.4\nuvicorn==0.54.0\nvirtualenv==21.14.6\nwebsockets==17.2\nxxhash==4.0.1\nyarl==1.25.1\nzstandard==0.25.0",
+  "source": {
+    "dataset": "https://huggingface.co/datasets/semianalysisai/cc-traces-weka-062126-256k",
+    "file": "/home/yangjianjuan/trace-dataset/cc-traces-weka-062126-256k/traces.jsonl",
+    "original_sha256": "e39cd2ff3eba21d4a3664be51da743ac3d2149a1933898cafc7bfeac8147eeef",
+    "subset": "/home/yangjianjuan/trace-dataset/agentx-l20-8sessions.jsonl",
+    "subset_sha256": "661c989448aaec160f8750da455e878bca06bfd6cd3e929b04211e282f7ff9dc",
+    "session_ids": [
+      "12bd4c7c82ae413b035253cb800fc5312111",
+      "14129d470e508b236be22188aa78548ef805",
+      "1493faffdc8942e99daa22277f44871a40b8",
+      "259d1cc35e11b72660b8d6a33867cbb93759",
+      "35de830dbe1dbe90e6eaa36bc4814c7410ec",
+      "3735de09df4f9ac454aee913e2a00633ad0d",
+      "3e8b931fd474375ea08ae58872aea7a8e0f5",
+      "47a89e30bcdf1bc8002a026ad7ebfc914766"
+    ],
+    "selection": "first 8 complete sessions with every out > 0, in + out <= 100000, and source span <= 3600 seconds"
+  },
+  "server_command": "CUDA_VISIBLE_DEVICES=0,1 /home/yangjianjuan/agentx-l20-vllm-py311/bin/vllm serve /home/models/Qwen3-Coder-30B-A3B-Instruct-FP8 --served-model-name Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8 --host 127.0.0.1 --port 8020 --tensor-parallel-size 2 --max-model-len 100000 --gpu-memory-utilization 0.90 --max-num-seqs 8 --max-num-batched-tokens 8192 --enable-prefix-caching --enable-chunked-prefill",
+  "review_replay_command": "/home/yangjianjuan/agentx-review-test/bin/vllm bench serve --agentinfer replay --config /home/yangjianjuan/trace-dataset/replay_agentx_l20.yaml --result-dir /home/yangjianjuan/agentx-review-results-20261009/replay",
+  "unit_test_command": "/home/yangjianjuan/agentx-review-test/bin/python -m pytest -q tests/agentbench",
+  "full_dataset_offline": {
+    "sessions": 393,
+    "requests": 68266,
+    "analyzed_requests": 68266,
+    "row_analysis": {
+      "zero_output_requests": 28,
+      "subagent_requests": 39822,
+      "overlapping_request_pairs": 84898
+    },
+    "duration_seconds": 180.0364664820372,
+    "source_sha256": "fd8d7fd17cf2f5027f68a255d2d2e46327c08529e79f7a1e423f47cc1d1faa96"
+  },
+  "scope": {
+    "selected_sessions_live": "completed in all three runs",
+    "full_dataset_live": "not run",
+    "default_max_inflight_8_live": "not run; configured max_inflight_requests=1",
+    "original_trace_gaps_live": "not run; trace_same_agent_gap_scale=0"
+  },
+  "runs": [
+    {
+      "name": "baseline-cold1",
+      "code_revision": "e6db2ee211539656dcfcac1efbe6e6149a5aff58",
+      "result_dir": "/home/yangjianjuan/agentx-l20-results/cold1",
+      "status": "completed",
+      "archive": "baseline-cold1.tar.gz",
+      "archive_sha256": "f8244a76bb2bc01594cba6d0f8e024491db0c91021b8bc71b73957257047144b",
+      "tasks": {
+        "completed": 8,
+        "failed": 0,
+        "with_patch": 0,
+        "duration_seconds": {
+          "mean": 580.4981056844845,
+          "p50": 501.0917670954659,
+          "p95": 1166.2014407214035,
+          "p99": 1390.2413739506858
+        }
+      },
+      "requests": {
+        "requests": 254,
+        "successful_requests": 254,
+        "failed_requests": 0,
+        "input_tokens": 13957952,
+        "output_tokens": 162310,
+        "cache_creation_input_tokens": null,
+        "cached_input_tokens": null,
+        "prefix_cache_hit_rate": null,
+        "latency_seconds": {
+          "mean": 18.267300091442095,
+          "p50": 9.376698439533357,
+          "p95": 52.72985968205321,
+          "p99": 167.6995286064391
+        },
+        "ttft_seconds": {
+          "mean": 1.517337363839835,
+          "p50": 0.5780639435106423,
+          "p95": 6.802481774782063,
+          "p99": 16.58710600390622
+        }
+      },
+      "source_sha256": "c62d413b66d045eda47b783873a070da4deb802fab1d50a1adab11a6f422b128",
+      "workload_fingerprint": "d08e970736e7247be907b72efcd9158017a2896f6e82f2ea0d594944dc950161",
+      "vllm_prefix_cache_hit_rate": 0.9200088952877901
+    },
+    {
+      "name": "baseline-cold2",
+      "code_revision": "e6db2ee211539656dcfcac1efbe6e6149a5aff58",
+      "result_dir": "/home/yangjianjuan/agentx-l20-results/cold2",
+      "status": "completed",
+      "archive": "baseline-cold2.tar.gz",
+      "archive_sha256": "3efbc53ff937c17b6c9e3fb634afeb3968413082a7d45734c017a1c564ecca4d",
+      "tasks": {
+        "completed": 8,
+        "failed": 0,
+        "with_patch": 0,
+        "duration_seconds": {
+          "mean": 577.6995364149989,
+          "p50": 498.3759054795082,
+          "p95": 1161.1220545119368,
+          "p99": 1384.6977225655735
+        }
+      },
+      "requests": {
+        "requests": 254,
+        "successful_requests": 254,
+        "failed_requests": 0,
+        "input_tokens": 13957952,
+        "output_tokens": 162310,
+        "cache_creation_input_tokens": null,
+        "cached_input_tokens": null,
+        "prefix_cache_hit_rate": null,
+        "latency_seconds": {
+          "mean": 18.179084827218023,
+          "p50": 9.285940793488408,
+          "p95": 52.71418721045484,
+          "p99": 166.9523069901694
+        },
+        "ttft_seconds": {
+          "mean": 1.4718991007642568,
+          "p50": 0.5758363309723791,
+          "p95": 6.595522858700132,
+          "p99": 16.548176094547372
+        }
+      },
+      "source_sha256": "c62d413b66d045eda47b783873a070da4deb802fab1d50a1adab11a6f422b128",
+      "workload_fingerprint": "d08e970736e7247be907b72efcd9158017a2896f6e82f2ea0d594944dc950161",
+      "vllm_prefix_cache_hit_rate": 0.9200421379870055
+    },
+    {
+      "name": "review-fix",
+      "code_revision": "working tree based on e6db2ee; see tested-code.sha256",
+      "result_dir": "/home/yangjianjuan/agentx-review-results-20261009/replay",
+      "status": "completed",
+      "archive": "review-fix.tar.gz",
+      "archive_sha256": "dfe7ca7c617eaf316a85cea7232246fcd092beb868bdf06a891ea51efd5fc649",
+      "tasks": {
+        "completed": 8,
+        "failed": 0,
+        "with_patch": 0,
+        "duration_seconds": {
+          "mean": 578.357934986001,
+          "p50": 499.09053469548235,
+          "p95": 1161.9003534591461,
+          "p99": 1385.7214191878154
+        }
+      },
+      "requests": {
+        "requests": 254,
+        "successful_requests": 254,
+        "failed_requests": 0,
+        "input_tokens": 13957952,
+        "output_tokens": 162310,
+        "cache_creation_input_tokens": null,
+        "cached_input_tokens": null,
+        "prefix_cache_hit_rate": null,
+        "latency_seconds": {
+          "mean": 18.20020593855233,
+          "p50": 9.371606618980877,
+          "p95": 52.726050892789495,
+          "p99": 167.57347453465331
+        },
+        "ttft_seconds": {
+          "mean": 1.4704745233716172,
+          "p50": 0.570086432970129,
+          "p95": 6.613832201922194,
+          "p99": 16.571956618169782
+        }
+      },
+      "source_sha256": "c62d413b66d045eda47b783873a070da4deb802fab1d50a1adab11a6f422b128",
+      "workload_fingerprint": "d08e970736e7247be907b72efcd9158017a2896f6e82f2ea0d594944dc950161",
+      "vllm_prefix_cache_hit_rate": 0.9200444305869514
+    }
+  ]
+}
