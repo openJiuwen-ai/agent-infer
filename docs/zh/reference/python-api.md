@@ -96,8 +96,8 @@ def run_replay(
 ```
 
 同步运行回放并返回产物目录。`config` 是已解析配置，`cli_metadata` 是可选的调用证据；
-TraceLab 配置的 `trace_path` 为空时，会先下载固定版本数据集，并将前 `task_num` 个完整 Session 写入
-本地缓存后再运行；
+AgentInfer、Inferact 或 TraceLab 配置的 `trace_path` 为空时会解析对应默认数据源；下载的数据源使用固定
+版本和有界缓存；
 预留 trace 类型抛出 `NotImplementedError`，执行错误在记录失败产物后向调用方传播。
 该同步入口内部使用 `asyncio.run`，不能在已有事件循环的线程内调用。
 

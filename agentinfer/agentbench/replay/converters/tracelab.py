@@ -151,7 +151,7 @@ class TraceLabConverter(ReplayDatasetConverter):
                     raise ValueError(f"TraceLab line {source_line} duplicates provider/session_id/round_index")
                 identities.add(identity)
                 input_tokens = _integer(row, "input_tokens_total", source_line, positive=True)
-                output_tokens = _integer(row, "output_tokens", source_line, positive=True)
+                output_tokens = _integer(row, "output_tokens", source_line, positive=False)
                 cached_tokens = _integer(row, "prefix_tokens", source_line, positive=False)
                 appended_tokens = _integer(row, "newly_append_tokens", source_line, positive=False)
                 timing = _timing_proxy(row, source_line)
@@ -189,12 +189,25 @@ class TraceLabConverter(ReplayDatasetConverter):
                     }
                 )
 
+        ordered_sessions: dict[str, list[dict[str, object]]] = {}
+        for session_id, session_rows in grouped.items():
+            rows = sorted(session_rows, key=lambda row: int(row["round_index"]))
+            for expected_index, row in enumerate(rows):
+                actual_index = int(row["round_index"])
+                if actual_index != expected_index:
+                    raise ValueError(
+                        f"TraceLab session {row['source_provider']}/{row['source_session_id']} "
+                        f"round_index must start at 0 and be contiguous: "
+                        f"expected {expected_index}, found {actual_index} at line {row['source_line']}"
+                    )
+            ordered_sessions[session_id] = rows
+
         output_dir.mkdir(parents=True, exist_ok=False)
         requests_path = output_dir / "requests.jsonl"
         request_count = 0
         with requests_path.open("w", encoding="utf-8") as output:
-            for session_id in sorted(grouped):
-                rows = sorted(grouped[session_id], key=lambda row: int(row["round_index"]))
+            for session_id in sorted(ordered_sessions):
+                rows = ordered_sessions[session_id]
                 previous: dict[str, object] | None = None
                 for sequence_index, row in enumerate(rows):
                     row["sequence_index"] = sequence_index
@@ -233,11 +246,12 @@ class TraceLabConverter(ReplayDatasetConverter):
                     previous = row
 
         summary = ConverterSummary("tracelab", len(grouped), request_count, 0)
+        warmup_input_tokens = max((int(rows[0]["cached_tokens"]) for rows in ordered_sessions.values()), default=0) + 1
         write_trace_ir_manifest(
             output_dir,
             converter_name=self.name,
             source_path=source,
-            summary=summary.to_dict(),
+            summary={**summary.to_dict(), "warmup_input_tokens": warmup_input_tokens},
             prompt_source_kind="token_recipe",
         )
         return summary

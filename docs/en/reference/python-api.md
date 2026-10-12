@@ -100,8 +100,8 @@ def run_replay(
 ```
 
 runs Replay synchronously and returns the artifact directory. `config` is resolved configuration; `cli_metadata`
-is optional invocation evidence. A TraceLab configuration with a null `trace_path` first downloads the pinned
-dataset snapshot and caches the first `task_num` complete sessions. Reserved trace types raise `NotImplementedError`;
+is optional invocation evidence. A null `trace_path` resolves the default AgentInfer, Inferact, or TraceLab source;
+downloaded sources use pinned revisions and bounded caches. Reserved trace types raise `NotImplementedError`;
 execution errors propagate after
 failure artifacts are recorded. The synchronous entry uses `asyncio.run` and cannot run in a thread with an active
 event loop.

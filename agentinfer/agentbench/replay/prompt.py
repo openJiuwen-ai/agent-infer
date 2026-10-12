@@ -20,7 +20,7 @@ import httpx
 
 from .config import ReplayBenchConfig
 from .local_tokenizer import LocalTokenizerCounter
-from .planner import ReplayPlanNode, ReplayTaskPlan
+from .planner import ReplayPlan, ReplayPlanNode, ReplayTaskPlan
 from .tokenizer_retry import TOKENIZER_REQUEST_MAX_ATTEMPTS, TOKENIZER_RETRY_BACKOFF_SECONDS
 from .unified_trace_ir import PromptReference, TraceTextStore, UnifiedTraceIR
 
@@ -54,6 +54,9 @@ class PromptCalibration:
     trimmed_current_user_tokens: int = 0
     trimmed_current_user_characters: int = 0
     preserved_prefix_tokens: int | None = None
+    source_prefix_tokens: int | None = None
+    effective_prefix_tokens: int | None = None
+    prefix_shortfall_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -65,6 +68,7 @@ class SyntheticPrompt:
     messages: tuple[dict[str, object], ...]
     calibration: PromptCalibration | None = None
     extra_body: dict[str, object] | None = None
+    token_ids: tuple[int, ...] | None = None
 
     def anthropic_tools(self) -> list[dict[str, object]]:
         """Convert internal function tools to Anthropic Messages tool objects."""
@@ -114,6 +118,7 @@ class PromptExchange:
     prompt: SyntheticPrompt
     assistant_content: str
     assistant_reasoning_content: str | None = None
+    assistant_token_ids: tuple[int, ...] | None = None
 
 
 class TokenizerClient:
@@ -251,6 +256,20 @@ class TokenizerClient:
             self._text_cache[cache_key] = text
         return text
 
+    async def filler_token_ids(
+        self, namespace: str, count: int, *, forbidden_first: int | None = None
+    ) -> tuple[int, ...]:
+        """Generate stable token IDs with an explicit branch at the first new token."""
+
+        if count <= 0:
+            return ()
+        for variant in range(8):
+            seed = await self.text_token_ids(f" {hashlib.sha256(f'{namespace}:{variant}'.encode()).hexdigest()}")
+            first = next((index for index, token in enumerate(seed) if token != forbidden_first), None)
+            if first is not None:
+                return tuple(seed[(first + index) % len(seed)] for index in range(count))
+        raise ValueError("cannot construct a divergent TraceLab token suffix")
+
 
 class PromptBuilder:
     """Construct role-aware Prompt shapes and calibrate them to Trace targets."""
@@ -270,6 +289,51 @@ class PromptBuilder:
         ):
             raise ValueError("token_recipe Prompt construction requires token_recipe unified Trace IR")
         self.trace_texts = TraceTextStore(trace_ir) if trace_ir is not None else None
+        self.trace_ir = trace_ir
+        self._tracelab_warmup_ids: tuple[int, ...] | None = None
+        self._tracelab_root_branch_tokens: dict[str, int] = {}
+
+    async def prepare_tracelab_warmup(self, plan: ReplayPlan) -> tuple[int, ...]:
+        """Build the shared cache root before measured TraceLab execution."""
+
+        if self.config.replay.prompt_shape != "tracelab_synthetic":
+            raise ValueError("TraceLab warmup requires a TraceLab Replay plan")
+        if self.config.backend.endpoint != "/v1/chat/completions":
+            raise ValueError("TraceLab token-exact Replay requires a vLLM OpenAI endpoint")
+        assert self.trace_ir is not None
+        summary = self.trace_ir.summary
+        warmup_input_tokens = summary.get("warmup_input_tokens") if summary is not None else None
+        if isinstance(warmup_input_tokens, bool) or not isinstance(warmup_input_tokens, int) or warmup_input_tokens < 1:
+            raise ValueError("TraceLab conversion did not provide a valid warmup_input_tokens")
+        self._tracelab_warmup_ids = await self.tokenizer.filler_token_ids(
+            f"tracelab:warmup:{plan.workload_fingerprint}", warmup_input_tokens
+        )
+        roots = [
+            node
+            for task in plan.tasks
+            for node in task.requests
+            if node.node_type == "request" and node.context_after is None
+        ]
+        if roots:
+            candidates = dict.fromkeys(
+                await self.tokenizer.text_token_ids(" ".join(chr(code) for code in range(33, 127)))
+            )
+            used_by_prefix: dict[int, set[int]] = {}
+            for node in roots:
+                assert node.planned_input_tokens is not None
+                reused = node.source_prefix_tokens or 0
+                if reused == node.planned_input_tokens:
+                    continue
+                used = used_by_prefix.setdefault(reused, set())
+                forbidden = self._tracelab_warmup_ids[reused]
+                branch = next(
+                    (candidate for candidate in candidates if candidate not in used and candidate != forbidden), None
+                )
+                if branch is None:
+                    raise ValueError("not enough distinct token IDs for TraceLab root branches")
+                used.add(branch)
+                self._tracelab_root_branch_tokens[node.runtime_request_id] = branch
+        return self._tracelab_warmup_ids
 
     async def build(
         self,
@@ -312,24 +376,60 @@ class PromptBuilder:
         node: ReplayPlanNode,
         context: PromptExchange | None,
     ) -> SyntheticPrompt:
-        """Append live assistant history and calibrate synthetic user text to the input target."""
+        """Reuse the requested token prefix of the live predecessor or shared root."""
 
         if (node.context_after is not None) != (context is not None):
             raise ValueError(f"tracelab request {node.source_key} has inconsistent context")
-        messages = list(context.prompt.messages) if context is not None else []
-        if context is not None:
-            assistant: dict[str, object] = {"role": "assistant", "content": context.assistant_content}
-            if context.assistant_reasoning_content is not None:
-                assistant["reasoning_content"] = context.assistant_reasoning_content
-            messages.append(assistant)
-        messages.append({"role": "user", "content": ""})
         assert node.planned_input_tokens is not None
-        return await self._calibrate(
-            SyntheticPrompt("", (), tuple(messages)),
-            f"{task.runtime_session_id}:{node.prompt_recipe_key}",
-            node.planned_input_tokens,
-            context_mode=node.context_mode,
+        source_prefix = node.source_prefix_tokens
+        if source_prefix is None or source_prefix < 0 or source_prefix > node.planned_input_tokens:
+            raise ValueError(f"tracelab request {node.source_key} has invalid source prefix")
+        if context is None:
+            if self._tracelab_warmup_ids is None:
+                raise ValueError("TraceLab warmup has not completed")
+            previous = self._tracelab_warmup_ids
+        else:
+            if context.prompt.token_ids is None or context.assistant_token_ids is None:
+                raise ValueError(f"tracelab request {node.source_key} lacks predecessor token IDs")
+            previous = context.prompt.token_ids + context.assistant_token_ids
+        reused = min(source_prefix, len(previous))
+        forbidden = previous[reused] if reused < len(previous) else None
+        suffix_count = node.planned_input_tokens - reused
+        root_branch = (
+            self._tracelab_root_branch_tokens.get(getattr(node, "runtime_request_id", "")) if context is None else None
         )
+        if root_branch is None:
+            suffix = await self.tokenizer.filler_token_ids(
+                f"{task.runtime_session_id}:{node.prompt_recipe_key}",
+                suffix_count,
+                forbidden_first=forbidden,
+            )
+        else:
+            suffix = (root_branch,) + await self.tokenizer.filler_token_ids(
+                f"{task.runtime_session_id}:{node.prompt_recipe_key}", suffix_count - 1
+            )
+        tokens = previous[:reused] + suffix
+        target = node.planned_input_tokens
+        calibration = PromptCalibration(
+            target_tokens=target,
+            initial_tokens=reused,
+            final_tokens=len(tokens),
+            added_filler_tokens=len(suffix),
+            requested_filler_tokens=len(suffix),
+            actual_prompt_token_gain=len(suffix),
+            trimmed_filler_tokens=0,
+            residual_tokens=target - len(tokens),
+            target_met=len(tokens) == target,
+            accepted_with_tolerance=False,
+            repair_attempts=0,
+            count_history=(len(tokens),),
+            adjustment="pad" if suffix else "none",
+            preserved_prefix_tokens=reused,
+            source_prefix_tokens=source_prefix,
+            effective_prefix_tokens=reused,
+            prefix_shortfall_tokens=source_prefix - reused,
+        )
+        return SyntheticPrompt("", (), (), calibration=calibration, token_ids=tokens)
 
     async def _auxiliary_prompt(
         self,

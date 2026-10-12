@@ -74,6 +74,7 @@ class UnifiedTraceIR:
     manifest_path: Path
     bundle_sha256: str
     prompt_source_kind: str = "text_turns"
+    summary: dict[str, object] | None = None
 
     def text_path(self, reference: PromptReference) -> Path:
         """Resolve a validated prompt reference beneath this IR's text root."""
@@ -214,6 +215,7 @@ def validate_trace_ir(requests_path: Path, text_dir: Path | None = None) -> Unif
         raise ValueError("token_recipe unified Trace IR must not supply a text directory")
 
     request_rows = 0
+    first_cached_tokens: list[int] = []
     referenced_paths: set[Path] = set()
     references: set[PromptReference] = set()
     turns_by_session: dict[str, set[int]] = {}
@@ -273,7 +275,8 @@ def validate_trace_ir(requests_path: Path, text_dir: Path | None = None) -> Unif
                     raise ValueError(f"requests line {source_line} token_recipe cannot reference source text")
                 for field in ("input_tokens", "output_tokens"):
                     value = row.get(field)
-                    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                    minimum = 1 if field == "input_tokens" else 0
+                    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
                         raise ValueError(f"requests line {source_line} has invalid {field}")
                 cached = row.get("cached_tokens")
                 if (
@@ -283,6 +286,8 @@ def validate_trace_ir(requests_path: Path, text_dir: Path | None = None) -> Unif
                     or cached > row["input_tokens"]
                 ):
                     raise ValueError(f"requests line {source_line} has invalid cached_tokens")
+                if sequence == 0:
+                    first_cached_tokens.append(cached)
                 sequences = recipe_sequences.setdefault(session_id, set())
                 if sequence in sequences:
                     raise ValueError(f"requests line {source_line} duplicates sequence_index")
@@ -309,6 +314,11 @@ def validate_trace_ir(requests_path: Path, text_dir: Path | None = None) -> Unif
     session_count = len(turns_by_session) if prompt_source_kind == "text_turns" else len(recipe_sequences)
     if summary.get("sessions") != session_count:
         raise ValueError("manifest summary session coverage does not match the Trace IR")
+    if manifest.get("converter") == {"name": "tracelab"}:
+        warmup_input_tokens = summary.get("warmup_input_tokens")
+        expected_warmup_input_tokens = max(first_cached_tokens, default=0) + 1
+        if warmup_input_tokens != expected_warmup_input_tokens or isinstance(warmup_input_tokens, bool):
+            raise ValueError("TraceLab manifest warmup_input_tokens does not match first-round prefixes")
     return UnifiedTraceIR(
         root,
         requests_path,
@@ -316,6 +326,7 @@ def validate_trace_ir(requests_path: Path, text_dir: Path | None = None) -> Unif
         manifest_path,
         calculated_digest,
         prompt_source_kind,
+        summary,
     )
 
 
@@ -545,7 +556,7 @@ def analyze_explicit_trace_ir(trace_ir: UnifiedTraceIR) -> ReplayAnalysis:
                 round_index_gaps += 1
             previous_round_index = evidence.round_index
             input_tokens = _explicit_required_int(row, "input_tokens", source_line, positive=True)
-            output_tokens = _explicit_required_int(row, "output_tokens", source_line, positive=True)
+            output_tokens = _explicit_required_int(row, "output_tokens", source_line, positive=False)
             requests.append(
                 ReplayRequest(
                     key=request_id,

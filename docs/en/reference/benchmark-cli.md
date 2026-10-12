@@ -98,7 +98,8 @@ vllm bench serve --agentinfer replay --help
 ```
 
 With `--config`, all Replay overrides are optional. Without it, Replay selects a packaged template from
-`--trace-type` and requires `--trace-type`, `--task-num`, `--max-concurrency`, `--base-url`, and `--model`. Packaged
-TraceLab configurations with a null `trace_path` automatically download the pinned dataset and cache the first
-`task_num` complete sessions. An explicit `--trace-path` overrides that source. See
+`--trace-type` and requires `--trace-type`, `--task-num`, `--base-url`, and `--model`; `--max-concurrency` defaults to
+`1`. A null `trace_path` uses the default AgentInfer, Inferact, or TraceLab dataset. Inferact and TraceLab download
+pinned revisions and cache up to the first `task_num` complete records or sessions. An explicit `--trace-path`
+overrides that source. See
 [Trace Replay](../how-to/run-trace-replay.md).

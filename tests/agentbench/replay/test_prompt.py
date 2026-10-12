@@ -24,6 +24,7 @@ class _Tokenizer:
 def _config() -> ReplayBenchConfig:
     return ReplayBenchConfig.model_validate(
         {
+            "experiment": {"task_num": 1},
             "backend": {"endpoint": "/v1/messages"},
             "replay": {
                 "trace_path": "source.jsonl",
@@ -141,6 +142,7 @@ def test_tokenizer_count_forwards_chat_template_kwargs() -> None:
     async def count() -> int:
         config = ReplayBenchConfig.model_validate(
             {
+                "experiment": {"task_num": 1},
                 "backend": {
                     "endpoint": "/v1/chat/completions",
                     "chat_template_kwargs": {"enable_thinking": False, "clear_thinking": True},
@@ -174,6 +176,7 @@ def test_tokenizer_client_reuses_validated_local_counter() -> None:
     )
     config = ReplayBenchConfig.model_validate(
         {
+            "experiment": {"task_num": 1},
             "backend": {"endpoint": "/v1/chat/completions", "model": "local-model"},
             "replay": {"trace_path": "source.jsonl"},
         }
@@ -236,6 +239,7 @@ def test_minimal_claude_shape_preserves_context_without_cache_control() -> None:
     async def build() -> tuple[SyntheticPrompt, SyntheticPrompt]:
         config = ReplayBenchConfig.model_validate(
             {
+                "experiment": {"task_num": 1},
                 "replay": {
                     "trace_path": "source.jsonl",
                     "lead_1st_sys_shared_prefix": 2,
@@ -245,7 +249,7 @@ def test_minimal_claude_shape_preserves_context_without_cache_control() -> None:
                     "lead_1st_trailing_system_prefix": 6,
                     "lead_continuation_extra_system_ratio": 1,
                     "lead_continuation_system_tokens": 7,
-                }
+                },
             }
         )
         builder = PromptBuilder(config, _Tokenizer())  # type: ignore[arg-type]
@@ -378,10 +382,11 @@ class _OvershootTokenizer:
 def _calibration_config(*, tolerance: int = 1) -> ReplayBenchConfig:
     return ReplayBenchConfig.model_validate(
         {
+            "experiment": {"task_num": 1},
             "replay": {
                 "trace_path": "source.jsonl",
                 "prompt_calibration_tolerance_tokens": tolerance,
-            }
+            },
         }
     )
 
@@ -544,11 +549,12 @@ def test_claude_shape_calibration_changes_only_private_remainder() -> None:
     async def build() -> SyntheticPrompt:
         config = ReplayBenchConfig.model_validate(
             {
+                "experiment": {"task_num": 1},
                 "replay": {
                     "trace_path": "source.jsonl",
                     "lead_1st_msg_shared_prefix": 5,
                     "lead_1st_trailing_system_prefix": 6,
-                }
+                },
             }
         )
         node = SimpleNamespace(
@@ -590,10 +596,11 @@ def test_adaptive_prompt_calibration_trims_historical_synthetic_user_filler() ->
     async def build() -> SyntheticPrompt:
         config = ReplayBenchConfig.model_validate(
             {
+                "experiment": {"task_num": 1},
                 "replay": {
                     "trace_path": "source.jsonl",
                     "context_adjustment_mode": "adaptive",
-                }
+                },
             }
         )
         previous = SyntheticPrompt("", (), ({"role": "user", "content": "a" * 20},))
@@ -615,7 +622,10 @@ def test_adaptive_prompt_calibration_trims_historical_synthetic_user_filler() ->
 def test_strict_prompt_calibration_rejects_non_append_only_target() -> None:
     async def build() -> None:
         config = ReplayBenchConfig.model_validate(
-            {"replay": {"trace_path": "source.jsonl", "context_adjustment_mode": "strict"}}
+            {
+                "experiment": {"task_num": 1},
+                "replay": {"trace_path": "source.jsonl", "context_adjustment_mode": "strict"},
+            }
         )
         previous = SyntheticPrompt("", (), ({"role": "user", "content": "a" * 20},))
         exchange = PromptExchange(previous, "b" * 10)

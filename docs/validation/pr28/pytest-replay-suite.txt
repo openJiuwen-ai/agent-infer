@@ -1,0 +1,51 @@
+Fatal Python error: Segmentation fault
+
+Current thread 0x000071c700917740 (most recent call first):
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/compat.py", line 216 in ascii_escaped
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/python.py", line 1571 in _ascii_escaped_by_config
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/python.py", line 1041 in _idval_from_value
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/python.py", line 1006 in _idval
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/python.py", line 992 in <genexpr>
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/python.py", line 991 in _resolve_ids
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/python.py", line 913 in make_unique_parameterset_ids
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/python.py", line 1466 in _resolve_parameter_set_ids
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/python.py", line 1346 in parametrize
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/python.py", line 124 in pytest_generate_tests
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/pluggy/_hooks.py", line 573 in call_extra
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/python.py", line 476 in _genfunctions
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/python.py", line 250 in pytest_pycollect_makeitem
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/python.py", line 433 in collect
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/python.py", line 567 in collect
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/runner.py", line 406 in collect
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/runner.py", line 361 in from_call
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/runner.py", line 408 in pytest_make_collect_report
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/runner.py", line 589 in collect_one_node
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/main.py", line 895 in _collect_one_node
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/main.py", line 1032 in genitems
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/main.py", line 1035 in genitems
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/main.py", line 869 in perform_collect
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/main.py", line 394 in pytest_collection
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/main.py", line 383 in _main
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/main.py", line 330 in wrap_session
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/main.py", line 377 in pytest_cmdline_main
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/config/__init__.py", line 229 in _main
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/_pytest/config/__init__.py", line 253 in _console_main
+  File "/home/yangjianjuan/agent-infer/.venv/lib/python3.12/site-packages/pytest/__main__.py", line 9 in <module>
+  File "<frozen runpy>", line 88 in _run_code
+  File "<frozen runpy>", line 198 in _run_module_as_main
+
+Extension modules: yaml._yaml, zstandard.backend_c, numpy._core._multiarray_umath, numpy.linalg._umath_linalg (total: 4)

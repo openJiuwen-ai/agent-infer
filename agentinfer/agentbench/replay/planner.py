@@ -51,6 +51,7 @@ class ReplayPlanNode:
     planned_output_tokens: int | None
     backend_sampling_seed: int | None
     response_validation: Literal["exact_tokens"] | None = None
+    source_prefix_tokens: int | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Serialize only the materialized fields required to execute the node."""
@@ -84,6 +85,10 @@ class ReplayPlanNode:
             value["prompt_ref"] = self.prompt_ref.to_dict()
         if self.response_validation is not None:
             value["response_validation"] = self.response_validation
+            if self.planned_output_tokens == 0:
+                value["effective_output_tokens"] = 1
+        if self.source_prefix_tokens is not None:
+            value["source_prefix_tokens"] = self.source_prefix_tokens
         return value
 
 
@@ -282,6 +287,9 @@ def _task_plan(
                     else None
                 ),
                 response_validation="exact_tokens" if config.replay.prompt_shape == "tracelab_synthetic" else None,
+                source_prefix_tokens=(
+                    request.source_cached_tokens if config.replay.prompt_shape == "tracelab_synthetic" else None
+                ),
             )
         )
     return ReplayTaskPlan(
@@ -336,8 +344,13 @@ def _validate_task(task: ReplayTaskPlan, *, allow_unknown_context: bool = False)
         if node.node_type == "request":
             if not isinstance(node.planned_input_tokens, int) or node.planned_input_tokens <= 0:
                 raise ValueError("real Replay request has no positive input target")
-            if not isinstance(node.planned_output_tokens, int) or node.planned_output_tokens <= 0:
-                raise ValueError("real Replay request has no positive output target")
+            minimum_output = 0 if allow_unknown_context else 1
+            if not isinstance(node.planned_output_tokens, int) or node.planned_output_tokens < minimum_output:
+                raise ValueError("real Replay request has an invalid output target")
+            if node.source_prefix_tokens is not None and (
+                node.source_prefix_tokens < 0 or node.source_prefix_tokens > node.planned_input_tokens
+            ):
+                raise ValueError("TraceLab prefix_tokens must fit the input target")
         interval = node.effective_interval_seconds
         if not math.isfinite(interval) or interval < 0:
             raise ValueError("Replay interval must be finite and non-negative")
@@ -381,7 +394,9 @@ def build_replay_plan(
         raise ValueError("a unified Trace IR was supplied for a non-trace-record Replay mode")
     interval_model = build_interval_model(config.replay)
     replayable_count = sum(session.replayable for session in analysis.sessions)
-    total_tasks = config.experiment.task_num or replayable_count
+    total_tasks = config.experiment.task_num
+    if total_tasks is None:  # Defensive for unchecked model construction.
+        raise ValueError("experiment.task_num is required for Replay")
     if total_tasks <= 0:
         raise ValueError("the Replay trace has no usable sessions")
 
