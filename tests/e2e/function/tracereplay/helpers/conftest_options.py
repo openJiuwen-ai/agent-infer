@@ -1,20 +1,26 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
-"""Pytest options for Inferact replay functional E2E."""
+"""Shared pytest CLI options for Trace Replay functional E2E."""
 
 from __future__ import annotations
 
 import pytest
 
 
-def pytest_addoption(parser: pytest.Parser) -> None:
-    group = parser.getgroup("inferact_replay", "Inferact replay functional E2E options")
+def register_replay_e2e_options(
+    parser: pytest.Parser,
+    *,
+    group_name: str,
+    group_description: str,
+    cases_help: str,
+) -> None:
+    group = parser.getgroup(group_name, group_description)
     group.addoption(
         "--test-config-file",
         action="store",
         default=None,
         metavar="PATH",
-        help="Replay case JSON under tests/e2e/function/tracereplay/inferact/cases/",
+        help=cases_help,
     )
     group.addoption(
         "--task-num",
@@ -29,6 +35,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         type=int,
         default=None,
         help="Override benchmark_params max-concurrency",
+    )
+    group.addoption(
+        "--bench-config",
+        action="store",
+        default=None,
+        metavar="PATH",
+        help="Override benchmark_params config (replay bench YAML for --config)",
     )
     group.addoption(
         "--cold-runs",

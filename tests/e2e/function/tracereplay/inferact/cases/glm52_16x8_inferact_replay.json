@@ -53,6 +53,7 @@
   },
   "result_root": "test-results/replay",
   "benchmark_params": {
+    "config": "agentinfer/agentbench/configs/replay_inferact.yaml",
     "workload": "inferact-replay",
     "trace-path": "/your/path/codex_swebenchpro.json",
     "host": "127.0.0.1",

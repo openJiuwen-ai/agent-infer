@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
-"""Cold vLLM + replay bench cycles for Inferact functional E2E."""
+"""Cold vLLM + replay bench cycles for Trace Replay functional E2E."""
 
 from __future__ import annotations
 
 import subprocess
 from pathlib import Path
 
-from .....helpers.benchmark import validate_completed_run
-from .....helpers.server import managed_vllm
-from .replay_config import ReplayE2EConfig, build_replay_argv, build_replay_env
+from ....helpers.benchmark import validate_completed_run
+from ....helpers.server import managed_vllm
+from .replay_e2e_config import ReplayE2EConfig, build_replay_argv, build_replay_env
 
 
 def run_replay_case(config: ReplayE2EConfig) -> Path:

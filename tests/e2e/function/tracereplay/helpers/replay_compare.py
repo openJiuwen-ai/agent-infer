@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
-"""Compare two completed Inferact replay runs for repeatability."""
+"""Compare two completed Trace Replay runs for repeatability."""
 
 from __future__ import annotations
 
