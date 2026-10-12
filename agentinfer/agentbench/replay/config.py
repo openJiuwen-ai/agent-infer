@@ -49,7 +49,7 @@ class ReplayBackendConfig(ReplayStrictModel):
         "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
         json_schema_extra={"cli": True},
     )
-    endpoint: Literal["/v1/chat/completions", "/v1/messages"] = Field(
+    endpoint: Literal["/v1/chat/completions", "/v1/messages", "/v1/completions"] = Field(
         "/v1/chat/completions",
         json_schema_extra={"cli": True},
     )

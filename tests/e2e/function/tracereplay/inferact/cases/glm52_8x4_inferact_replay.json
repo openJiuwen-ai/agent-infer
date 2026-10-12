@@ -55,6 +55,10 @@
   "benchmark_params": {
     "config": "agentinfer/agentbench/configs/replay_inferact.yaml",
     "workload": "inferact-replay",
+    "metrics-url": "http://127.0.0.1:8077/metrics",
+    "endpoint": "/v1/chat/completions",
+    "trace-type": "inferact_codex_swebenchpro",
+    "interval-mode": "lognormal",
     "trace-path": "/your/path/codex_swebenchpro.json",
     "host": "127.0.0.1",
     "port": 8077,

@@ -55,6 +55,10 @@
   "benchmark_params": {
     "config": "agentinfer/agentbench/configs/replay_agentX.yaml",
     "workload": "agentx-replay",
+    "metrics-url": "http://127.0.0.1:8077/metrics",
+    "endpoint": "/v1/completions",
+    "trace-type": "agentX",
+    "interval-mode": "trace",
     "trace-path": "/your/path/traces-shortest-16-sessions.jsonl",
     "host": "127.0.0.1",
     "port": 8077,

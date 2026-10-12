@@ -209,6 +209,23 @@ class ReplayE2EConfig:
         )
 
 
+_BENCHMARK_REPLAY_CLI_FLAGS: tuple[tuple[str, str], ...] = (
+    ("metrics-url", "--metrics-url"),
+    ("endpoint", "--endpoint"),
+    ("trace-type", "--trace-type"),
+    ("interval-mode", "--interval-mode"),
+)
+
+
+def _append_benchmark_replay_cli(argv: list[str], benchmark: dict[str, object]) -> None:
+    """Append optional Replay bench CLI flags mirrored from ``benchmark_params``."""
+
+    for param_key, cli_flag in _BENCHMARK_REPLAY_CLI_FLAGS:
+        raw = benchmark.get(param_key)
+        if isinstance(raw, str) and raw.strip():
+            argv.extend([cli_flag, raw.strip()])
+
+
 def build_replay_argv(config: ReplayE2EConfig, result_dir: Path) -> list[str]:
     """Build ``vllm bench serve --agentinfer replay`` argv for one E2E run."""
 
@@ -233,9 +250,7 @@ def build_replay_argv(config: ReplayE2EConfig, result_dir: Path) -> list[str]:
     ]
     if config.trace_path is not None:
         argv.extend(["--trace-path", str(config.trace_path)])
-    metrics_url = config.case.benchmark_params.get("metrics-url")
-    if isinstance(metrics_url, str) and metrics_url.strip():
-        argv.extend(["--metrics-url", metrics_url.strip()])
+    _append_benchmark_replay_cli(argv, config.case.benchmark_params)
     return argv
 
 

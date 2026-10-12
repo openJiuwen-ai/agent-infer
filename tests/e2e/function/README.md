@@ -135,6 +135,7 @@ Replay execution for `trace_type: agentX` may still raise `NotImplementedError` 
 | `benchmark_params.workload` | Must be `agentx-replay` |
 | `benchmark_params.config` | Optional replay bench YAML (default: `replay_agentX.yaml`) |
 | `benchmark_params.trace-path` | Required AgentX JSONL for `--trace-path` |
+| `benchmark_params.metrics-url` / `endpoint` / `trace-type` / `interval-mode` | E2E forwards to Replay CLI (cases use `/v1/completions` + `agentX`) |
 | `result_root` | Usually `test-results/replay` |
 
 ## Trace data (Inferact)
@@ -198,11 +199,23 @@ Interval: `current.started_at - previous.finished_at` per `(session_id, actor_id
 | `benchmark_params.workload` | Must be `inferact-replay` |
 | `benchmark_params.config` | Optional replay bench YAML for `--config` (default in code: `replay_inferact.yaml`) |
 | `benchmark_params.trace-path` | Full trace file for `--trace-path` |
+| `benchmark_params.metrics-url` / `endpoint` / `trace-type` / `interval-mode` | Optional Replay CLI overrides (Inferact cases set lognormal + inferact trace type) |
 | `result_root` | Usually `test-results/replay` |
 
 On a host-specific bench template (e.g. `/home/.../replay_tracelab_test.yaml`), set `config` in the case JSON
-or pass `--bench-config`. E2E still passes `--model`, `--base-url`, `--task-num`, and `--max-concurrency`, which
-override the same keys in that YAML when the CLI supplies them.
+or pass `--bench-config`. E2E always passes `--model`, `--base-url`, `--task-num`, `--max-concurrency`, and
+`--result-dir`; when set in the case it also forwards Replay CLI mirrors:
+
+| `benchmark_params` | Bench CLI |
+| ------------------ | --------- |
+| `metrics-url` | `--metrics-url` |
+| `endpoint` | `--endpoint` |
+| `trace-type` | `--trace-type` |
+| `interval-mode` | `--interval-mode` |
+| `trace-path` | `--trace-path` (when present) |
+
+Fields without Replay CLI (e.g. `chat_template_kwargs`, `tokenizer_base_url`, `max_inflight_requests`) remain in
+the YAML referenced by `config`.
 
 ## Case JSON (TraceLab)
 
@@ -212,4 +225,5 @@ override the same keys in that YAML when the CLI supplies them.
 | `benchmark_params.workload` | Must be `tracelab-replay` |
 | `benchmark_params.config` | Optional replay bench YAML (default in code: `replay_tracelab.yaml`) |
 | `benchmark_params.trace-path` | TraceLab JSONL for `--trace-path`; omit to rely on YAML `trace_path: null` + download |
+| `benchmark_params.metrics-url` / `endpoint` / `trace-type` / `interval-mode` | E2E forwards to Replay CLI (cases default to local metrics + chat/completions + trace) |
 | `result_root` | Usually `test-results/replay` |
