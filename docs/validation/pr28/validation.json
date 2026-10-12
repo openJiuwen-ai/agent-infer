@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-08",
+  "review_url": "https://github.com/openJiuwen-ai/agent-infer/pull/28#pullrequestreview-5359696336",
+  "review_base_commit": "ff6b99c103a365d93979eb6e6777cf3dc330f85a",
+  "tested_revision": {
+    "base_commit": "ff6b99c103a365d93979eb6e6777cf3dc330f85a",
+    "working_tree_modified": true,
+    "description": "Base plus the streaming fix in this change; source fingerprints below identify the tested files. No new commit was created for this local validation."
+  },
+  "current_host": {
+    "os": "Linux-6.8.0-138-generic-x86_64-with-glibc2.35",
+    "gpu_count": 2,
+    "gpu_model": "NVIDIA L20",
+    "gpu_memory_mib_each": 46068,
+    "driver": "580.178.04",
+    "python": "3.12.13",
+    "packages": {
+      "pytest": "9.1.1",
+      "httpx": "0.28.1",
+      "huggingface-hub": "1.32.0",
+      "pydantic": "2.13.5"
+    },
+    "vllm_package_in_validation_environment": false,
+    "live_endpoint": "http://127.0.0.1:8020",
+    "endpoint_available": false
+  },
+  "cwd": "/home/yangjianjuan/agent-infer-pr28",
+  "checks": [
+    {
+      "id": "focused_regression",
+      "command": "/home/yangjianjuan/agent-infer/.venv/bin/python -m pytest -q tests/agentbench/replay/test_default_sources.py tests/agentbench/replay/test_unified_trace_ir.py tests/agentbench/replay/test_tracelab.py tests/agentbench/replay/test_planner.py tests/agentbench/replay/test_executor.py tests/agentbench/replay/test_transport.py tests/agentbench/replay/test_prompt.py tests/agentbench/test_runner_lifecycle.py",
+      "exit_code": 0,
+      "passed": 124,
+      "skipped": 1,
+      "output": "pytest.txt"
+    },
+    {
+      "id": "default_full_collection",
+      "command": "/home/yangjianjuan/agent-infer/.venv/bin/python -m pytest -q tests/agentbench/replay tests/agentbench/test_runner_lifecycle.py",
+      "exit_code": 139,
+      "status": "collection_crashed",
+      "reason": "Segmentation fault in pytest ascii_escaped; interpreter/tooling root cause not established.",
+      "output": "pytest-replay-suite.txt"
+    },
+    {
+      "id": "full_regression_without_id_escaping",
+      "command": "/home/yangjianjuan/agent-infer/.venv/bin/python -m pytest -q -o disable_test_id_escaping_and_forfeit_all_rights_to_community_support=True tests/agentbench/replay tests/agentbench/test_runner_lifecycle.py",
+      "exit_code": 0,
+      "passed": 231,
+      "skipped": 1,
+      "output": "pytest-replay-suite-no-id-escaping.txt"
+    },
+    {
+      "id": "inferact_real_network_1",
+      "command": "HF_HUB_DISABLE_TELEMETRY=1 HF_HUB_DISABLE_IMPLICIT_TOKEN=1 PYTHONPATH=. /home/yangjianjuan/agent-infer/.venv/bin/python docs/validation/pr28/download_smoke.py --task-num 1",
+      "exit_code": 0,
+      "status": "passed",
+      "output": "download-smoke-1.txt",
+      "source_revision": "0d52ae8c75738117be9e58c7071bd9a5b43ff78f",
+      "cache": "Isolated temporary subset; existing Hub blob lookup bypassed for measurement; real HTTP response and production parser.",
+      "full_blob_bytes": 218648292
+    },
+    {
+      "id": "inferact_real_network_8",
+      "command": "HF_HUB_DISABLE_TELEMETRY=1 HF_HUB_DISABLE_IMPLICIT_TOKEN=1 PYTHONPATH=. /home/yangjianjuan/agent-infer/.venv/bin/python docs/validation/pr28/download_smoke.py --task-num 8",
+      "exit_code": 0,
+      "status": "passed",
+      "output": "download-smoke-8.txt",
+      "source_revision": "0d52ae8c75738117be9e58c7071bd9a5b43ff78f",
+      "cache": "Isolated temporary subset; existing Hub blob lookup bypassed for measurement; real HTTP response and production parser.",
+      "full_blob_bytes": 218648292
+    },
+    {
+      "id": "pre_commit",
+      "command": "/home/yangjianjuan/agent-infer/.venv/bin/pre-commit run --files agentinfer/agentbench/replay/inferact_source.py agentinfer/agentbench/replay/converters/codex_swebenchpro.py tests/agentbench/replay/test_default_sources.py docs/zh/how-to/run-trace-replay.md docs/en/how-to/run-trace-replay.md docs/validation/pr28/README.md docs/validation/pr28/download_smoke.py docs/validation/pr28/verify.py",
+      "exit_code": 0,
+      "status": "passed",
+      "output": "pre-commit.txt"
+    }
+  ],
+  "historical_live": {
+    "status": "completed_historical_not_current_head",
+    "started_at": "2026-09-28T11:30:04.755555+00:00",
+    "exact_commit": null,
+    "vllm_version": null,
+    "gpu_inventory": null,
+    "server_launch_command": null,
+    "console_log": null,
+    "provenance_limit": "These fields were not captured in the original artifacts. Current host details must not be substituted. Historical warmup input was 76 tokens; current round-zero-only selection would use 33 for this input.",
+    "command_reported_in_original_pr": "REPLAY_LIVE_BASE_URL=http://127.0.0.1:8020 .venv/bin/pytest -q tests/agentbench/replay/test_tracelab.py::test_tracelab_live_eight_tasks_four_concurrent",
+    "config": "historical-live/live-run/manifest.json",
+    "input_trace": "historical-live/live-eight-sessions.jsonl",
+    "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+    "workload": "Synthetic short trace; 8 complete sessions, two requests per session",
+    "task_num": 8,
+    "max_concurrency": 4,
+    "expected": {
+      "requests": 16,
+      "successful_requests": 16,
+      "failed_requests": 0,
+      "input_tokens": 1152,
+      "output_tokens": 114,
+      "completed_tasks": 8,
+      "failed_tasks": 0
+    },
+    "warmup": {
+      "input_tokens": 76,
+      "output_tokens": 1,
+      "included_in_request_metrics": false
+    },
+    "raw_requests": "historical-live/live-run/requests.jsonl",
+    "parsed_summary": "historical-live/live-run/summary.json"
+  },
+  "current_head_live": {
+    "status": "not_run",
+    "reason": "No local vLLM service listening on port 8020; vLLM absent from validation Python. Live test skipped.",
+    "command": "REPLAY_LIVE_BASE_URL=http://127.0.0.1:8020 python -m pytest -q tests/agentbench/replay/test_tracelab.py::test_tracelab_live_eight_tasks_four_concurrent --basetemp=results/pr28-live-8x4"
+  },
+  "full_real_trace_8x4": {
+    "status": "not_run",
+    "original_pr_reported_required_context": 420339,
+    "original_pr_reported_backend_limit": 100000,
+    "reason": "Original full workload exceeded the reported backend context limit. No current live service is available; these context numbers were not remeasured."
+  },
+  "tested_source_sha256": {
+    "agentinfer/agentbench/replay/inferact_source.py": "e7e5e49d86111994a36fdecb74fd720b66d06aaba80d2bafa33c5e0d1e2d1d26",
+    "agentinfer/agentbench/replay/converters/codex_swebenchpro.py": "450bffc613ad060bbb7da96938352dd60853079a1e28ff51dbc002e4904d3197",
+    "tests/agentbench/replay/test_default_sources.py": "d80e7810f65e0a112a104eb9762bb455c25f6e9cbb7eed8df1c66dd1746d6beb",
+    "tests/agentbench/replay/test_tracelab.py": "4068b23e5ded55e6e071f9c4821cdcdaded6431a700ca3d0bb18e5991b7eba20"
+  },
+  "artifact_sha256": {
+    "README.md": "34f0f82738ebc7b4bae87db130fcfdfa6dec9923bde26003db4ce40a8bcc669b",
+    "download-smoke-1.txt": "282104116e2fe0b8469b9f9d87c8d987be9a67b668e4cffe901666eb260c3231",
+    "download-smoke-8.txt": "cdb47871bc15385a12c32f21587f6f86d3700bf1c21c7d5a63cdd8c547a3c1bf",
+    "download_smoke.py": "b220671fb629edc12b156ec2225529eed2514dc6f6c28193125141ed61a6c7bd",
+    "historical-live/live-eight-sessions.jsonl": "11e46b00aafd3f5396e75d2fc9ea99ad5cc51d4ecaf4ec1496f03ad5564682a8",
+    "historical-live/live-run/convert_result/manifest.json": "566cc16ea921dde34ae660a7ea278a3fc993e7c10f45321b025623b9439cb583",
+    "historical-live/live-run/convert_result/requests.jsonl": "3f72a10540c22ff0fe7d9d7c9220b1a211c2e6055b3208acca418ccbe9e38f57",
+    "historical-live/live-run/evidence/tracelab_warmup.json": "43ba291a5703c868a6e443517f3f8361f240a505dc15cec78c2e838e430dfef1",
+    "historical-live/live-run/evidence/vllm_metrics_end.prom": "609103ec13f57e1545ef405a933d83cb72c62875dc9ff07b8bb1418add05a064",
+    "historical-live/live-run/evidence/vllm_metrics_start.prom": "9ab3ff101cdcb18ae73cd6409cf8692fca5c2074c781bcd7e701d4fcf914cfd7",
+    "historical-live/live-run/manifest.json": "fef206df77180f18c09e412985822296490a38417e3e8cedd0e8a885149229dc",
+    "historical-live/live-run/replay-execution.json": "76b5a56b88df5b5af3347f0a3e130a2af38349290ba656ca35a0c8500cf4c0db",
+    "historical-live/live-run/replay-plan.json": "f4ac4459d2bbbe209ac8f2be2d7ceffe966a4e85c5d863b40ef72608ce8a1233",
+    "historical-live/live-run/replay-source-analysis.json": "2c6d8046e238d9f32d6f0517960e4d744ad6d981cec8370fee9218f0fdbf4dc8",
+    "historical-live/live-run/requests.jsonl": "6ea4fce1bf1e624c2656ca1b301742f09f1c7bdcad3b0990cded6ef2e175fc97",
+    "historical-live/live-run/summary.json": "a732bac3f298b489a21e05bcf9053b9705da2415b36d98f8db8ab586888faecc",
+    "pre-commit.txt": "cbd88f2fc3d6792363422e22a3d4fe81efb057d039ee37da61f728783026e2eb",
+    "pytest-replay-suite-no-id-escaping.txt": "14566ff6ef44fcd80806cad7b35bb8673f7723a262bb444d4d0fa574a1ea4696",
+    "pytest-replay-suite.txt": "03b03221605de6c1e33dd51432b1523aa40bddd7ddc2077992bc04d11f10968b",
+    "pytest.txt": "eb6b22841db1873e623896d32ce8415813499a8a7d68c1efdec1c4eec811fc52",
+    "verify.py": "8103a28484829f27b2276da6b916a0d44c37623f07373f4c814223f4cbfefb65"
+  }
+}

@@ -100,10 +100,13 @@ class ReplayExecutor:
         error = None
         nodes: list[NodeExecution] = []
         try:
-            await asyncio.wait_for(
-                self._execute_graph(task, nodes),
-                self.config.experiment.task_timeout_seconds,
-            )
+            if self.config.experiment.task_timeout_seconds is None:
+                await self._execute_graph(task, nodes)
+            else:
+                await asyncio.wait_for(
+                    self._execute_graph(task, nodes),
+                    self.config.experiment.task_timeout_seconds,
+                )
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
         failed_nodes = any(node.status != "success" for node in nodes)
@@ -264,7 +267,12 @@ class ReplayExecutor:
         sent_clock = time.monotonic()
         response = await self.transport.send(task, node, prompt)
         exchange = (
-            PromptExchange(prompt, response.assistant_content, response.assistant_reasoning_content)
+            PromptExchange(
+                prompt,
+                response.assistant_content,
+                response.assistant_reasoning_content,
+                response.assistant_token_ids,
+            )
             if response.success
             else None
         )
@@ -273,7 +281,10 @@ class ReplayExecutor:
             _NodeCompletion(response.finished_clock, exchange, completion_status, response.error)
         )
         calibration = asdict(prompt.calibration) if prompt.calibration is not None else None
-        if calibration is not None and self.config.replay.prompt_shape == "inferact_synthetic":
+        if calibration is not None and self.config.replay.prompt_shape in {
+            "inferact_synthetic",
+            "tracelab_synthetic",
+        }:
             actual = response.input_tokens
             calibration["backend_input_tokens"] = actual
             calibration["backend_input_residual_tokens"] = (
@@ -281,6 +292,9 @@ class ReplayExecutor:
                 if actual is not None and node.planned_input_tokens is not None
                 else None
             )
+            if self.config.replay.prompt_shape == "tracelab_synthetic":
+                calibration["source_output_tokens"] = node.planned_output_tokens
+                calibration["effective_output_tokens"] = max(1, node.planned_output_tokens or 0)
         results.append(
             NodeExecution(
                 node.source_key,

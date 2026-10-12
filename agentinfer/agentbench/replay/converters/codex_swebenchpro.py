@@ -42,6 +42,17 @@ def _iter_json_array(path: Path, chunk_size: int = 1024 * 1024) -> Iterator[dict
         yield value
         return
 
+    with path.open(encoding="utf-8") as handle:
+        yield from _iter_json_array_chunks(iter(lambda: handle.read(chunk_size), ""))
+
+
+def _iter_json_array_chunks(chunks: Iterator[str]) -> Iterator[dict[str, object]]:
+    """Parse array records incrementally from local or remote text chunks.
+
+    Exhausting the iterator validates the whole array. Closing it after N records
+    deliberately leaves the unrequested suffix unread and unvalidated.
+    """
+
     decoder = json.JSONDecoder()
     buffer = ""
     position = 0
@@ -49,61 +60,61 @@ def _iter_json_array(path: Path, chunk_size: int = 1024 * 1024) -> Iterator[dict
     finished = False
     expect_value = True
     after_comma = False
-    with path.open(encoding="utf-8") as handle:
+    chunks = (chunk for chunk in chunks if chunk)
+    while True:
+        chunk = next(chunks, "")
+        eof = not chunk
+        buffer = buffer[position:] + chunk
+        position = 0
         while True:
-            chunk = handle.read(chunk_size)
-            eof = not chunk
-            buffer = buffer[position:] + chunk
-            position = 0
-            while True:
-                while position < len(buffer) and buffer[position].isspace():
-                    position += 1
-                if not started:
-                    if position >= len(buffer):
-                        break
-                    if buffer[position] != "[":
-                        raise ValueError("Codex source must be a top-level JSON array")
-                    position += 1
-                    started = True
-                    continue
+            while position < len(buffer) and buffer[position].isspace():
+                position += 1
+            if not started:
                 if position >= len(buffer):
                     break
-                if expect_value:
-                    if buffer[position] == "]":
-                        if after_comma:
-                            raise ValueError("Codex source array must not contain a trailing comma")
-                        position += 1
-                        finished = True
-                        break
-                    try:
-                        value, end = decoder.raw_decode(buffer, position)
-                    except json.JSONDecodeError as exc:
-                        if eof:
-                            raise ValueError("truncated or invalid Codex source JSON") from exc
-                        break
-                    if not isinstance(value, dict):
-                        raise ValueError("every Codex source array item must be an object")
-                    yield value
-                    position = end
-                    expect_value = False
-                    after_comma = False
-                    continue
-                if buffer[position] == ",":
-                    position += 1
-                    expect_value = True
-                    after_comma = True
-                    continue
+                if buffer[position] != "[":
+                    raise ValueError("Codex source must be a top-level JSON array")
+                position += 1
+                started = True
+                continue
+            if position >= len(buffer):
+                break
+            if expect_value:
                 if buffer[position] == "]":
+                    if after_comma:
+                        raise ValueError("Codex source array must not contain a trailing comma")
                     position += 1
                     finished = True
                     break
-                raise ValueError("Codex source array items must be separated by one comma")
-            if finished:
-                if buffer[position:].strip() or handle.read().strip():
-                    raise ValueError("unexpected data after Codex source array")
-                return
-            if eof:
-                raise ValueError("Codex source array has no closing bracket")
+                try:
+                    value, end = decoder.raw_decode(buffer, position)
+                except json.JSONDecodeError as exc:
+                    if eof:
+                        raise ValueError("truncated or invalid Codex source JSON") from exc
+                    break
+                if not isinstance(value, dict):
+                    raise ValueError("every Codex source array item must be an object")
+                yield value
+                position = end
+                expect_value = False
+                after_comma = False
+                continue
+            if buffer[position] == ",":
+                position += 1
+                expect_value = True
+                after_comma = True
+                continue
+            if buffer[position] == "]":
+                position += 1
+                finished = True
+                break
+            raise ValueError("Codex source array items must be separated by one comma")
+        if finished:
+            if buffer[position:].strip() or any(chunk.strip() for chunk in chunks):
+                raise ValueError("unexpected data after Codex source array")
+            return
+        if eof:
+            raise ValueError("Codex source array has no closing bracket")
 
 
 class _TraceTokenizer(Protocol):

@@ -1,0 +1,17 @@
+{
+  "status": "passed",
+  "revision": "0d52ae8c75738117be9e58c7071bd9a5b43ff78f",
+  "task_num": 8,
+  "records": 8,
+  "subset_bytes": 1811711,
+  "subset_sha256": "3976ad992d6b5b6bf42d409c7a4c20147f407e896f6cf9f4333478549ba65ff0",
+  "transfers": [
+    {
+      "status_code": 200,
+      "content_length": "218648292",
+      "received_body_bytes": 1840084
+    }
+  ],
+  "cache_hit_network_requests": 0,
+  "elapsed_seconds": 9.662776440032758
+}

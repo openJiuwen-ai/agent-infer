@@ -18,7 +18,7 @@ from agentinfer.scheduling.identity import AgentIdentity, encode_agent_identity
 from ..request_proxy.observers import _normalize_usage
 from ..request_proxy.request_trace import RequestFact, RequestTraceWriter
 from .config import ReplayBenchConfig
-from .planner import ReplayPlanNode, ReplayTaskPlan
+from .planner import ReplayPlan, ReplayPlanNode, ReplayTaskPlan
 from .prompt import SyntheticPrompt
 
 
@@ -31,10 +31,11 @@ class TransportResult:
     error: str | None
     assistant_reasoning_content: str | None = None
     input_tokens: int | None = None
+    assistant_token_ids: tuple[int, ...] | None = None
 
 
 class ReplayTransport:
-    def __init__(self, config: ReplayBenchConfig, run_id: str, writer: RequestTraceWriter) -> None:
+    def __init__(self, config: ReplayBenchConfig, run_id: str, writer: RequestTraceWriter | None) -> None:
         self.config = config
         self.run_id = run_id
         self.writer = writer
@@ -47,6 +48,72 @@ class ReplayTransport:
 
     async def close(self) -> None:
         await self.client.aclose()
+
+    @staticmethod
+    def _effective_output_tokens(node: ReplayPlanNode) -> int:
+        """vLLM requires at least one generated token for a TraceLab request."""
+
+        assert node.planned_output_tokens is not None
+        if getattr(node, "response_validation", None) == "exact_tokens":
+            return max(1, node.planned_output_tokens)
+        return node.planned_output_tokens
+
+    async def validate_tracelab_context(self, plan: ReplayPlan, warmup_tokens: int) -> None:
+        """Reject an impossible token-exact plan before filling the Backend cache."""
+
+        response = await self.client.get(f"{self.upstream}/v1/models", headers=self._auth_headers())
+        response.raise_for_status()
+        models = response.json().get("data", [])
+        model = next(
+            (item for item in models if isinstance(item, dict) and item.get("id") == self.config.backend.model),
+            None,
+        )
+        if model is None:
+            raise ValueError(f"TraceLab model {self.config.backend.model!r} is not served by the Backend")
+        limit = model.get("max_model_len")
+        if not isinstance(limit, int) or limit <= 0:
+            raise ValueError("Backend /v1/models did not report a positive max_model_len")
+        if warmup_tokens + 1 > limit:
+            raise ValueError(f"TraceLab warmup needs {warmup_tokens + 1} context tokens, Backend limit is {limit}")
+        for task in plan.tasks:
+            for node in task.requests:
+                if node.node_type != "request":
+                    continue
+                assert node.planned_input_tokens is not None and node.planned_output_tokens is not None
+                required = node.planned_input_tokens + self._effective_output_tokens(node)
+                if required > limit:
+                    raise ValueError(
+                        f"TraceLab request {node.source_key} needs {required} context tokens, Backend limit is {limit}"
+                    )
+
+    async def warmup(self, token_ids: tuple[int, ...]) -> dict[str, object]:
+        """Prefill the shared TraceLab root without writing a measured request fact."""
+
+        started = time.monotonic()
+        response = await self.client.post(
+            f"{self.upstream}/v1/completions",
+            json={
+                "model": self.config.backend.model,
+                "prompt": list(token_ids),
+                "add_special_tokens": False,
+                "max_tokens": 1,
+                "min_tokens": 1,
+                "ignore_eos": True,
+                "seed": self.config.replay.sample_seed,
+            },
+            headers=self._auth_headers(),
+        )
+        response.raise_for_status()
+        usage = _normalize_usage(response.json().get("usage", {}))
+        if usage.get("input_tokens") != len(token_ids):
+            raise ValueError(
+                f"TraceLab warmup input mismatch: expected={len(token_ids)} observed={usage.get('input_tokens')}"
+            )
+        return {
+            "input_tokens": len(token_ids),
+            "output_tokens": usage.get("output_tokens"),
+            "duration_seconds": time.monotonic() - started,
+        }
 
     async def send(
         self,
@@ -64,11 +131,13 @@ class ReplayTransport:
         reasoning: list[str] | None = (
             [] if self.config.replay.prompt_shape in {"inferact_synthetic", "tracelab_synthetic"} else None
         )
+        generated_ids: list[int] = []
+        saw_token_ids = False
         saw_done = False
         try:
             async with self.client.stream(
                 "POST",
-                f"{self.upstream}{self.config.backend.endpoint}",
+                f"{self.upstream}{'/v1/completions' if prompt.token_ids is not None else self.config.backend.endpoint}",
                 headers=self._headers(task, node),
                 json=self._body(task, node, prompt),
             ) as response:
@@ -86,9 +155,21 @@ class ReplayTransport:
                         if not raw:
                             continue
                         payload = json.loads(raw)
+                        if prompt.token_ids is not None:
+                            choices = payload.get("choices")
+                            if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                                chunk_ids = choices[0].get("token_ids")
+                                if chunk_ids is not None:
+                                    if not isinstance(chunk_ids, list) or any(
+                                        type(item) is not int for item in chunk_ids
+                                    ):
+                                        error = "TraceLab Backend returned invalid token_ids"
+                                    else:
+                                        generated_ids.extend(chunk_ids)
+                                        saw_token_ids = True
                         reasoning_size = len(reasoning) if reasoning is not None else 0
-                        delta = self._observe(payload, usage, reasoning)
-                        if delta or (reasoning is not None and len(reasoning) > reasoning_size):
+                        delta = self._observe(payload, usage, reasoning, completion=prompt.token_ids is not None)
+                        if delta or (reasoning is not None and len(reasoning) > reasoning_size) or generated_ids:
                             if ttft is None:
                                 ttft = time.monotonic() - started_clock
                         if delta:
@@ -111,7 +192,7 @@ class ReplayTransport:
         finished_clock = time.monotonic()
         if error is None and getattr(node, "response_validation", None) == "exact_tokens":
             expected_input = node.planned_input_tokens
-            expected_output = node.planned_output_tokens
+            expected_output = self._effective_output_tokens(node)
             if not saw_done:
                 error = "exact token validation failed: stream ended without [DONE]"
             elif usage.get("input_tokens") != expected_input or usage.get("output_tokens") != expected_output:
@@ -120,7 +201,14 @@ class ReplayTransport:
                     f"input expected={expected_input} observed={usage.get('input_tokens')}; "
                     f"output expected={expected_output} observed={usage.get('output_tokens')}"
                 )
+            elif prompt.token_ids is not None and (not saw_token_ids or len(generated_ids) != expected_output):
+                error = (
+                    "exact token validation failed: Backend output token_ids missing or incomplete; "
+                    f"expected={expected_output} observed={len(generated_ids)}"
+                )
         success = status_code is not None and status_code < 400 and error is None
+        if self.writer is None:
+            raise RuntimeError("Replay transport cannot record a measured request without a trace writer")
         self.writer.submit(
             RequestFact(
                 schema_version="1",
@@ -152,7 +240,13 @@ class ReplayTransport:
             error,
             "".join(reasoning) if reasoning else None,
             usage.get("input_tokens"),
+            tuple(generated_ids) if prompt.token_ids is not None and saw_token_ids else None,
         )
+
+    def _auth_headers(self) -> dict[str, str]:
+        if not self.config.backend.api_key_env:
+            return {}
+        return {"authorization": f"Bearer {os.environ[self.config.backend.api_key_env]}"}
 
     def _headers(self, task: ReplayTaskPlan, node: ReplayPlanNode) -> dict[str, str]:
         headers = {
@@ -178,7 +272,7 @@ class ReplayTransport:
         node: ReplayPlanNode,
         prompt: SyntheticPrompt,
     ) -> dict[str, object]:
-        assert node.planned_output_tokens is not None
+        output_tokens = self._effective_output_tokens(node)
         identity = AgentIdentity(
             program_id=f"{task.runtime_session_id}:{node.actor_id}",
             task_id=task.runtime_session_id,
@@ -189,13 +283,27 @@ class ReplayTransport:
             agent_role=node.actor_role,
             request_id=node.runtime_request_id,
         )
+        if prompt.token_ids is not None:
+            return {
+                "model": self.config.backend.model,
+                "prompt": list(prompt.token_ids),
+                "add_special_tokens": False,
+                "max_tokens": output_tokens,
+                "min_tokens": output_tokens,
+                "ignore_eos": True,
+                "seed": node.backend_sampling_seed,
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                "return_token_ids": True,
+                "vllm_xargs": {"agentic_context": encode_agent_identity(identity)},
+            }
         if self.config.backend.endpoint == "/v1/chat/completions":
             messages = ([{"role": "system", "content": prompt.system}] if prompt.system else []) + list(prompt.messages)
             body: dict[str, object] = {
                 "model": self.config.backend.model,
                 "messages": messages,
-                "max_tokens": node.planned_output_tokens,
-                "min_tokens": node.planned_output_tokens,
+                "max_tokens": output_tokens,
+                "min_tokens": output_tokens,
                 "ignore_eos": True,
                 "seed": node.backend_sampling_seed,
                 "stream": True,
@@ -209,20 +317,27 @@ class ReplayTransport:
             return body
         body = {
             **prompt.anthropic_payload(self.config.backend.model),
-            "max_tokens": node.planned_output_tokens,
+            "max_tokens": output_tokens,
             "stream": True,
             "metadata": {
                 "_agentinfer_agentic_context": encode_agent_identity(identity),
                 "_agentinfer_replay_sampling": {
                     "seed": node.backend_sampling_seed,
-                    "min_tokens": node.planned_output_tokens,
+                    "min_tokens": output_tokens,
                     "ignore_eos": True,
                 },
             },
         }
         return body
 
-    def _observe(self, payload: dict[str, object], usage: dict[str, int], reasoning: list[str] | None = None) -> str:
+    def _observe(
+        self,
+        payload: dict[str, object],
+        usage: dict[str, int],
+        reasoning: list[str] | None = None,
+        *,
+        completion: bool = False,
+    ) -> str:
         """Collect usage and keep requested reasoning separate from visible text."""
 
         raw_usage = payload.get("usage")
@@ -231,6 +346,11 @@ class ReplayTransport:
             raw_usage = message.get("usage") if isinstance(message, dict) else None
         if isinstance(raw_usage, dict):
             usage.update(_normalize_usage(raw_usage))
+        if completion:
+            choices = payload.get("choices")
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                return str(choices[0].get("text") or "")
+            return ""
         if self.config.backend.endpoint == "/v1/chat/completions":
             choices = payload.get("choices")
             if not isinstance(choices, list) or not choices:

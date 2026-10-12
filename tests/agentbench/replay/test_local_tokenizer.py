@@ -47,6 +47,7 @@ class _HistorySensitiveTokenizer(_AdditiveTokenizer):
 def _config() -> ReplayBenchConfig:
     return ReplayBenchConfig.model_validate(
         {
+            "experiment": {"task_num": 1},
             "backend": {
                 "base_url": "http://backend",
                 "tokenizer_base_url": "http://tokenizer",
@@ -143,7 +144,11 @@ def test_discovery_rejects_tokenizer_that_differs_from_backend(monkeypatch) -> N
 
     counter = discover_local_tokenizer(
         ReplayBenchConfig.model_validate(
-            {"backend": {"model": "different-model"}, "replay": {"trace_path": "source.jsonl"}}
+            {
+                "experiment": {"task_num": 1},
+                "backend": {"model": "different-model"},
+                "replay": {"trace_path": "source.jsonl"},
+            }
         ),
         get_json=lambda url: None,
         backend_tokens=lambda payload: (999,),
