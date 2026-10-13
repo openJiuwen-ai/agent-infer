@@ -19,6 +19,7 @@ from typing import Literal
 import httpx
 
 from .config import ReplayBenchConfig
+from .hash_snapshot import HashSnapshotStore, TokenBlockRenderer
 from .local_tokenizer import LocalTokenizerCounter
 from .planner import ReplayPlan, ReplayPlanNode, ReplayTaskPlan
 from .tokenizer_retry import TOKENIZER_REQUEST_MAX_ATTEMPTS, TOKENIZER_RETRY_BACKOFF_SECONDS
@@ -27,6 +28,11 @@ from .unified_trace_ir import PromptReference, TraceTextStore, UnifiedTraceIR
 logger = logging.getLogger(__name__)
 
 SystemContent = str | tuple[dict[str, object], ...]
+
+# The renderer requires at least two distinct valid token IDs from the Backend tokenizer.
+AGENTX_TOKEN_PALETTE_SEED = (
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 !@#$%^&*()-_=+[]{};:,.?/ " * 8
+)
 
 
 @dataclass(frozen=True)
@@ -292,6 +298,17 @@ class PromptBuilder:
         self.trace_ir = trace_ir
         self._tracelab_warmup_ids: tuple[int, ...] | None = None
         self._tracelab_root_branch_tokens: dict[str, int] = {}
+        if config.replay.prompt_shape == "agentX_snapshot" and (
+            trace_ir is None or trace_ir.prompt_source_kind != "hash_snapshot"
+        ):
+            raise ValueError("AgentX Prompt construction requires hash_snapshot Trace IR")
+        self.hash_snapshots = (
+            HashSnapshotStore(trace_ir.requests_path)
+            if config.replay.prompt_shape == "agentX_snapshot" and trace_ir is not None
+            else None
+        )
+        self._token_blocks: TokenBlockRenderer | None = None
+        self._token_blocks_lock = asyncio.Lock()
 
     async def prepare_tracelab_warmup(self, plan: ReplayPlan) -> tuple[int, ...]:
         """Build the shared cache root before measured TraceLab execution."""
@@ -347,6 +364,8 @@ class PromptBuilder:
             return await self._trace_record_prompt(node, context)
         if self.config.replay.prompt_shape == "tracelab_synthetic":
             return await self._tracelab_prompt(task, node, context)
+        if self.config.replay.prompt_shape == "agentX_snapshot":
+            return await self._agentx_prompt(task, node, context)
         namespace = f"{task.runtime_session_id}:{node.prompt_recipe_key}"
         context_mode = getattr(node, "context_mode", "independent" if context is None else "append")
         if context_mode == "reset":
@@ -369,6 +388,40 @@ class PromptBuilder:
             node.planned_input_tokens,
             context_mode=context_mode,
         )
+
+    async def _agentx_prompt(
+        self, task: ReplayTaskPlan, node: ReplayPlanNode, context: PromptExchange | None
+    ) -> SyntheticPrompt:
+        """Build one complete token-ID snapshot without appending live output."""
+
+        if context is not None or node.context_after is not None:
+            raise ValueError("AgentX hash snapshots cannot consume a previous Prompt exchange")
+        assert self.hash_snapshots is not None
+        if self._token_blocks is None:
+            async with self._token_blocks_lock:
+                if self._token_blocks is None:
+                    palette = await self.tokenizer.text_token_ids(AGENTX_TOKEN_PALETTE_SEED)
+                    self._token_blocks = TokenBlockRenderer(palette)
+        recipe = self.hash_snapshots.read(node.prompt_recipe_key, node.source_key)
+        tokens = self._token_blocks.render(recipe, task.runtime_session_id)
+        if len(tokens) != node.planned_input_tokens:
+            raise ValueError(f"AgentX request {node.source_key} rendered the wrong input length")
+        calibration = PromptCalibration(
+            target_tokens=len(tokens),
+            initial_tokens=len(tokens),
+            final_tokens=len(tokens),
+            added_filler_tokens=0,
+            requested_filler_tokens=0,
+            actual_prompt_token_gain=0,
+            trimmed_filler_tokens=0,
+            residual_tokens=0,
+            target_met=True,
+            accepted_with_tolerance=False,
+            repair_attempts=0,
+            count_history=(),
+            adjustment="none",
+        )
+        return SyntheticPrompt("", (), (), calibration=calibration, token_ids=tokens)
 
     async def _tracelab_prompt(
         self,

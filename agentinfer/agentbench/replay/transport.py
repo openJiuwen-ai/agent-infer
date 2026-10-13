@@ -51,7 +51,7 @@ class ReplayTransport:
 
     @staticmethod
     def _effective_output_tokens(node: ReplayPlanNode) -> int:
-        """vLLM requires at least one generated token for a TraceLab request."""
+        """vLLM requires at least one generated token for an exact-token request."""
 
         assert node.planned_output_tokens is not None
         if getattr(node, "response_validation", None) == "exact_tokens":
@@ -201,7 +201,9 @@ class ReplayTransport:
                     f"input expected={expected_input} observed={usage.get('input_tokens')}; "
                     f"output expected={expected_output} observed={usage.get('output_tokens')}"
                 )
-            elif prompt.token_ids is not None and (not saw_token_ids or len(generated_ids) != expected_output):
+            elif self.config.replay.prompt_shape == "tracelab_synthetic" and (
+                not saw_token_ids or len(generated_ids) != expected_output
+            ):
                 error = (
                     "exact token validation failed: Backend output token_ids missing or incomplete; "
                     f"expected={expected_output} observed={len(generated_ids)}"
@@ -279,12 +281,14 @@ class ReplayTransport:
             session_id=task.runtime_session_id,
             agent_id=node.actor_id,
             parent_program_id=(f"{task.runtime_session_id}:{node.parent_actor_id}" if node.parent_actor_id else None),
-            blocks_parent=node.actor_role == "subagent",
+            blocks_parent=node.actor_role == "subagent" and self.config.replay.trace_type != "agentX",
             agent_role=node.actor_role,
             request_id=node.runtime_request_id,
         )
         if prompt.token_ids is not None:
-            return {
+            if len(prompt.token_ids) != node.planned_input_tokens:
+                raise ValueError("completion requires exact planned token IDs")
+            body: dict[str, object] = {
                 "model": self.config.backend.model,
                 "prompt": list(prompt.token_ids),
                 "add_special_tokens": False,
@@ -294,9 +298,11 @@ class ReplayTransport:
                 "seed": node.backend_sampling_seed,
                 "stream": True,
                 "stream_options": {"include_usage": True},
-                "return_token_ids": True,
                 "vllm_xargs": {"agentic_context": encode_agent_identity(identity)},
             }
+            if self.config.replay.prompt_shape == "tracelab_synthetic":
+                body["return_token_ids"] = True
+            return body
         if self.config.backend.endpoint == "/v1/chat/completions":
             messages = ([{"role": "system", "content": prompt.system}] if prompt.system else []) + list(prompt.messages)
             body: dict[str, object] = {
