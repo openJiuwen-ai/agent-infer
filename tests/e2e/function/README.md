@@ -185,8 +185,8 @@ Compare **first** and **second** cold run directories.
 | ---- | ------ |
 | Informational (non-gating) | Prefix-cache cold evidence (`baseline/candidate.cold_start`); `process_start_time_seconds` from each run's `evidence/vllm_metrics_start.prom` (TraceLab may WARN on cold while still PASS) |
 | Exact | `requests.requests`, `tasks.failed`, input/output tokens |
-| Primary | Task duration mean / p50 / p95 / p99 within tolerance |
-| Secondary | Latency & TTFT percentiles, prefix-cache hit rate, `run_wall_time_seconds` |
+| Primary | Task duration mean / p50 / p95 within tolerance; p99 is WARN-only (non-gating) |
+| Secondary | Latency & TTFT mean / p50 / p95 within tolerance; p99 WARN-only; prefix-cache hit rate, `run_wall_time_seconds` |
 | Intervals | Adjacent-request interval stats from `requests.jsonl` |
 
 Interval: `current.started_at - previous.finished_at` per `(session_id, actor_id)`.

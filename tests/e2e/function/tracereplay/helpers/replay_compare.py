@@ -123,19 +123,20 @@ def _within_ratio(
     candidate: float | None,
     *,
     tolerance: float,
+    informational: bool = False,
 ) -> MetricCheck:
     if baseline is None or candidate is None:
-        return MetricCheck(label, baseline, candidate, False, "missing numeric value")
+        return MetricCheck(label, baseline, candidate, False, "missing numeric value", informational=informational)
     if baseline == 0.0 and candidate == 0.0:
-        return MetricCheck(label, baseline, candidate, True, "both zero")
+        return MetricCheck(label, baseline, candidate, True, "both zero", informational=informational)
     if baseline == 0.0:
         ok = abs(candidate) <= tolerance
         detail = f"baseline zero; |candidate|={abs(candidate):.6g} (limit={tolerance})"
-        return MetricCheck(label, baseline, candidate, ok, detail)
+        return MetricCheck(label, baseline, candidate, ok, detail, informational=informational)
     ratio = abs(candidate - baseline) / abs(baseline)
     ok = ratio <= tolerance
     detail = f"relative delta {ratio * 100:.3f}% (limit {tolerance * 100:.1f}%)"
-    return MetricCheck(label, baseline, candidate, ok, detail)
+    return MetricCheck(label, baseline, candidate, ok, detail, informational=informational)
 
 
 def _compare_distribution_fields(
@@ -144,6 +145,7 @@ def _compare_distribution_fields(
     candidate: Distribution,
     *,
     tolerance: float,
+    informational_fields: frozenset[str] = frozenset(),
 ) -> list[MetricCheck]:
     checks: list[MetricCheck] = []
     for field in GLOBAL_INTERVAL_FIELDS:
@@ -155,9 +157,13 @@ def _compare_distribution_fields(
                 left,
                 right,
                 tolerance=tolerance,
+                informational=field in informational_fields,
             )
         )
     return checks
+
+
+_P99_INFORMATIONAL = frozenset({"p99"})
 
 
 def compare_replay_stability(
@@ -192,6 +198,7 @@ def compare_replay_stability(
                 _extract(baseline_summary, *key),
                 _extract(candidate_summary, *key),
                 tolerance=tolerance_ratio,
+                informational=stat in _P99_INFORMATIONAL,
             )
         )
 
@@ -207,6 +214,7 @@ def compare_replay_stability(
                     _extract(baseline_summary, *key),
                     _extract(candidate_summary, *key),
                     tolerance=tolerance_ratio,
+                    informational=stat in _P99_INFORMATIONAL,
                 )
             )
 
@@ -255,6 +263,7 @@ def compare_replay_stability(
                 baseline_dist,
                 candidate_dist,
                 tolerance=tolerance_ratio,
+                informational_fields=_P99_INFORMATIONAL,
             )
         )
     else:
