@@ -178,9 +178,13 @@ def test_resolve_default_source_updates_only_a_copy(
     assert config.replay.trace_path is None
 
 
-def test_agentx_without_trace_path_remains_unimplemented() -> None:
+def test_agentx_has_no_default_source() -> None:
     config = ReplayBenchConfig.model_validate(
-        {"experiment": {"task_num": 8}, "replay": {"trace_type": "agentX", "trace_path": None}}
+        {
+            "experiment": {"task_num": 8},
+            "backend": {"endpoint": "/v1/completions"},
+            "replay": {"trace_type": "agentX", "trace_path": None},
+        }
     )
 
     with pytest.raises(NotImplementedError, match="agentX"):

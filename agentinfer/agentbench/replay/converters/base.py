@@ -6,9 +6,9 @@
 Dataset-specific source parsing lives in sibling modules. This module only owns
 the reusable converter result and deterministic block-text interfaces.
 
-BlockTokenizer and DeterministicBlockRenderer are forward scaffolding for future
-block-hash converters. Only tests use them today; the Inferact converter emits
-text-based IR. AgentX conversion and its full-prompt/turn mapping are not implemented.
+BlockTokenizer and DeterministicBlockRenderer provide a text rendering contract.
+AgentX uses complete token-ID snapshots in ``hash_snapshot.py`` so chat-template
+tokens cannot move the source hash boundaries.
 """
 
 from __future__ import annotations
