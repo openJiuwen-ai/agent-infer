@@ -175,8 +175,7 @@ Case matrix (edit `server_params.model` on your host):
 | `glm52_32x16_inferact_replay.json` | 32 | 16 |
 
 Results: `test-results/replay/run-<hardware>-local-replay-<tasks>-<concurrency>-<tag>/` plus
-`test-results/replay/vllm-logs/`. Each cold cycle stops vLLM between runs; cold start is checked via
-`evidence/vllm_metrics_start.prom`.
+`test-results/replay/vllm-logs/`. Each cold cycle stops vLLM between runs.
 
 ## Repeatability criteria (default 5%)
 
@@ -184,6 +183,7 @@ Compare **first** and **second** cold run directories.
 
 | Tier | Checks |
 | ---- | ------ |
+| Informational (non-gating) | Prefix-cache cold evidence (`baseline/candidate.cold_start`); `process_start_time_seconds` from each run's `evidence/vllm_metrics_start.prom` (TraceLab may WARN on cold while still PASS) |
 | Exact | `requests.requests`, `tasks.failed`, input/output tokens |
 | Primary | Task duration mean / p50 / p95 / p99 within tolerance |
 | Secondary | Latency & TTFT percentiles, prefix-cache hit rate, `run_wall_time_seconds` |
