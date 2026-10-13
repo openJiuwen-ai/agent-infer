@@ -359,20 +359,22 @@ def test_inferact_rejects_nonzero_tolerance_instead_of_normalizing(tolerance) ->
         )
 
 
-def test_tracelab_requires_exact_calibration_and_chat_endpoint() -> None:
+@pytest.mark.parametrize("transport", ["auto", "completion_token_ids"])
+def test_tracelab_requires_exact_calibration_and_chat_endpoint(transport: str) -> None:
     valid = {
         "experiment": {"task_num": 1},
         "backend": {"endpoint": "/v1/chat/completions"},
         "replay": {
             "trace_type": "tracelab",
             "trace_path": "rounds.jsonl",
+            "prompt_transport": transport,
             "prompt_calibration_tolerance_tokens": 0,
         },
     }
     assert ReplayBenchConfig.model_validate(valid).replay.trace_type == "tracelab"
 
     for section, field, value, message in (
-        ("replay", "prompt_calibration_tolerance_tokens", 1, "tolerance_tokens=0"),
+        ("replay", "prompt_calibration_tolerance_tokens", 1, "tracelab requires prompt_calibration_tolerance_tokens=0"),
         ("backend", "endpoint", "/v1/messages", "endpoint=/v1/chat/completions"),
     ):
         payload = {name: dict(settings) for name, settings in valid.items()}
@@ -381,9 +383,31 @@ def test_tracelab_requires_exact_calibration_and_chat_endpoint() -> None:
             ReplayBenchConfig.model_validate(payload)
 
 
+@pytest.mark.parametrize("tolerance", [0, 1, 8])
+@pytest.mark.parametrize("transport", ["auto", "chat_text", "completion_token_ids"])
+def test_agentinfer_tolerance_depends_on_transport(tolerance: int, transport: str) -> None:
+    payload = {
+        "experiment": {"task_num": 1},
+        "replay": {
+            "trace_type": "agentinfer",
+            "prompt_transport": transport,
+            "prompt_calibration_tolerance_tokens": tolerance,
+        },
+    }
+    if transport == "completion_token_ids" and tolerance != 0:
+        with pytest.raises(
+            ValidationError, match="completion_token_ids requires prompt_calibration_tolerance_tokens=0"
+        ):
+            ReplayBenchConfig.model_validate(payload)
+        return
+    config = ReplayBenchConfig.model_validate(payload)
+    assert config.replay.prompt_calibration_tolerance_tokens == tolerance
+
+
 @pytest.mark.parametrize("tolerance", [None, 0, 1])
-def test_agentx_tolerance_is_fixed_to_zero_and_round_trips(tolerance: int | None) -> None:
-    replay = {"trace_type": "agentX", "trace_path": "source.jsonl"}
+@pytest.mark.parametrize("transport", ["auto", "completion_token_ids"])
+def test_agentx_tolerance_is_fixed_to_zero_and_round_trips(tolerance: int | None, transport: str) -> None:
+    replay = {"trace_type": "agentX", "trace_path": "source.jsonl", "prompt_transport": transport}
     if tolerance is not None:
         replay["prompt_calibration_tolerance_tokens"] = tolerance
     payload = {
@@ -396,8 +420,22 @@ def test_agentx_tolerance_is_fixed_to_zero_and_round_trips(tolerance: int | None
             ReplayBenchConfig.model_validate(payload)
         return
     config = ReplayBenchConfig.model_validate(payload)
+    assert config.replay.uses_token_ids
     assert config.replay.prompt_calibration_tolerance_tokens == 0
     assert ReplayBenchConfig.model_validate(config.model_dump(mode="json")).replay.prompt_shape == "agentX_snapshot"
+
+
+def test_agentx_rejects_text_transport() -> None:
+    """Hash snapshots require raw token transport even when the endpoint is valid."""
+
+    with pytest.raises(ValidationError, match="agentX requires completion_token_ids"):
+        ReplayBenchConfig.model_validate(
+            {
+                "experiment": {"task_num": 1},
+                "backend": {"endpoint": "/v1/completions"},
+                "replay": {"trace_type": "agentX", "prompt_transport": "chat_text"},
+            }
+        )
 
 
 def test_trace_path_is_resolved_relative_to_yaml(tmp_path: Path) -> None:

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 
@@ -41,6 +42,38 @@ from .transport import ReplayTransport
 from .unified_trace_ir import UnifiedTraceIR, analyze_explicit_trace_ir, validate_trace_ir
 
 logger = logging.getLogger(__name__)
+
+
+def _complete_replay(plan: ReplayPlan, tasks: tuple[ReplayTaskExecution, ...], facts: tuple[RequestFact, ...]) -> bool:
+    """Require exact identity coverage, including timing nodes and persisted request facts."""
+
+    planned_tasks = Counter((task.task_id, task.runtime_session_id) for task in plan.tasks)
+    actual_tasks = Counter((task.task_id, task.runtime_session_id) for task in tasks)
+    planned_nodes = Counter(
+        (task.runtime_session_id, node.runtime_request_id, node.source_key, node.node_type)
+        for task in plan.tasks
+        for node in task.requests
+    )
+    actual_nodes = Counter(
+        (task.runtime_session_id, node.runtime_request_id, node.source_key, node.node_type)
+        for task in tasks
+        for node in task.nodes
+    )
+    planned_facts = Counter(
+        (task.runtime_session_id, node.runtime_request_id)
+        for task in plan.tasks
+        for node in task.requests
+        if node.node_type == "request"
+    )
+    actual_facts = Counter((fact.session_id, fact.request_id) for fact in facts)
+    return (
+        planned_tasks == actual_tasks
+        and planned_nodes == actual_nodes
+        and planned_facts == actual_facts
+        and all(task.status == "completed" for task in tasks)
+        and all(node.status == "success" for task in tasks for node in task.nodes)
+        and all(fact.status == "success" for fact in facts)
+    )
 
 
 def _capture(source: str, path: Path, available: bool = True, reason: str | None = None) -> EvidenceCapture:
@@ -146,10 +179,17 @@ def _execution_metadata(
             else planned_by_runtime_id[fact.request_id].context_after is not None
         )
     ]
-    zero_output_nodes = [node for node in planned_nodes if getattr(node, "planned_output_tokens", None) == 0]
+    zero_output_nodes = [
+        node
+        for node in planned_nodes
+        if node.node_type == "request" and getattr(node, "source_output_tokens", None) == 0
+    ]
     zero_output_runtime_ids = {node.runtime_request_id for node in zero_output_nodes}
     return {
         "workload_fingerprint": plan.workload_fingerprint,
+        "prompt_prepare_seconds": sum(node.prompt_prepare_seconds or 0 for node in nodes),
+        "max_prompt_prepare_seconds": max((node.prompt_prepare_seconds or 0 for node in nodes), default=0),
+        "max_scheduler_lag_seconds": max((node.scheduler_lag_seconds or 0 for node in nodes), default=0),
         "planned_tasks": len(plan.tasks),
         "completed_tasks": sum(task.status == "completed" for task in tasks),
         "failed_tasks": sum(task.status != "completed" for task in tasks),
@@ -293,7 +333,9 @@ async def _run_replay(
     transport: ReplayTransport | None = None
     writer_started = False
     trace_ir: UnifiedTraceIR | None = None
+    plan: ReplayPlan | None = None
     measured_started_at = manifest.created_at
+    setup_started = time.monotonic()
     try:
         write_text(requests_path, "")
         captures.append(_capture("request_trace", requests_path))
@@ -326,20 +368,47 @@ async def _run_replay(
         atomic_write_json(plan_path, plan.to_dict())
         captures.append(_capture("replay_plan", plan_path))
 
-        prompts: PromptBuilder | None = None
-        if config.replay.prompt_shape == "tracelab_synthetic":
-            tokenizer = TokenizerClient(config, local_tokenizer)
-            prompts = PromptBuilder(config, tokenizer, trace_ir)
-            transport = ReplayTransport(config, output_dir.name, None)
-            warmup_ids = await prompts.prepare_tracelab_warmup(plan)
-            await transport.validate_tracelab_context(plan, len(warmup_ids))
-            warmup = await transport.warmup(warmup_ids)
-            warmup_path = evidence_dir / "tracelab_warmup.json"
-            atomic_write_json(warmup_path, warmup)
-            captures.append(_capture("tracelab_warmup", warmup_path))
-            await transport.close()
-            transport = None
-            measured_started_at = utc_now()
+        writer = RequestTraceWriter(requests_path)
+        await writer.start()
+        writer_started = True
+        tokenizer = TokenizerClient(config, local_tokenizer)
+        prompts = PromptBuilder(config, tokenizer, trace_ir)
+        setup_timeout = config.experiment.run_timeout_seconds or config.replay.request_timeout_seconds
+
+        async def prepare() -> None:
+            nonlocal transport
+            if not config.replay.uses_token_ids:
+                await tokenizer.prepare_local_tokenizer()
+            if config.replay.prompt_shape == "tracelab_synthetic":
+                transport = ReplayTransport(config, output_dir.name, None)
+                warmup_ids = await prompts.prepare_tracelab_warmup(plan)
+                await transport.validate_tracelab_context(plan, len(warmup_ids))
+                warmup = await transport.warmup(warmup_ids)
+                warmup_path = evidence_dir / "tracelab_warmup.json"
+                atomic_write_json(warmup_path, warmup)
+                captures.append(_capture("tracelab_warmup", warmup_path))
+                await transport.close()
+                transport = None
+            await prompts.prepare_tasks(plan)
+
+        await asyncio.wait_for(prepare(), timeout=setup_timeout)
+        setup_seconds = time.monotonic() - setup_started
+        preparation_path = evidence_dir / "replay_preparation.json"
+        atomic_write_json(
+            preparation_path,
+            {
+                "status": "completed",
+                "duration_seconds": setup_seconds,
+                "prompt_transport": "completion_token_ids" if config.replay.uses_token_ids else "chat_text",
+                "tokenizer_max_concurrency": config.replay.tokenizer_max_concurrency,
+                "root_preparation": (
+                    "request_release" if config.replay.prompt_shape == "agentX_snapshot" else "active_tasks"
+                ),
+                "max_concurrent_tasks": config.experiment.max_concurrency,
+                "task_preparation_in_measured_time": True,
+            },
+        )
+        captures.append(_capture("replay_preparation", preparation_path))
 
         vllm_start_capture = await capture_vllm_metrics(config.backend.effective_metrics_url)
         vllm_start = str(vllm_start_capture.metadata.get("text")) if vllm_start_capture.available else None
@@ -350,19 +419,14 @@ async def _run_replay(
             _capture("vllm_start", vllm_start_path, vllm_start_capture.available, vllm_start_capture.reason)
         )
 
-        writer = RequestTraceWriter(requests_path)
-        await writer.start()
-        writer_started = True
-        if tokenizer is None:
-            tokenizer = TokenizerClient(config, local_tokenizer)
-        if prompts is None:
-            prompts = PromptBuilder(config, tokenizer, trace_ir)
         transport = ReplayTransport(config, output_dir.name, writer)
+        measured_started_at = utc_now()
         execution = ReplayExecutor(config, plan, prompts, transport).execute()
         if config.experiment.run_timeout_seconds:
             task_results = await asyncio.wait_for(execution, config.experiment.run_timeout_seconds)
         else:
             task_results = await execution
+        measured_finished_at = utc_now()
 
         await transport.close()
         transport = None
@@ -375,7 +439,9 @@ async def _run_replay(
             raise RuntimeError(f"request trace writer failed: {writer_health.writer_error}")
         facts = tuple(load_request_facts(requests_path))
 
-        plan = replace(plan, prompt_calibration={**plan.prompt_calibration, "status": "completed"})
+        complete_replay = _complete_replay(plan, task_results, facts)
+        run_status = "completed" if complete_replay else "failed"
+        plan = replace(plan, prompt_calibration={**plan.prompt_calibration, "status": run_status})
         atomic_write_json(plan_path, plan.to_dict())
         execution_path = output_dir / "replay-execution.json"
         execution_metadata = _execution_metadata(
@@ -385,6 +451,8 @@ async def _run_replay(
             facts,
             snapshot_mode=config.replay.prompt_shape == "agentX_snapshot",
         )
+        execution_metadata["setup_seconds"] = setup_seconds
+        execution_metadata["complete_replay"] = complete_replay
         atomic_write_json(
             execution_path,
             {
@@ -439,13 +507,7 @@ async def _run_replay(
         captures.append(_capture("vllm_end", vllm_end_path, vllm_end_capture.available, vllm_end_capture.reason))
 
         finished_at = utc_now()
-        run_wall_time = max((finished_at - measured_started_at).total_seconds(), 1e-9)
-        complete_replay = config.replay.prompt_shape != "tracelab_synthetic" or (
-            execution_metadata["failed_tasks"] == 0
-            and execution_metadata["successful_requests"] == execution_metadata["planned_requests"]
-            and len(facts) == execution_metadata["planned_requests"]
-        )
-        run_status = "completed" if complete_replay else "failed"
+        run_wall_time = max((measured_finished_at - measured_started_at).total_seconds(), 1e-9)
         summary = build_run_summary(
             output_dir.name,
             aggregate_task_results(_task_result(result, config.backend.endpoint) for result in task_results),
@@ -471,6 +533,8 @@ async def _run_replay(
             finished_at=finished_at,
         )
         atomic_write_json(manifest_path, finalized.to_dict())
+        if not complete_replay:
+            raise RuntimeError(f"Replay did not complete all planned tasks and requests; evidence: {output_dir}")
         return output_dir
     except BaseException as exc:
         logger.exception(
@@ -485,6 +549,15 @@ async def _run_replay(
             transport,
             writer_started=writer_started,
         )
+        if plan is not None:
+            plan = replace(plan, prompt_calibration={**plan.prompt_calibration, "status": "failed"})
+            atomic_write_json(output_dir / "replay-plan.json", plan.to_dict())
+        preparation_path = evidence_dir / "replay_preparation.json"
+        if not preparation_path.exists():
+            atomic_write_json(
+                preparation_path, {"status": "failed", "duration_seconds": time.monotonic() - setup_started}
+            )
+            captures.append(_capture("replay_preparation", preparation_path))
         error_path = output_dir / "replay-error.json"
         atomic_write_json(
             error_path,

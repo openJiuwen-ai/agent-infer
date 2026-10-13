@@ -191,7 +191,46 @@ def test_agentx_zero_output_is_retained_and_planned_as_one_token(tmp_path: Path)
     assert analysis.sessions[0].requests[-1].source_output_tokens == 0
     plan = build_replay_plan(_config(source), analysis, ir)
     assert plan.tasks[0].requests[-1].planned_output_tokens == 1
+    assert plan.tasks[0].requests[-1].source_output_tokens == 0
     assert plan.tasks[0].requests[-1].response_validation == "exact_tokens"
+
+
+def test_agentx_execution_audits_original_zero_output_separately(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "zero-output.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "id": "session",
+                "block_size": 64,
+                "hash_id_scope": "local",
+                "requests": [_request(0, 0.01, [0], output=0)],
+            }
+        )
+        + "\n"
+    )
+    real_client = httpx.AsyncClient
+
+    def respond(request):
+        if request.url.path == "/metrics":
+            return httpx.Response(503)
+        body = json.loads(request.content)
+        if request.url.path == "/tokenize":
+            return httpx.Response(200, json={"tokens": [ord(c) for c in body["prompt"]]})
+        assert body["max_tokens"] == 1
+        payload = {"choices": [], "usage": {"prompt_tokens": len(body["prompt"]), "completion_tokens": 1}}
+        return httpx.Response(200, content=f"data: {json.dumps(payload)}\n\ndata: [DONE]\n\n")
+
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kwargs: real_client(transport=httpx.MockTransport(respond), **kwargs)
+    )
+    result = run_replay(_config(source))
+    execution = json.loads((result / "replay-execution.json").read_text())
+    calibration = execution["tasks"][0]["nodes"][0]["prompt_calibration"]
+    assert calibration["source_output_tokens"] == 0
+    assert calibration["effective_output_tokens"] == calibration["backend_output_tokens"] == 1
+    assert calibration["backend_target_met"] is True
+    assert execution["summary"]["source_zero_output_requests"] == 1
+    assert execution["summary"]["zero_output_requests_observed_one_token"] == 1
 
 
 def test_agentx_hash_block_count_uses_exact_integer_division(tmp_path: Path) -> None:
@@ -361,6 +400,7 @@ def test_agentx_completions_wire_and_usage(
     assert len(body["prompt"]) == 128
     assert body["max_tokens"] == body["min_tokens"] == 3
     assert "messages" not in body
+    assert "return_token_ids" not in body
     assert facts[0].actor_id == "child"
     identity = body["vllm_xargs"]["agentic_context"]  # type: ignore[index]
     if isinstance(identity, str):
@@ -369,8 +409,9 @@ def test_agentx_completions_wire_and_usage(
     assert result.assistant_content == "reply"
 
 
+@pytest.mark.parametrize("transport", ["auto", "completion_token_ids"])
 def test_agentx_runner_records_same_snapshots_with_different_live_answers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, transport: str
 ) -> None:
     source = tmp_path / "source.jsonl"
     source.write_text(
@@ -423,7 +464,9 @@ def test_agentx_runner_records_same_snapshots_with_different_live_answers(
     fingerprints = []
     for run_index in range(2):
         selected_run = run_index
-        result = run_replay(_config(source, result_dir=tmp_path / f"result-{run_index}"))
+        config = _config(source, result_dir=tmp_path / f"result-{run_index}")
+        config.replay.prompt_transport = transport
+        result = run_replay(ReplayBenchConfig.model_validate(config.model_dump(mode="json")))
         execution = json.loads((result / "replay-execution.json").read_text())
         plan = json.loads((result / "replay-plan.json").read_text())
         summary = json.loads((result / "summary.json").read_text())
@@ -431,6 +474,15 @@ def test_agentx_runner_records_same_snapshots_with_different_live_answers(
         assert summary["execution"]["metadata"]["planned_requests"] == 3
         assert summary["execution"]["metadata"]["snapshot_cache_usage_coverage"] == 0
         assert len(load_request_facts(result / "requests.jsonl")) == 3
+        preparation = json.loads((result / "evidence/replay_preparation.json").read_text())
+        assert preparation["prompt_transport"] == "completion_token_ids"
+        assert preparation["root_preparation"] == "request_release"
+        assert preparation["task_preparation_in_measured_time"] is True
+        for task in execution["tasks"]:
+            for node in task["nodes"]:
+                assert node["prompt_prepare_mode"] == "completion_token_ids"
+                assert node["prompt_prepare_seconds"] >= 0
+                assert node["prompt_prepare_start_offset_seconds"] >= node["planned_send_offset_seconds"]
         fingerprints.append(plan["workload_fingerprint"])
 
     assert fingerprints[0] == fingerprints[1]
@@ -439,7 +491,10 @@ def test_agentx_runner_records_same_snapshots_with_different_live_answers(
     assert sent[0][0]["prompt"] == sent[0][1]["prompt"][:64]
 
 
-def test_agentx_runner_bounds_session_inflight_requests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("bad_usage", [False, True])
+def test_agentx_runner_bounds_session_inflight_requests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_usage: bool
+) -> None:
     source = tmp_path / "source.jsonl"
     source.write_text(
         json.dumps(
@@ -475,12 +530,13 @@ def test_agentx_runner_bounds_session_inflight_requests(tmp_path: Path, monkeypa
         body = json.loads(request.content)
         if request.url.path == "/tokenize":
             return httpx.Response(200, json={"tokens": [ord(character) for character in body["prompt"]]})
+        assert request.url.path == "/v1/completions"
         active += 1
         peak = max(peak, active)
         await asyncio.sleep(0.03)
         active -= 1
         stream = (
-            f"data: {json.dumps({'choices': [], 'usage': {'prompt_tokens': 64, 'completion_tokens': 3}})}\n\n"
+            f"data: {json.dumps({'choices': [], 'usage': {'prompt_tokens': 63 if bad_usage else 64, 'completion_tokens': 3}})}\n\n"
             "data: [DONE]\n\n"
         )
         return httpx.Response(200, content=stream, headers={"content-type": "text/event-stream"})
@@ -490,9 +546,16 @@ def test_agentx_runner_bounds_session_inflight_requests(tmp_path: Path, monkeypa
     )
     config = _config(source, result_dir=tmp_path / "result")
     config.replay.max_inflight_requests = 1
-    result = run_replay(config)
+    if bad_usage:
+        with pytest.raises(RuntimeError, match="did not complete"):
+            run_replay(config)
+        result = config.experiment.result_dir
+    else:
+        result = run_replay(config)
     execution = json.loads((result / "replay-execution.json").read_text())
-    assert execution["summary"]["successful_requests"] == 4
+    assert execution["summary"]["successful_requests"] == (0 if bad_usage else 4)
+    assert execution["summary"]["complete_replay"] is not bad_usage
+    assert json.loads((result / "manifest.json").read_text())["status"] == ("failed" if bad_usage else "completed")
     assert peak == 1
     assert peak_retained == 1
     assert all(ref() is None for ref in prompt_refs)

@@ -139,9 +139,8 @@ round 无法得到有效 gap（包括缺少可用时间事件或出现负的源�
 ### Prompt 构造、请求和失败传播
 
 回放直接使用源 trace 的 `input_tokens_total` 和 `output_tokens` 作为每轮目标。
-TraceLab 允许 `output_tokens: 0`；由于当前 vLLM 不接受零生成长度，这类请求实际发送并生成
-1 个 token。结果中的请求级 `output_tokens` 和汇总输出 token 数均记录实际值 1；计划仍保留源值 0，
-并用 `effective_output_tokens: 1` 标明发送目标。后续轮使用该实际生成 token 构造前缀。
+TraceLab 转换和计划保留 `output_tokens: 0`。当前后端不能精确执行零生成长度，执行准备阶段会明确失败，
+不会将目标改成 1。AgentX 保留下文单独说明的零输出规划规则。
 `prefix_tokens` 决定要复用的输入前缀；工具数量和错误数量仍只作为来源审计信息，源工具不会执行。
 `newly_append_tokens` 保留为源字段；如果上一轮 token 不足，本轮实际新增长度可能大于它。
 
@@ -160,7 +159,7 @@ token、延迟和吞吐统计；服务端缓存会继续保留。TraceLab 用 `/
 token ID 数组，以避免 Chat Template 再编码改变前缀或长度。因此 `chat_template_kwargs` 不作用于
 TraceLab 的正式请求。后端必须支持 Completions 的 token ID 输入以及 `return_token_ids` 流式输出。
 
-Replay 同时设置 `max_tokens` 和 `min_tokens` 为实际发送目标长度（源值为 0 时设为 1），
+Replay 同时设置 `max_tokens` 和 `min_tokens` 为源 trace 的输出目标长度，
 设置 `ignore_eos: true`，
 启用流式 usage，并传递确定性的采样 seed。请求只有在 HTTP 成功、收到 SSE `[DONE]`，
 且后端 usage 与实际输出 token ID 都匹配发送目标长度时才算成功。`prompt_calibration_tolerance_tokens`
@@ -261,3 +260,65 @@ vllm bench serve --agentinfer compare \
 
 公平比较要求使用相同 trace、抽样种子、前缀预算、并发和部署参数。每次冷启动比较前重启服务，
 并检查起始 Prefix Cache 指标。Replay 不提供任务正确性结论，详见[基准方法](../explanation/benchmark-methodology.md)。
+
+## 调度和缓存性能回放：token-ID 模式
+
+AgentInfer 合成负载建议使用下面的配置。内置模板保持文本接口兼容；使用自定义 YAML 时合并以下字段：
+
+```yaml
+backend:
+  endpoint: /v1/chat/completions
+replay:
+  prompt_transport: completion_token_ids
+  tokenizer_max_concurrency: 16
+  prompt_calibration_tolerance_tokens: 0
+  context_adjustment_mode: strict
+```
+
+也可在原命令中添加 `--endpoint /v1/chat/completions --prompt-transport completion_token_ids`。
+
+token-ID 模式要求 `prompt_calibration_tolerance_tokens=0`。TraceLab 和 AgentX 在
+`prompt_transport: auto` 下也遵循此规则；非零值会触发包含 trace 类型的错误提示。
+AgentInfer 文本模式仍支持配置输入容差，Inferact 文本模式仍要求零容差。
+
+实际推理发送到同一服务的 `/v1/completions`；后端及 Router 必须支持 token-ID 输入、
+`return_token_ids` 流式输出和身份元数据。这个模式保留前缀作用域和 token 预算，不保留文本 Chat 模板语义。
+`auto` 默认保留 AgentInfer/Inferact 文本路径和 TraceLab/AgentX token-ID 路径；`chat_text` 显式选择文本路径。
+Inferact 不允许切换到 token-ID 模式，TraceLab 和 AgentX 不允许切换到文本模式。
+AgentX 也可显式设置 `completion_token_ids`，继续使用其已有的 `/v1/completions` 配置。
+
+AgentInfer 首轮按全局共享段、Session 段和请求私有段构造；同 Session 的不同 Subagent 共用 Session 段，
+不同 Session 分别生成。续轮使用上一轮输入 IDs、实际输出 IDs 和所需填充，不对完整历史重新分词。
+`strict` 的目标无法容纳历史和实际输出时失败。`adaptive` 由计划选择 `trim` 或 `reset`：
+`trim` 从最近的历史请求私有填充末尾开始裁剪，保留全局/Session/工具/额外 system 段和所有实际输出，
+记录 `trimmed_filler_tokens` 与 `preserved_prefix_tokens`；可裁剪内容不足时失败。
+`reset` 重建根 Prompt 并明确记录。TraceLab 继续使用其源 `prefix_tokens` 规则。
+
+全局准备阶段校验实际计划，只预加载并去重全局共享片段；零长度和不消费的片段不预加载。
+其他 Prompt 数据在任务取得 `experiment.max_concurrency` 名额后准备，根 Prompt 构造完成后开始该会话的发送计时。
+任务完成、失败或取消后释放私有 tokenizer 缓存及源文本缓存，完整 Prompt 由活动任务的依赖图持有。
+这是按任务数限制的准备窗口，并非字节上限；单个大 Session 仍可能持有较大的历史上下文。
+AgentX 保留按需快照构造：到达释放时间并取得会话内信号量后才构造。
+同一缓存键的并发请求合并，tokenize、detokenize 和 count 共用 `tokenizer_max_concurrency` 上限。
+共享请求不因单个等待者取消而取消；任务结束会取消剩余私有准备操作，运行结束会清理所有剩余操作。
+全局准备受 `run_timeout_seconds`（未配置时使用 `request_timeout_seconds`）约束。
+任务内准备受任务超时和正式执行的运行超时约束。
+
+文本路径优先使用经后端验证的本地 tokenizer，并保留完整模板校准；不可用时使用后端计数。
+没有把固定轮次开销估算视为精确计数，也没有放宽已有容差。所有模式都验证响应结束证据和实际输入/输出 usage；
+文本路径仅允许配置中原有的输入容差，输出长度始终精确匹配。Messages 输入验证计入 cache creation/read tokens。
+AgentInfer 和 TraceLab 的 token-ID 续轮还要求输出 IDs 类型、数量正确。
+AgentX 的输入是完整源快照，只校验 usage 和流结束证据，不要求返回输出 IDs。
+所需证据缺失或不匹配时请求失败。
+
+`evidence/replay_preparation.json` 单独记录全局初始化耗时及活动任务准备策略。
+吞吐测量从全局准备和起始指标采集完成后开始，到执行结束为止，包括活动任务的 Prompt 准备，不包括收尾采集。
+因此分词较慢仍可能降低测得的整体吞吐；准备可能与其他任务推理重叠，不能从总耗时中直接扣除准备耗时之和。
+`replay-execution.json` 的每个请求记录准备起止偏移、
+`prompt_prepare_seconds`、`prompt_prepare_mode`、计划/实际发送偏移和 `scheduler_lag_seconds`。
+准备计时不包含等待上下文依赖；根 Prompt 相对会话发送时钟的偏移可以为负，但准备仍在整体测量窗口内。
+校准记录分别保留 `source_output_tokens`、`effective_output_tokens` 和 `backend_output_tokens`：
+AgentX 原始输出为零、执行目标为一时，原始值仍记录为零。`backend_target_met` 比较后端实际用量与执行目标。
+
+所有数据集均按任务、节点和请求事实的身份检查完整覆盖。漏请求、重复请求、失败和依赖跳过都会使顶层状态为
+`failed`，命令行返回失败，并保留已生成的执行与错误证据。不完整运行不能作为成功的性能比较样本。

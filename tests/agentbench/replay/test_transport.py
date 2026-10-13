@@ -72,6 +72,7 @@ def test_chat_transport_streams_content_usage_and_plan_identity(tmp_path: Path) 
             prompt_kind="lead_main",
             parent_actor_id=None,
             planned_output_tokens=3,
+            planned_input_tokens=12,
             backend_sampling_seed=7,
         )
         result = await transport.send(
@@ -248,3 +249,59 @@ def test_exact_token_validation_rejects_successful_response_with_wrong_usage(tmp
     assert "input expected=12 observed=11" in str(result.error)
     assert fact.status == "error"
     assert fact.input_tokens == 11
+
+
+@pytest.mark.parametrize("trace_type", ["agentinfer", "tracelab"])
+@pytest.mark.parametrize("output_ids", [None, [90], [90, 91]])
+def test_token_continuations_require_actual_output_ids(tmp_path: Path, trace_type: str, output_ids: list[int] | None):
+    """AgentX's optional output IDs must not weaken continuation validation."""
+
+    async def send():
+        config = ReplayBenchConfig.model_validate(
+            {
+                "experiment": {"task_num": 1},
+                "backend": {"base_url": "http://backend"},
+                "replay": {"trace_type": trace_type, "prompt_transport": "completion_token_ids"},
+            }
+        )
+        writer = RequestTraceWriter(tmp_path / "requests.jsonl")
+        await writer.start()
+        transport = ReplayTransport(config, "run", writer)
+        await transport.client.aclose()
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/v1/completions"
+            assert json.loads(request.content)["return_token_ids"] is True
+            choice = {"text": "answer"}
+            if output_ids is not None:
+                choice["token_ids"] = output_ids
+            event = {"choices": [choice], "usage": {"prompt_tokens": 12, "completion_tokens": 2}}
+            return httpx.Response(200, text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n")
+
+        transport.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+        node = SimpleNamespace(
+            runtime_request_id="request",
+            actor_id="lead",
+            actor_role="lead",
+            prompt_kind="lead_main",
+            parent_actor_id=None,
+            planned_input_tokens=12,
+            planned_output_tokens=2,
+            backend_sampling_seed=7,
+        )
+        try:
+            return await transport.send(
+                SimpleNamespace(runtime_session_id="session"),
+                node,
+                SyntheticPrompt("", (), (), token_ids=tuple(range(12))),
+            )
+        finally:
+            await transport.close()
+            await writer.close()
+
+    result = asyncio.run(send())
+    assert result.success is (output_ids == [90, 91])
+    if result.success:
+        assert result.assistant_token_ids == (90, 91)
+    else:
+        assert "output token_ids missing or incomplete" in result.error

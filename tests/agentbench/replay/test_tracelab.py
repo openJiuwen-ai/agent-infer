@@ -16,6 +16,7 @@ from agentinfer.agentbench.replay.converters import TraceLabConverter
 from agentinfer.agentbench.replay.planner import build_replay_plan
 from agentinfer.agentbench.replay.prompt import PromptBuilder, PromptExchange, SyntheticPrompt
 from agentinfer.agentbench.replay.runner import run_replay
+from agentinfer.agentbench.replay.transport import ReplayTransport
 from agentinfer.agentbench.replay.unified_trace_ir import (
     analyze_explicit_trace_ir,
     validate_trace_ir,
@@ -153,7 +154,9 @@ def test_tracelab_zero_output_survives_conversion_and_planning(tmp_path: Path) -
     )
     plan = build_replay_plan(config, analysis, trace_ir)
     assert [node.planned_output_tokens for node in plan.tasks[0].requests] == [0, 8]
-    assert plan.tasks[0].requests[0].to_dict()["effective_output_tokens"] == 1
+    assert plan.tasks[0].requests[0].to_dict()["effective_output_tokens"] == 0
+    with pytest.raises(ValueError, match="zero output tokens exactly"):
+        ReplayTransport._effective_output_tokens(plan.tasks[0].requests[0])
 
 
 def test_tracelab_negative_output_is_rejected(tmp_path: Path) -> None:
@@ -489,7 +492,12 @@ def test_tracelab_runner_uses_token_prefix_and_skips_failed_dependencies(
             },
         }
     )
-    result = run_replay(config)
+    if fail_first:
+        with pytest.raises(RuntimeError, match="did not complete"):
+            run_replay(config)
+        result = config.experiment.result_dir
+    else:
+        result = run_replay(config)
     execution = json.loads((result / "replay-execution.json").read_text())
     plan = json.loads((result / "replay-plan.json").read_text())
     nodes = plan["tasks"][0]["requests"]
@@ -525,8 +533,6 @@ def test_tracelab_eight_tasks_four_concurrent_replays_have_same_token_tree(
                 end=round_index * 3 + 1,
             )
             row["session_id"] = f"session-{session_index}"
-            if session_index == 0 and round_index == 0:
-                row["output_tokens"] = 0
             rows.append(row)
     source.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
 
@@ -589,15 +595,15 @@ def test_tracelab_eight_tasks_four_concurrent_replays_have_same_token_tree(
         assert execution["summary"]["completed_tasks"] == 8
         assert execution["summary"]["planned_requests"] == 24
         assert execution["summary"]["successful_requests"] == 24
-        assert execution["summary"]["requests_with_prefix_shortfall"] == 9
-        assert execution["summary"]["prefix_shortfall_tokens"] == 35
-        assert execution["summary"]["source_zero_output_requests"] == 1
-        assert execution["summary"]["zero_output_requests_observed_one_token"] == 1
+        assert execution["summary"]["requests_with_prefix_shortfall"] == 8
+        assert execution["summary"]["prefix_shortfall_tokens"] == 32
+        assert execution["summary"]["source_zero_output_requests"] == 0
+        assert execution["summary"]["zero_output_requests_observed_one_token"] == 0
         assert len(requests_by_run[run_index]) == 8
         facts = [json.loads(line) for line in (result / "requests.jsonl").read_text().splitlines()]
         assert len(facts) == 24
         assert sum(fact["input_tokens"] for fact in facts) == 8 * (30 + 40 + 55)
-        assert sum(fact["output_tokens"] for fact in facts) == 8 * (7 + 8 + 9) - 6
+        assert sum(fact["output_tokens"] for fact in facts) == 8 * (7 + 8 + 9)
         first_branch_tokens = [requests[0][0][20] for requests in requests_by_run[run_index].values()]
         assert len(set(first_branch_tokens)) == 8
         for requests in requests_by_run[run_index].values():
@@ -637,8 +643,6 @@ def test_tracelab_live_eight_tasks_four_concurrent(tmp_path: Path) -> None:
                 end=round_index * 3 + 1,
             )
             row["session_id"] = f"live-session-{session_index}"
-            if session_index == 0 and round_index == 0:
-                row["output_tokens"] = 0
             rows.append(row)
     source.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     config = ReplayBenchConfig.model_validate(
@@ -659,13 +663,13 @@ def test_tracelab_live_eight_tasks_four_concurrent(tmp_path: Path) -> None:
     assert summary["planned_tasks"] == summary["completed_tasks"] == 8
     assert summary["planned_requests"] == summary["successful_requests"] == 16
     assert summary["requests_with_prefix_shortfall"] == 8
-    assert summary["prefix_shortfall_tokens"] == 38
-    assert summary["source_zero_output_requests"] == 1
-    assert summary["zero_output_requests_observed_one_token"] == 1
+    assert summary["prefix_shortfall_tokens"] == 32
+    assert summary["source_zero_output_requests"] == 0
+    assert summary["zero_output_requests_observed_one_token"] == 0
     facts = [json.loads(line) for line in (result / "requests.jsonl").read_text().splitlines()]
     assert len(facts) == 16
     assert sum(fact["input_tokens"] for fact in facts) == 8 * (64 + 80)
-    assert sum(fact["output_tokens"] for fact in facts) == 8 * (7 + 8) - 6
+    assert sum(fact["output_tokens"] for fact in facts) == 8 * (7 + 8)
 
 
 def test_tracelab_rejects_context_limit_before_warmup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -68,7 +68,9 @@ class LocalTokenizerCounter:
             encoded = encoded.ids
         return tuple(int(token) for token in encoded)
 
-    def text_token_ids(self, text: str) -> tuple[int, ...]:
+    def text_token_ids(self, text: str, *, cache: bool = True) -> tuple[int, ...]:
+        if not cache:
+            return self._encode(text)
         tokens = self._content_cache.get(text)
         if tokens is None:
             tokens = self._encode(text)

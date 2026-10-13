@@ -219,6 +219,30 @@ replay:
     assert metadata["overrides"] == {}
 
 
+def test_replay_cli_selects_raw_token_transport(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = tmp_path / "replay.yaml"
+    config_path.write_text("experiment:\n  task_num: 1\nbackend:\n  endpoint: /v1/messages\nreplay: {}\n")
+    calls = []
+    runner = types.ModuleType("agentinfer.agentbench.replay.runner")
+    runner.run_replay = lambda config, **kwargs: calls.append(config) or tmp_path / "result"
+    monkeypatch.setitem(sys.modules, runner.__name__, runner)
+    assert (
+        main(
+            [
+                "replay",
+                "--config",
+                str(config_path),
+                "--endpoint",
+                "/v1/chat/completions",
+                "--prompt-transport",
+                "completion_token_ids",
+            ]
+        )
+        == 0
+    )
+    assert calls[0].replay.uses_token_ids
+
+
 @pytest.mark.parametrize(
     ("trace_type", "template", "shape", "endpoint"),
     [

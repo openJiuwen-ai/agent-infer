@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 from pathlib import Path
 from typing import Literal
@@ -108,6 +109,10 @@ class ReplayConfig(ReplayStrictModel):
     interval_lognormal: ReplayIntervalLognormalConfig | None = None
     sample_seed: int = 0
     max_inflight_requests: int = Field(8, ge=1, description="Per-session AgentX request limit.")
+    prompt_transport: Literal["auto", "chat_text", "completion_token_ids"] = Field(
+        "auto", json_schema_extra={"cli": True}
+    )
+    tokenizer_max_concurrency: int = Field(16, ge=1)
     lead_title_sys_shared_prefix: int = Field(0, ge=0)
     lead_name_sys_shared_prefix: int = Field(0, ge=0)
     lead_1st_sys_shared_prefix: int = Field(0, ge=0)
@@ -135,6 +140,12 @@ class ReplayConfig(ReplayStrictModel):
     request_timeout_seconds: int = Field(3600, ge=1)
 
     @property
+    def uses_token_ids(self) -> bool:
+        """Keep legacy text configurations while allowing synthetic raw-token replay."""
+
+        return self.trace_type in {"tracelab", "agentX"} or self.prompt_transport == "completion_token_ids"
+
+    @property
     def prompt_shape(self) -> str:
         """Derive the internal prompt shape from the selected trace adapter."""
 
@@ -147,6 +158,13 @@ class ReplayConfig(ReplayStrictModel):
 
     @model_validator(mode="after")
     def validate_replay_modes(self) -> ReplayConfig:
+        if self.trace_type == "inferact_codex_swebenchpro" and self.prompt_transport == "completion_token_ids":
+            raise ValueError("Inferact requires chat_text to preserve source message content")
+        if self.trace_type in {"tracelab", "agentX"} and self.prompt_transport == "chat_text":
+            raise ValueError(f"{self.trace_type} requires completion_token_ids")
+        if self.uses_token_ids and self.prompt_calibration_tolerance_tokens != 0:
+            requirement = self.trace_type if self.trace_type in {"agentX", "tracelab"} else "completion_token_ids"
+            raise ValueError(f"{requirement} requires prompt_calibration_tolerance_tokens=0")
         if self.interval_mode == "lognormal":
             if self.interval_lognormal is None:
                 raise ValueError("interval_mode=lognormal requires interval_lognormal anchors")
@@ -157,11 +175,6 @@ class ReplayConfig(ReplayStrictModel):
                 raise ValueError("inferact_codex_swebenchpro requires interval_mode=lognormal")
             if self.prompt_calibration_tolerance_tokens != 0:
                 raise ValueError("inferact_codex_swebenchpro requires prompt_calibration_tolerance_tokens=0")
-        if self.trace_type == "tracelab":
-            if self.prompt_calibration_tolerance_tokens != 0:
-                raise ValueError("tracelab requires prompt_calibration_tolerance_tokens=0")
-        if self.trace_type == "agentX" and self.prompt_calibration_tolerance_tokens != 0:
-            raise ValueError("agentX requires prompt_calibration_tolerance_tokens=0")
         return self
 
     def context_micro_trim_limit(self, target: int) -> int:
@@ -171,6 +184,14 @@ class ReplayConfig(ReplayStrictModel):
             self.context_micro_trim_max_tokens,
             math.ceil(target * self.context_micro_trim_max_ratio),
         )
+
+    def extra_system_tokens(self, source_key: str, actor_role: str) -> int:
+        """Select the same protected continuation segment in planning and construction."""
+
+        family = "lead" if actor_role == "lead" else "subagent"
+        ratio = getattr(self, f"{family}_continuation_extra_system_ratio")
+        bucket = int(hashlib.sha256(source_key.encode()).hexdigest()[:8], 16) / 0xFFFFFFFF
+        return getattr(self, f"{family}_continuation_system_tokens") if bucket < ratio else 0
 
 
 class ReplayBenchConfig(ReplayStrictModel):
@@ -186,6 +207,12 @@ class ReplayBenchConfig(ReplayStrictModel):
 
         if self.experiment.task_num is None:
             raise ValueError("experiment.task_num is required for Replay")
+        if (
+            self.replay.uses_token_ids
+            and self.replay.trace_type != "agentX"
+            and self.backend.endpoint != "/v1/chat/completions"
+        ):
+            raise ValueError("completion_token_ids requires backend.endpoint=/v1/chat/completions")
         if self.replay.trace_type == "inferact_codex_swebenchpro" and self.backend.endpoint != "/v1/chat/completions":
             raise ValueError("inferact_codex_swebenchpro requires backend.endpoint=/v1/chat/completions")
         if self.replay.trace_type == "tracelab" and self.backend.endpoint != "/v1/chat/completions":

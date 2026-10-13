@@ -35,6 +35,10 @@ class NodeExecution:
     error: str | None
     context_mode: str = "none"
     prompt_calibration: dict[str, object] | None = None
+    prompt_prepare_start_offset_seconds: float | None = None
+    prompt_prepare_end_offset_seconds: float | None = None
+    prompt_prepare_seconds: float | None = None
+    prompt_prepare_mode: str | None = None
 
 
 @dataclass(frozen=True)
@@ -80,6 +84,31 @@ class ReplayExecutor:
         self.plan = plan
         self.prompts = prompts
         self.transport = transport
+        self._preparation: dict[str, tuple[float, float]] = {}
+
+    async def _prepare(self, task, node, context) -> SyntheticPrompt:
+        started = time.monotonic()
+        try:
+            return await self.prompts.build(task, node, context)
+        finally:
+            self._preparation[node.runtime_request_id] = (started, time.monotonic())
+
+    def _preparation_metadata(self, node, task_started: float) -> dict[str, object]:
+        times = self._preparation.get(node.runtime_request_id)
+        if times is None:
+            return {}
+        tokenizer = getattr(self.prompts, "tokenizer", None)
+        mode = (
+            "completion_token_ids"
+            if self.config.replay.uses_token_ids
+            else ("chat_text_local_full" if getattr(tokenizer, "local_tokenizer", None) else "chat_text_backend_full")
+        )
+        return {
+            "prompt_prepare_start_offset_seconds": times[0] - task_started,
+            "prompt_prepare_end_offset_seconds": times[1] - task_started,
+            "prompt_prepare_seconds": times[1] - times[0],
+            "prompt_prepare_mode": mode,
+        }
 
     @property
     def _uses_agentx_snapshots(self) -> bool:
@@ -113,6 +142,12 @@ class ReplayExecutor:
                 )
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
+        finally:
+            release_task = getattr(self.prompts, "release_task", None)
+            if release_task is not None:
+                await release_task(task)
+            for node in task.requests:
+                self._preparation.pop(node.runtime_request_id, None)
         failed_nodes = any(node.status != "success" for node in nodes)
         return ReplayTaskExecution(
             task.task_id,
@@ -134,7 +169,7 @@ class ReplayExecutor:
             else [node for node in task.requests if node.node_type == "request" and node.context_after is None]
         )
         prepared = await asyncio.gather(
-            *(self.prompts.build(task, node, None) for node in roots),
+            *(self._prepare(task, node, None) for node in roots),
             return_exceptions=True,
         )
         root_prompts = dict(zip((node.source_key for node in roots), prepared, strict=True))
@@ -205,6 +240,7 @@ class ReplayExecutor:
                     error,
                     getattr(node, "context_mode", "none"),
                     None,
+                    **self._preparation_metadata(node, task_started),
                 )
             )
 
@@ -236,7 +272,7 @@ class ReplayExecutor:
                     context_completion = await completions[node.context_after]
                     if context_completion.status != "success" or context_completion.exchange is None:
                         raise _DependencyFailed(f"context request {node.context_after} failed")
-                    return await self.prompts.build(task, node, context_completion.exchange)
+                    return await self._prepare(task, node, context_completion.exchange)
                 root_prompt = root_prompts[node.source_key]
                 if isinstance(root_prompt, BaseException):
                     raise RuntimeError(f"root prompt construction failed: {root_prompt}") from root_prompt
@@ -278,7 +314,7 @@ class ReplayExecutor:
         if agentx:
             async with inflight:
                 # Bound prepared snapshots; semaphore wait and render time count as scheduler lag.
-                prompt = await self.prompts.build(task, node, None)
+                prompt = await self._prepare(task, node, None)
                 sent_clock = time.monotonic()
                 response = await self.transport.send(task, node, prompt)
         else:
@@ -300,10 +336,7 @@ class ReplayExecutor:
             _NodeCompletion(response.finished_clock, exchange, completion_status, response.error)
         )
         calibration = asdict(prompt.calibration) if prompt.calibration is not None else None
-        if calibration is not None and self.config.replay.prompt_shape in {
-            "inferact_synthetic",
-            "tracelab_synthetic",
-        }:
+        if calibration is not None:
             actual = response.input_tokens
             calibration["backend_input_tokens"] = actual
             calibration["backend_input_residual_tokens"] = (
@@ -311,9 +344,12 @@ class ReplayExecutor:
                 if actual is not None and node.planned_input_tokens is not None
                 else None
             )
-            if self.config.replay.prompt_shape == "tracelab_synthetic":
-                calibration["source_output_tokens"] = node.planned_output_tokens
-                calibration["effective_output_tokens"] = max(1, node.planned_output_tokens or 0)
+            calibration["source_output_tokens"] = node.source_output_tokens
+            calibration["effective_output_tokens"] = node.planned_output_tokens
+            calibration["backend_output_tokens"] = response.output_tokens
+            calibration["backend_target_met"] = (
+                actual == node.planned_input_tokens and response.output_tokens == node.planned_output_tokens
+            )
         results.append(
             NodeExecution(
                 node.source_key,
@@ -327,5 +363,6 @@ class ReplayExecutor:
                 response.error,
                 getattr(node, "context_mode", "none"),
                 calibration,
+                **self._preparation_metadata(node, task_started),
             )
         )

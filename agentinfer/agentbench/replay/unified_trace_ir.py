@@ -474,6 +474,11 @@ class TraceTextStore:
             self._cache[reference] = text
         return text
 
+    def discard(self, reference: PromptReference) -> None:
+        """Release a cached turn without affecting immutable text held by active requests."""
+
+        self._cache.pop(reference, None)
+
 
 _LEGACY_ANALYSIS_COUNTERS = (
     "invalid_json",

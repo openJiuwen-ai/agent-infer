@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -307,6 +308,7 @@ def test_plan_artifact_contains_only_materialized_execution_fields(tmp_path: Pat
         "effective_interval_seconds",
         "planned_input_tokens",
         "planned_output_tokens",
+        "source_output_tokens",
         "backend_sampling_seed",
     }
     assert set(timing_dependency) == {
@@ -450,6 +452,8 @@ def test_runner_writes_completed_execution_artifacts(tmp_path: Path, monkeypatch
         return EvidenceCapture("vllm", None, False, "test", {})
 
     monkeypatch.setattr("agentinfer.agentbench.replay.runner.TokenizerClient", FakeTokenizer)  # type: ignore[attr-defined]
+    monkeypatch.setattr(FakeTokenizer, "prepare_local_tokenizer", AsyncMock(), raising=False)
+    monkeypatch.setattr("agentinfer.agentbench.replay.runner.PromptBuilder.prepare_tasks", AsyncMock())
     monkeypatch.setattr("agentinfer.agentbench.replay.runner.ReplayTransport", FakeTransport)  # type: ignore[attr-defined]
     monkeypatch.setattr("agentinfer.agentbench.replay.runner.ReplayExecutor", FakeExecutor)  # type: ignore[attr-defined]
     monkeypatch.setattr("agentinfer.agentbench.replay.runner.capture_vllm_metrics", no_metrics)  # type: ignore[attr-defined]
@@ -535,6 +539,8 @@ def test_runner_failure_preserves_evidence_and_closes_clients(
         return EvidenceCapture("vllm", None, False, "test", {})
 
     monkeypatch.setattr("agentinfer.agentbench.replay.runner.TokenizerClient", FakeTokenizer)
+    monkeypatch.setattr(FakeTokenizer, "prepare_local_tokenizer", AsyncMock(), raising=False)
+    monkeypatch.setattr("agentinfer.agentbench.replay.runner.PromptBuilder.prepare_tasks", AsyncMock())
     monkeypatch.setattr("agentinfer.agentbench.replay.runner.ReplayTransport", FakeTransport)
     monkeypatch.setattr("agentinfer.agentbench.replay.runner.ReplayExecutor", FailingExecutor)
     monkeypatch.setattr("agentinfer.agentbench.replay.runner.capture_vllm_metrics", no_metrics)

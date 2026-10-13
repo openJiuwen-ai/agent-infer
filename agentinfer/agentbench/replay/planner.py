@@ -52,6 +52,7 @@ class ReplayPlanNode:
     backend_sampling_seed: int | None
     response_validation: Literal["exact_tokens"] | None = None
     source_prefix_tokens: int | None = None
+    source_output_tokens: int | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Serialize only the materialized fields required to execute the node."""
@@ -78,6 +79,7 @@ class ReplayPlanNode:
                 "context_mode": self.context_mode,
                 "planned_input_tokens": self.planned_input_tokens,
                 "planned_output_tokens": self.planned_output_tokens,
+                "source_output_tokens": self.source_output_tokens,
                 "backend_sampling_seed": self.backend_sampling_seed,
             }
         )
@@ -86,7 +88,7 @@ class ReplayPlanNode:
         if self.response_validation is not None:
             value["response_validation"] = self.response_validation
             if self.planned_output_tokens == 0:
-                value["effective_output_tokens"] = 1
+                value["effective_output_tokens"] = self.planned_output_tokens
         if self.source_prefix_tokens is not None:
             value["source_prefix_tokens"] = self.source_prefix_tokens
         return value
@@ -225,7 +227,10 @@ def _context_plan(
     assert target_input is not None
     assert context_input is not None
     assert context_output is not None
-    deficit = max(0, context_input + context_output - target_input)
+    extra_tokens = (
+        config.replay.extra_system_tokens(request.key, request.actor_role) if config.replay.uses_token_ids else 0
+    )
+    deficit = max(0, context_input + context_output + extra_tokens - target_input)
     if deficit == 0:
         return source_context, "append"
     if deficit <= config.replay.context_micro_trim_limit(target_input):
@@ -281,6 +286,7 @@ def _task_plan(
                 ),
                 planned_input_tokens=planned_input_tokens,
                 planned_output_tokens=planned_output_tokens,
+                source_output_tokens=request.source_output_tokens,
                 backend_sampling_seed=(
                     backend_sampling_seed(
                         config.replay,
@@ -290,9 +296,7 @@ def _task_plan(
                     if request.replay_kind == "request"
                     else None
                 ),
-                response_validation=(
-                    "exact_tokens" if config.replay.prompt_shape in {"tracelab_synthetic", "agentX_snapshot"} else None
-                ),
+                response_validation="exact_tokens" if config.replay.uses_token_ids else None,
                 source_prefix_tokens=(
                     request.source_cached_tokens if config.replay.prompt_shape == "tracelab_synthetic" else None
                 ),

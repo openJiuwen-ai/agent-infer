@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+from collections import Counter
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -171,7 +172,7 @@ def test_tokenizer_client_reuses_validated_local_counter() -> None:
 
     local = SimpleNamespace(
         chat_token_ids=chat_token_ids,
-        text_token_ids=lambda text: (1, 2),
+        text_token_ids=lambda text, *, cache=True: (1, 2),
         detokenize_tokens=lambda tokens: "decoded",
     )
     config = ReplayBenchConfig.model_validate(
@@ -194,6 +195,193 @@ def test_tokenizer_client_reuses_validated_local_counter() -> None:
 
     assert asyncio.run(exercise()) == (42, (1, 2), "decoded")
     assert calls == [[{"role": "user", "content": "hello"}]]
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_local_tokenizer_probe_waits_for_slow_backend_and_can_cancel(monkeypatch, cancel) -> None:
+    def discover(config, *, get_json, backend_tokens):
+        assert get_json("http://backend/tokenizer_info") is None
+        return None
+
+    monkeypatch.setattr("agentinfer.agentbench.replay.prompt.discover_local_tokenizer", discover)
+
+    async def exercise():
+        entered, release, stopped = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        async def respond(request):
+            entered.set()
+            try:
+                await release.wait()
+                return httpx.Response(404)
+            finally:
+                stopped.set()
+
+        config = ReplayBenchConfig.model_validate({"experiment": {"task_num": 1}, "replay": {}})
+        tokenizer = TokenizerClient(config)
+        await tokenizer.client.aclose()
+        tokenizer.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+        probe = asyncio.create_task(tokenizer.prepare_local_tokenizer())
+        try:
+            await entered.wait()
+            await asyncio.sleep(0.2)  # Exceed the thread bridge's 100 ms polling interval.
+            assert not probe.done()
+            if cancel:
+                probe.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await probe
+                await stopped.wait()
+            else:
+                release.set()
+                await probe
+                assert tokenizer.local_tokenizer is None
+        finally:
+            release.set()
+            probe.cancel()
+            await asyncio.gather(probe, return_exceptions=True)
+            await tokenizer.close()
+
+    asyncio.run(asyncio.wait_for(exercise(), 5))
+
+
+def test_tokenizer_concurrent_text_misses_share_requests_and_survive_waiter_cancellation() -> None:
+    async def exercise():
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = Counter()
+
+        async def respond(request):
+            calls[request.url.path] += 1
+            if request.url.path == "/tokenize":
+                entered.set()
+                await release.wait()
+                return httpx.Response(200, json={"tokens": [10, 20]})
+            return httpx.Response(200, json={"prompt": "shared text"})
+
+        tokenizer = TokenizerClient(_config())
+        await tokenizer.client.aclose()
+        tokenizer.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+        waiters = [asyncio.create_task(tokenizer.token_text("shared:prefix", 8)) for _ in range(8)]
+        try:
+            await entered.wait()
+            waiters[0].cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiters[0]
+            release.set()
+            assert await asyncio.gather(*waiters[1:]) == ["shared text"] * 7
+            assert await tokenizer.token_text("shared:prefix", 8) == "shared text"
+            assert calls == {"/tokenize": 1, "/detokenize": 1}
+        finally:
+            release.set()
+            await tokenizer.close()
+            await asyncio.gather(*waiters, return_exceptions=True)
+
+    asyncio.run(asyncio.wait_for(exercise(), 5))
+
+
+def test_tokenizer_failed_shared_request_can_be_retried() -> None:
+    async def exercise():
+        calls = 0
+
+        async def respond(request):
+            nonlocal calls
+            calls += 1
+            await asyncio.sleep(0)
+            if calls == 1:
+                return httpx.Response(503)
+            return httpx.Response(200, json={"tokens": [11, 22]})
+
+        tokenizer = TokenizerClient(_config())
+        await tokenizer.client.aclose()
+        tokenizer.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+        try:
+            results = await asyncio.gather(
+                *(tokenizer.token_sequence("shared:prefix", 4) for _ in range(4)), return_exceptions=True
+            )
+            assert all(isinstance(result, httpx.HTTPStatusError) for result in results)
+            assert calls == 1
+            assert await tokenizer.token_sequence("shared:prefix", 4) == (11, 22, 11, 22)
+            assert calls == 2
+        finally:
+            await tokenizer.close()
+
+    asyncio.run(exercise())
+
+
+def test_tokenizer_limit_covers_tokenize_detokenize_and_count() -> None:
+    async def exercise():
+        active = peak = 0
+        paths = set()
+
+        async def respond(request):
+            nonlocal active, peak
+            paths.add(request.url.path)
+            active += 1
+            peak = max(peak, active)
+            await asyncio.sleep(0.005)
+            active -= 1
+            return httpx.Response(200, json={"tokens": [1, 2], "prompt": "xx", "input_tokens": 2})
+
+        config = _config()
+        config.replay.tokenizer_max_concurrency = 2
+        tokenizer = TokenizerClient(config)
+        await tokenizer.client.aclose()
+        tokenizer.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+        try:
+            await asyncio.gather(
+                *(tokenizer.token_text(f"private:{index}", 2) for index in range(8)),
+                *(tokenizer.count(SyntheticPrompt("", (), ())) for _ in range(8)),
+            )
+            assert peak == 2
+            assert paths == {"/tokenize", "/detokenize", "/v1/messages/count_tokens"}
+        finally:
+            await tokenizer.close()
+
+    asyncio.run(exercise())
+
+
+def test_task_cleanup_cancels_private_work_and_keeps_other_sessions_and_shared_cache() -> None:
+    async def exercise():
+        entered, release, stopped = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        calls = Counter()
+
+        async def respond(request):
+            calls[request.url.path] += 1
+            body = json.loads(request.content)
+            if request.url.path == "/detokenize" and len(body["tokens"]) == 99:
+                entered.set()
+                try:
+                    await release.wait()
+                finally:
+                    stopped.set()
+            return httpx.Response(200, json={"tokens": [1, 2], "prompt": "text"})
+
+        tokenizer = TokenizerClient(_config())
+        await tokenizer.client.aclose()
+        tokenizer.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+        task = SimpleNamespace(runtime_session_id="s1", requests=(SimpleNamespace(runtime_request_id="r1"),))
+        private_names = ("s1:root", "session:s1:subagents:system-private", "trace-record:r1:repair:0")
+        retained_names = ("s10:root", "shared:prefix")
+        try:
+            for namespace in (*private_names, *retained_names):
+                await tokenizer.token_text(namespace, 2)
+            private = asyncio.create_task(tokenizer.token_text("s1:root", 99))
+            await entered.wait()
+            await tokenizer.release_task(task)
+            with pytest.raises(asyncio.CancelledError):
+                await private
+            assert stopped.is_set()
+            before = calls.copy()
+            for namespace in retained_names:
+                assert await tokenizer.token_text(namespace, 2) == "text"
+            assert calls == before
+            for namespace in private_names:
+                assert await tokenizer.token_text(namespace, 2) == "text"
+            assert calls["/tokenize"] == before["/tokenize"] + 3
+            assert calls["/detokenize"] == before["/detokenize"] + 3
+        finally:
+            release.set()
+            await tokenizer.close()
+
+    asyncio.run(asyncio.wait_for(exercise(), 5))
 
 
 def test_lead_title_name_and_main_build_distinct_prompt_shapes() -> None:
