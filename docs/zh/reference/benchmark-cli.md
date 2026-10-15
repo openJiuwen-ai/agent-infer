@@ -93,7 +93,36 @@ vllm bench serve --agentinfer replay \
 vllm bench serve --agentinfer replay --help
 ```
 
-提供 `--config` 时，其他 Replay 覆盖参数均为可选。未提供时，Replay 根据 `--trace-type`
+`replay` 的 CLI 覆盖参数由配置 schema 派生，与 YAML 字段一一对应：
+
+| 参数 | 类型或取值 | 映射字段 |
+| --- | --- | --- |
+| `--task-num INT` | `>= 1` | `experiment.task_num` |
+| `--result-dir PATH` | 目录路径 | `experiment.result_dir` |
+| `--max-concurrency INT` | `>= 1` | `experiment.max_concurrency` |
+| `--task-timeout-seconds INT` | 秒，`>= 1` | `experiment.task_timeout_seconds` |
+| `--run-timeout-seconds INT` | 秒，`>= 1`；省略表示不设总超时 | `experiment.run_timeout_seconds` |
+| `--base-url URL` | HTTP URL | `backend.base_url` |
+| `--metrics-url URL` | HTTP URL | `backend.metrics_url` |
+| `--tokenizer-base-url URL` | HTTP URL；省略时回退到 `backend.base_url` | `backend.tokenizer_base_url` |
+| `--model NAME` | 字符串 | `backend.model` |
+| `--endpoint PATH` | `/v1/chat/completions`、`/v1/completions` 或 `/v1/messages` | `backend.endpoint` |
+| `--api-key-env NAME` | 环境变量名 | `backend.api_key_env` |
+| `--trace-type NAME` | `agentinfer`、`inferact_codex_swebenchpro`、`agentX` 或 `tracelab` | `replay.trace_type` |
+| `--trace-path PATH` | 文件路径；省略时使用对应默认数据集 | `replay.trace_path` |
+| `--trace-same-agent-gap-scale FLOAT` | `>= 0` | `replay.trace_same_agent_gap_scale` |
+| `--trace-same-agent-gap-offset-seconds FLOAT` | 有符号秒 | `replay.trace_same_agent_gap_offset_seconds` |
+| `--interval-mode NAME` | `trace` 或 `lognormal` | `replay.interval_mode` |
+| `--sample-seed INT` | 整数 | `replay.sample_seed` |
+| `--prompt-transport NAME` | `auto`、`chat_text` 或 `completion_token_ids` | `replay.prompt_transport` |
+| `--context-adjustment-mode NAME` | `strict` 或 `adaptive` | `replay.context_adjustment_mode` |
+| `--context-micro-trim-max-tokens INT` | `>= 0` | `replay.context_micro_trim_max_tokens` |
+| `--context-micro-trim-max-ratio FLOAT` | `0` 到 `1` | `replay.context_micro_trim_max_ratio` |
+| `--prompt-calibration-tolerance-tokens INT` | `0` 到 `8` | `replay.prompt_calibration_tolerance_tokens` |
+| `--request-timeout-seconds INT` | 秒，`>= 1` | `replay.request_timeout_seconds` |
+
+`backend.chat_template_kwargs`、`replay.interval_lognormal` 等结构化字段暂不支持 CLI 覆盖，
+请在 YAML 中配置。提供 `--config` 时，其他 Replay 覆盖参数均为可选。未提供时，Replay 根据 `--trace-type`
 选择内置模板，
 并要求显式提供 `--trace-type`、`--task-num`、`--base-url` 和 `--model`；`--max-concurrency` 默认为 `1`。
 AgentInfer、Inferact 或 TraceLab 内置模板的 `trace_path` 为 `null` 时会使用对应默认数据集；Inferact 和

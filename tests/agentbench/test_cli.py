@@ -11,6 +11,7 @@ import pytest
 from agentinfer.agentbench.benchkit.cli import (
     _apply_cli_overrides,
     _apply_replay_cli_overrides,
+    _discover_overrides,
     _parser,
     _prepare,
     _resolve_cli_path,
@@ -66,6 +67,85 @@ def test_replay_cli_derives_prompt_shape_after_trace_type_override(trace_type: s
     assert overridden.replay.trace_type == trace_type
     assert overridden.replay.prompt_shape == shape
     assert config.replay.prompt_shape == "agentinfer_synthetic"
+
+
+def test_replay_scalar_cli_overrides_are_discovered_and_applied() -> None:
+    """Issue #37: scalar replay fields should be CLI-overridable end to end."""
+
+    base = {
+        "experiment": {"task_num": 1, "task_timeout_seconds": 3600, "run_timeout_seconds": None},
+        "backend": {
+            "tokenizer_base_url": None,
+            "api_key_env": None,
+        },
+        "replay": {
+            "trace_same_agent_gap_scale": 1.0,
+            "trace_same_agent_gap_offset_seconds": 0.0,
+            "sample_seed": 0,
+            "context_adjustment_mode": "strict",
+            "context_micro_trim_max_tokens": 64,
+            "context_micro_trim_max_ratio": 0.005,
+            "prompt_calibration_tolerance_tokens": 0,
+            "request_timeout_seconds": 3600,
+        },
+    }
+    config = ReplayBenchConfig.model_validate(base)
+    args = _parser().parse_args(
+        [
+            "replay",
+            "--config",
+            "replay.yaml",
+            "--task-timeout-seconds",
+            "123",
+            "--run-timeout-seconds",
+            "456",
+            "--tokenizer-base-url",
+            "http://tok:9000",
+            "--api-key-env",
+            "MY_KEY",
+            "--trace-same-agent-gap-scale",
+            "1.5",
+            "--trace-same-agent-gap-offset-seconds",
+            "-2.5",
+            "--sample-seed",
+            "7",
+            "--context-adjustment-mode",
+            "adaptive",
+            "--context-micro-trim-max-tokens",
+            "128",
+            "--context-micro-trim-max-ratio",
+            "0.01",
+            "--prompt-calibration-tolerance-tokens",
+            "2",
+            "--request-timeout-seconds",
+            "999",
+        ]
+    )
+    overridden = _apply_replay_cli_overrides(args, config)
+
+    assert overridden.experiment.task_timeout_seconds == 123
+    assert overridden.experiment.run_timeout_seconds == 456
+    assert overridden.backend.tokenizer_base_url == "http://tok:9000"
+    assert overridden.backend.api_key_env == "MY_KEY"
+    assert overridden.replay.trace_same_agent_gap_scale == 1.5
+    assert overridden.replay.trace_same_agent_gap_offset_seconds == -2.5
+    assert overridden.replay.sample_seed == 7
+    assert overridden.replay.context_adjustment_mode == "adaptive"
+    assert overridden.replay.context_micro_trim_max_tokens == 128
+    assert overridden.replay.context_micro_trim_max_ratio == 0.01
+    assert overridden.replay.prompt_calibration_tolerance_tokens == 2
+    assert overridden.replay.request_timeout_seconds == 999
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["chat_template_kwargs", "interval_lognormal"],
+)
+def test_replay_structured_fields_stay_cli_inert(field: str) -> None:
+    """dict/nested-model replay fields are not (yet) exposed as CLI overrides."""
+
+    exposed = {override.field for override in _discover_overrides(ReplayBenchConfig)}
+    assert field not in exposed
 
 
 def test_removed_prompt_shape_cli_flag_is_rejected() -> None:

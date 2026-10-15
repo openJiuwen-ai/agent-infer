@@ -35,8 +35,8 @@ class ReplayExperimentConfig(ReplayStrictModel):
     task_num: int | None = Field(None, ge=1, json_schema_extra={"cli": True})
     result_dir: Path = Field(Path("replay-results"), json_schema_extra={"cli": True})
     max_concurrency: int = Field(1, ge=1, json_schema_extra={"cli": True})
-    task_timeout_seconds: int | None = Field(3600, ge=1)
-    run_timeout_seconds: int | None = Field(None, ge=1)
+    task_timeout_seconds: int | None = Field(3600, ge=1, json_schema_extra={"cli": True})
+    run_timeout_seconds: int | None = Field(None, ge=1, json_schema_extra={"cli": True})
 
 
 class ReplayBackendConfig(ReplayStrictModel):
@@ -45,7 +45,7 @@ class ReplayBackendConfig(ReplayStrictModel):
     type: Literal["vllm"] = "vllm"
     base_url: str = Field("http://127.0.0.1:8000", json_schema_extra={"cli": True})
     metrics_url: str | None = Field(None, json_schema_extra={"cli": {"flag": "--metrics-url"}})
-    tokenizer_base_url: str | None = None
+    tokenizer_base_url: str | None = Field(None, json_schema_extra={"cli": True})
     model: str = Field(
         "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
         json_schema_extra={"cli": True},
@@ -55,7 +55,7 @@ class ReplayBackendConfig(ReplayStrictModel):
         json_schema_extra={"cli": True},
     )
     chat_template_kwargs: dict[str, object] = Field(default_factory=dict)
-    api_key_env: str | None = None
+    api_key_env: str | None = Field(None, json_schema_extra={"cli": True})
 
     @property
     def resolved_tokenizer_base_url(self) -> str:
@@ -100,14 +100,16 @@ class ReplayConfig(ReplayStrictModel):
         1.0,
         ge=0,
         description="Scale historical completion-to-next-start gaps between requests from the same Agent.",
+        json_schema_extra={"cli": True},
     )
     trace_same_agent_gap_offset_seconds: float = Field(
         0.0,
         description="Signed offset applied after scaling a same-Agent Trace request gap.",
+        json_schema_extra={"cli": True},
     )
     interval_mode: Literal["trace", "lognormal"] = Field("trace", json_schema_extra={"cli": True})
     interval_lognormal: ReplayIntervalLognormalConfig | None = None
-    sample_seed: int = 0
+    sample_seed: int = Field(0, json_schema_extra={"cli": True})
     max_inflight_requests: int = Field(8, ge=1, description="Per-session AgentX request limit.")
     prompt_transport: Literal["auto", "chat_text", "completion_token_ids"] = Field(
         "auto", json_schema_extra={"cli": True}
@@ -128,16 +130,17 @@ class ReplayConfig(ReplayStrictModel):
     subagent_continuation_extra_system_ratio: float = Field(0, ge=0, le=1)
     lead_continuation_system_tokens: int = Field(0, ge=0)
     subagent_continuation_system_tokens: int = Field(0, ge=0)
-    context_adjustment_mode: Literal["strict", "adaptive"] = "strict"
-    context_micro_trim_max_tokens: int = Field(64, ge=0)
-    context_micro_trim_max_ratio: float = Field(0.005, ge=0, le=1)
+    context_adjustment_mode: Literal["strict", "adaptive"] = Field("strict", json_schema_extra={"cli": True})
+    context_micro_trim_max_tokens: int = Field(64, ge=0, json_schema_extra={"cli": True})
+    context_micro_trim_max_ratio: float = Field(0.005, ge=0, le=1, json_schema_extra={"cli": True})
     prompt_calibration_tolerance_tokens: int = Field(
         0,
         ge=0,
         le=8,
         description="Residual allowance for synthetic prompts; Inferact always uses exact input lengths.",
+        json_schema_extra={"cli": True},
     )
-    request_timeout_seconds: int = Field(3600, ge=1)
+    request_timeout_seconds: int = Field(3600, ge=1, json_schema_extra={"cli": True})
 
     @property
     def uses_token_ids(self) -> bool:
