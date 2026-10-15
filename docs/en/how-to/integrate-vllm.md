@@ -11,10 +11,10 @@ For a source checkout, activate the environment used by the vLLM service and ins
 python -m pip install -e .
 ```
 
-For a release deployment, download the [AgentInfer 0.1.0 wheel][release-wheel], then run:
+For a release deployment, download the [AgentInfer 0.2.0 wheel][release-wheel], then run:
 
 ```bash
-python -m pip install agentinfer-0.1.0-py3-none-any.whl
+python -m pip install agentinfer-0.2.0-py3-none-any.whl
 ```
 
 Confirm that both packages resolve from the same interpreter:
@@ -131,4 +131,4 @@ See [Architecture](../explanation/architecture.md) for component responsibilitie
 [Python API](../reference/python-api.md) for class signatures. For a reproducible baseline/candidate comparison, see
 [Run a benchmark](run-benchmark.md).
 
-[release-wheel]: https://github.com/openjiuwen-ai/agent-infer/releases/download/0.1.0/agentinfer-0.1.0-py3-none-any.whl
+[release-wheel]: https://github.com/openjiuwen-ai/agent-infer/releases/download/0.2.0/agentinfer-0.2.0-py3-none-any.whl

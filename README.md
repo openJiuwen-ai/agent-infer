@@ -48,10 +48,10 @@ python -m pip install -e .
 
 ### Install a release package
 
-Download the [AgentInfer 0.1.0 wheel][release-wheel], then install it in the target vLLM environment:
+Download the [AgentInfer 0.2.0 wheel][release-wheel], then install it in the target vLLM environment:
 
 ```bash
-python -m pip install agentinfer-0.1.0-py3-none-any.whl
+python -m pip install agentinfer-0.2.0-py3-none-any.whl
 ```
 
 ## Quick Start
@@ -87,4 +87,4 @@ This product serves solely as a workflow orchestration tool and does not embed a
 users integrate AI models for specific business scenarios, they shall bear full responsibility for compliance
 obligations under the EU AI Act and other relevant regulatory frameworks.
 
-[release-wheel]: https://github.com/openjiuwen-ai/agent-infer/releases/download/0.1.0/agentinfer-0.1.0-py3-none-any.whl
+[release-wheel]: https://github.com/openjiuwen-ai/agent-infer/releases/download/0.2.0/agentinfer-0.2.0-py3-none-any.whl

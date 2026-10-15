@@ -27,10 +27,10 @@ cd agent-infer
 python -m pip install -e .
 ```
 
-发布环境中，下载 [AgentInfer 0.1.0 wheel][release-wheel]，激活目标 vLLM 环境并执行：
+发布环境中，下载 [AgentInfer 0.2.0 wheel][release-wheel]，激活目标 vLLM 环境并执行：
 
 ```bash
-python -m pip install agentinfer-0.1.0-py3-none-any.whl
+python -m pip install agentinfer-0.2.0-py3-none-any.whl
 ```
 
 ## 3. 启动 vLLM
@@ -67,4 +67,4 @@ curl http://127.0.0.1:8000/v1/models
 接下来可按[接入 vLLM](../how-to/integrate-vllm.md)复用现有服务，或按
 [运行基准测试](../how-to/run-benchmark.md)比较调度方案。
 
-[release-wheel]: https://gitcode.com/openJiuwen/agent-infer/releases/download/0.1.0/agentinfer-0.1.0-py3-none-any.whl
+[release-wheel]: https://gitcode.com/openJiuwen/agent-infer/releases/download/0.2.0/agentinfer-0.2.0-py3-none-any.whl
