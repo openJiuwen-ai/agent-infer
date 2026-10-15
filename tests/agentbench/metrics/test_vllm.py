@@ -1,7 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 
-from agentinfer.agentbench.benchkit.metrics.vllm import aggregate_vllm_metrics, parse_prometheus
+from agentinfer.agentbench.benchkit.metrics.schema import EvidenceCapture
+from agentinfer.agentbench.benchkit.metrics.vllm import (
+    aggregate_vllm_metrics,
+    parse_prometheus,
+    vllm_capture_reason,
+)
 
 
 def test_parse_prometheus_preserves_labels_and_timestamps() -> None:
@@ -154,6 +159,55 @@ def test_aggregate_vllm_metrics_rejects_one_sided_lifecycle_marker() -> None:
 def test_aggregate_vllm_metrics_requires_two_supported_snapshots() -> None:
     assert aggregate_vllm_metrics(None, "metric 1").reason == "missing_metrics_snapshot"
     assert aggregate_vllm_metrics("unrelated 1", "unrelated 2").reason == "empty_parsed_metrics"
+
+
+def test_aggregate_vllm_metrics_surfaces_capture_reason_on_missing_snapshot() -> None:
+    """A failed metrics fetch reports the collector error instead of a placeholder (issue #23)."""
+    metrics = aggregate_vllm_metrics(
+        None, None, capture_reason="Connection refused: connect to http://vllm-backend:8077/metrics failed"
+    )
+
+    assert metrics.available is False
+    assert metrics.reason == (
+        "metrics_capture_failed: Connection refused: connect to http://vllm-backend:8077/metrics failed"
+    )
+
+
+def test_aggregate_vllm_metrics_keeps_missing_snapshot_reason_without_capture_error() -> None:
+    assert aggregate_vllm_metrics(None, "metric 1").reason == "missing_metrics_snapshot"
+    assert aggregate_vllm_metrics(None, None, capture_reason=None).reason == "missing_metrics_snapshot"
+    assert aggregate_vllm_metrics(None, None, capture_reason="").reason == "missing_metrics_snapshot"
+
+
+def test_aggregate_vllm_metrics_capture_reason_does_not_affect_valid_window() -> None:
+    metrics = aggregate_vllm_metrics(_snapshot(1.0), _snapshot(4.0), capture_reason="stale reason from a prior run")
+
+    assert metrics.available is True
+    assert metrics.reason is None
+
+
+def test_vllm_capture_reason_returns_first_unavailable_vllm_capture() -> None:
+    captures = (
+        EvidenceCapture("replay_preparation", None, True, None, {}),
+        EvidenceCapture("vllm_start", None, False, "metrics endpoint unreachable", {}),
+        EvidenceCapture("vllm_end", None, False, "timeout", {}),
+    )
+
+    assert vllm_capture_reason(captures) == "metrics endpoint unreachable"
+
+
+def test_vllm_capture_reason_ignores_available_and_unrelated_captures() -> None:
+    captures = (
+        EvidenceCapture("vllm", "evidence/vllm_metrics_start.prom", True, "should be ignored", {"text": "x"}),
+        EvidenceCapture("vllm_end", None, False, None, {}),
+        EvidenceCapture("session_agent_analysis", None, False, "analysis failed", {}),
+    )
+
+    assert vllm_capture_reason(captures) is None
+
+
+def test_vllm_capture_reason_returns_none_without_captures() -> None:
+    assert vllm_capture_reason(()) is None
 
 
 def test_aggregate_vllm_metrics_rejects_invalid_histogram_count() -> None:

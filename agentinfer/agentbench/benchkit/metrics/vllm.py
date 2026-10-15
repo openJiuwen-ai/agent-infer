@@ -4,11 +4,13 @@
 """Aggregate raw vLLM Prometheus evidence without writing artifacts."""
 
 import math
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
 from prometheus_client.parser import text_string_to_metric_families
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
+
+from .schema import EvidenceCapture
 
 LatencyValue = float | int | None
 SeriesLabels = tuple[tuple[str, str], ...]
@@ -70,10 +72,24 @@ def parse_prometheus(text: str) -> PrometheusSnapshot:
     return PrometheusSnapshot(samples)
 
 
-def aggregate_vllm_metrics(start_text: str | None, end_text: str | None) -> VllmMetrics:
-    """Compute instance-wide vLLM deltas from comparable Prometheus snapshots."""
+def aggregate_vllm_metrics(
+    start_text: str | None,
+    end_text: str | None,
+    *,
+    capture_reason: str | None = None,
+) -> VllmMetrics:
+    """Compute instance-wide vLLM deltas from comparable Prometheus snapshots.
+
+    ``capture_reason`` carries the collector's error when a snapshot could not
+    be fetched (for example a wrong ``metrics_url`` or an unreachable server).
+    When the snapshot text is missing it is surfaced in ``reason`` so the
+    summary states why the metrics are unavailable instead of a generic
+    placeholder; otherwise the previous ``missing_metrics_snapshot`` is kept.
+    """
 
     if not start_text or not end_text:
+        if capture_reason:
+            return _unavailable(f"metrics_capture_failed: {capture_reason}")
         return _unavailable("missing_metrics_snapshot")
     try:
         before = parse_prometheus(start_text)
@@ -163,6 +179,21 @@ def aggregate_vllm_metrics(start_text: str | None, end_text: str | None) -> Vllm
         prefix_hits / prefix_queries if prefix_hits is not None and prefix_queries else None,
         cached_tokens / prompt_tokens if cached_tokens is not None and prompt_tokens else None,
     )
+
+
+def vllm_capture_reason(captures: Iterable[EvidenceCapture]) -> str | None:
+    """Return the first vLLM metrics capture failure reason, if any.
+
+    Collectors record the underlying error (e.g. a connection failure or a
+    wrong ``metrics_url``) in ``EvidenceCapture.reason``. Surfacing it in the
+    aggregated metrics makes the summary's ``vllm.reason`` diagnostic instead
+    of a generic placeholder.
+    """
+
+    for capture in captures:
+        if capture.source in ("vllm", "vllm_start", "vllm_end") and not capture.available and capture.reason:
+            return capture.reason
+    return None
 
 
 def _series_values(samples: Mapping[SeriesKey, float], name: str) -> dict[SeriesLabels, float]:

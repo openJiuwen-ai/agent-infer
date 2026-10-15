@@ -24,7 +24,7 @@ from ..benchkit.metrics.request import aggregate_request_metrics
 from ..benchkit.metrics.schema import EvidenceCapture
 from ..benchkit.metrics.source_health import evaluate_captures
 from ..benchkit.metrics.task import aggregate_task_results
-from ..benchkit.metrics.vllm import aggregate_vllm_metrics
+from ..benchkit.metrics.vllm import aggregate_vllm_metrics, vllm_capture_reason
 from ..request_proxy.request_trace import RequestFact, RequestTraceWriter, load_request_facts
 from .agentinfer_source import builtin_agentinfer_source
 from .analyzer import analyze_replay_trace, replay_analysis_to_dict
@@ -512,7 +512,7 @@ async def _run_replay(
             output_dir.name,
             aggregate_task_results(_task_result(result, config.backend.endpoint) for result in task_results),
             aggregate_request_metrics(facts),
-            aggregate_vllm_metrics(vllm_start, vllm_end),
+            aggregate_vllm_metrics(vllm_start, vllm_end, capture_reason=vllm_capture_reason(captures)),
             {"available": False, "reason": "not applicable to Replay", "metadata": {}},
             evaluate_captures(captures),
             {

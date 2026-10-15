@@ -33,6 +33,13 @@ a versioned section.
 - Reorganized the root README into project overview, core features, related documentation, requirements, installation,
   Quick Start, and license sections.
 
+### Fixed
+
+- When the vLLM metrics endpoint cannot be captured (for example a misconfigured `metrics_url` or an unreachable
+  server), the `vllm` block in `summary.json` now reports the collector error in `reason`
+  (`metrics_capture_failed: <error>`) instead of only the generic `missing_metrics_snapshot` placeholder. The change
+  applies to both the Replay and agent benchmark paths (#23).
+
 ### Removed
 
 - Removed the legacy `AgentAwareScheduler`/`AgentAwareQueue` compatibility surfaces, the import-time `EngineArgs`
