@@ -7,6 +7,10 @@ a versioned section.
 
 ### Added
 
+- Added `ReplayPlan.from_dict` / `ReplayPlan.load` and `validate_loaded_plan` so a written
+  `replay-plan.json` can be reconstructed and structurally validated from disk (fail-closed on malformed
+  fields, enum values, reference closure, and `send_after` cycles). This makes the plan a self-contained
+  loadable artifact; a runner pass that resumes execution from it is tracked separately (RFC issue #45).
 - Added the `vllm serve MODEL --agentinfer` single-flag serving path: the delegating `vllm` console script takes over
   serve parsing, injects the agent-aware scheduler (async or sync, following `--async-scheduling`/`--no-async-scheduling`),
   the identity and lifecycle middleware, and the embedded Progress-TTL controller, then dispatches upstream vLLM. The

@@ -88,6 +88,13 @@ Replay additionally writes `replay-source-analysis.json`, `replay-plan.json`, an
 `replay-error.json` on failure. These describe planning, execution, and audit facts, not task correctness. See
 [Trace Replay](../how-to/run-trace-replay.md).
 
+
+`replay-plan.json` is also a loadable artifact: `ReplayPlan.load(path)` (or `ReplayPlan.from_dict` plus
+`validate_loaded_plan`) reconstructs and structurally validates the plan that was written, so it can be used as a
+self-contained input for inspection or, in a future runner pass, resuming execution without re-planning. Loading
+validates the artifact alone (reference closure, `send_after` acyclicity, target sanity) and does not re-derive
+`workload_fingerprint`/`plan_namespace`, which embed the build-time workload config.
+
 DSH 0.2 also records `evidence/dsh-runtime.json` (versions, capabilities, installation lock hash) and task-local
 `dsh-effective-config.yaml`, `dsh-lineage.json`, `dsh-run-status.json`, and `dsh-processes.jsonl`.
 `dsh-sessions/raw/index.json` links unchanged raw logs to decoded sessions; `transcript.jsonl` is selected by the

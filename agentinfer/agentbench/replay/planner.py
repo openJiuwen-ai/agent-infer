@@ -10,7 +10,8 @@ import json
 import math
 import uuid
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
+from pathlib import Path
 from typing import Literal
 
 from .config import ReplayBenchConfig
@@ -26,6 +27,17 @@ from .unified_trace_ir import PromptReference, UnifiedTraceIR
 
 ContextMode = Literal["none", "independent", "append", "trim", "reset"]
 _CONTEXT_FREE_PROMPT_KINDS = frozenset({"lead_title", "lead_name"})
+
+# Enumerated values a loaded plan must accept. These mirror the Literal
+# contracts on the dataclass fields and are the fail-closed source of truth
+# for ``from_dict`` so a corrupted artifact raises instead of round-tripping.
+_CONTEXT_MODES = frozenset({"none", "independent", "append", "trim", "reset"})
+_ACTOR_ROLES = frozenset({"lead", "subagent", "unknown"})
+_NODE_TYPES = frozenset({"request", "timing_dependency"})
+_PROMPT_KINDS = frozenset({"lead_title", "lead_name", "lead_main", "subagent_first", "continuation", "none"})
+_RESPONSE_VALIDATIONS = frozenset({"exact_tokens"})
+_PLAN_KINDS = frozenset({"structural"})
+_SCHEMA_VERSIONS = frozenset({"1", "2"})
 
 
 @dataclass(frozen=True)
@@ -93,6 +105,86 @@ class ReplayPlanNode:
             value["source_prefix_tokens"] = self.source_prefix_tokens
         return value
 
+    @classmethod
+    def from_dict(cls, value: object) -> ReplayPlanNode:
+        """Reconstruct a node from a serialized plan artifact.
+
+        Mirrors :meth:`to_dict` presence rules exactly: a ``timing_dependency``
+        carries only its clock/duration, while a ``request`` carries the full
+        materialized prompt/actor/context set. Fields the build path populates
+        but ``to_dict`` intentionally omits (``source_status``) are restored to
+        execution-neutral defaults; nothing downstream reads them for a loaded
+        plan, and :func:`_validate_plan` is not re-run on load (it needs the
+        original source).
+        """
+
+        if not isinstance(value, dict):
+            raise ValueError("plan node must be an object")
+        node_type = value.get("node_type")
+        if node_type not in _NODE_TYPES:
+            raise ValueError(f"node node_type must be one of {sorted(_NODE_TYPES)}")
+        runtime_request_id = _node_str(value, "runtime_request_id")
+        source_key = _node_str(value, "source_key")
+        send_after = _node_optional_str(value, "send_after")
+        effective_interval = _node_nonneg_finite(value, "effective_interval_seconds")
+
+        if node_type == "timing_dependency":
+            return cls(
+                runtime_request_id=runtime_request_id,
+                source_key=source_key,
+                source_status="unknown",
+                prompt_recipe_key="",
+                prompt_ref=None,
+                node_type=node_type,
+                prompt_kind="none",
+                actor_id="",
+                actor_role="unknown",
+                parent_actor_id=None,
+                send_after=send_after,
+                context_after=None,
+                context_mode="none",
+                effective_interval_seconds=effective_interval,
+                effective_duration_seconds=_node_nonneg_finite(value, "effective_duration_seconds"),
+                planned_input_tokens=None,
+                planned_output_tokens=None,
+                backend_sampling_seed=None,
+            )
+
+        prompt_ref = value.get("prompt_ref")
+        context_after = _node_optional_str(value, "context_after")
+        planned_input_tokens = _node_optional_nonneg_int(value, "planned_input_tokens")
+        planned_output_tokens = _node_optional_nonneg_int(value, "planned_output_tokens")
+        backend_sampling_seed = _node_optional_nonneg_int(value, "backend_sampling_seed")
+        source_prefix_tokens = _node_optional_nonneg_int(value, "source_prefix_tokens")
+        source_output_tokens = _node_optional_nonneg_int(value, "source_output_tokens")
+        response_validation = value.get("response_validation")
+        if response_validation is not None and response_validation not in _RESPONSE_VALIDATIONS:
+            raise ValueError(f"node response_validation must be one of {sorted(_RESPONSE_VALIDATIONS)}")
+
+        return cls(
+            runtime_request_id=runtime_request_id,
+            source_key=source_key,
+            source_status="unknown",
+            prompt_recipe_key=_node_str(value, "prompt_recipe_key"),
+            prompt_ref=PromptReference.from_dict(prompt_ref) if prompt_ref is not None else None,
+            node_type=node_type,
+            prompt_kind=_node_enum(value, "prompt_kind", _PROMPT_KINDS),
+            actor_id=_node_str(value, "actor_id"),
+            actor_role=_node_enum(value, "actor_role", _ACTOR_ROLES),
+            parent_actor_id=_node_optional_str(value, "parent_actor_id"),
+            send_after=send_after,
+            context_after=context_after,
+            context_mode=_node_enum(value, "context_mode", _CONTEXT_MODES),
+            effective_interval_seconds=effective_interval,
+            effective_duration_seconds=None,
+            planned_input_tokens=planned_input_tokens,
+            planned_output_tokens=planned_output_tokens,
+            backend_sampling_seed=backend_sampling_seed,
+            response_validation=response_validation,
+            source_prefix_tokens=source_prefix_tokens,
+            source_output_tokens=source_output_tokens,
+        )
+
 
 @dataclass(frozen=True)
 class ReplayTaskPlan:
@@ -118,6 +210,25 @@ class ReplayTaskPlan:
             "source_task_id": self.source_task_id,
             "requests": [request.to_dict() for request in self.requests],
         }
+
+    @classmethod
+    def from_dict(cls, value: object) -> ReplayTaskPlan:
+        """Reconstruct one task plan from its serialized form."""
+
+        if not isinstance(value, dict):
+            raise ValueError("task plan must be an object")
+        requests = value.get("requests")
+        if not isinstance(requests, list):
+            raise ValueError(f"task {value.get('task_id')!r} requests must be a list")
+        return cls(
+            task_id=_node_str(value, "task_id"),
+            task_index=_nonneg_int_field(value, "task_index"),
+            sample_ordinal=_nonneg_int_field(value, "sample_ordinal"),
+            runtime_session_id=_node_str(value, "runtime_session_id"),
+            source_session_id=_node_str(value, "source_session_id"),
+            source_task_id=_node_optional_str(value, "source_task_id"),
+            requests=tuple(ReplayPlanNode.from_dict(node) for node in requests),
+        )
 
 
 @dataclass(frozen=True)
@@ -163,6 +274,67 @@ class ReplayPlan:
             "tasks": [task.to_dict() for task in self.tasks],
         }
         return value
+
+    @classmethod
+    def from_dict(cls, value: object) -> ReplayPlan:
+        """Reconstruct a plan from its serialized artifact.
+
+        Fail-closed on every field; callers must still run
+        :func:`validate_loaded_plan` for cross-field invariants (reference
+        closure, acyclicity, session uniqueness) that per-field parsing cannot
+        see.
+        """
+
+        if not isinstance(value, dict):
+            raise ValueError("replay plan must be an object")
+        schema_version = value.get("schema_version")
+        if schema_version not in _SCHEMA_VERSIONS:
+            raise ValueError(f"plan schema_version must be one of {sorted(_SCHEMA_VERSIONS)}")
+        plan_kind = value.get("plan_kind")
+        if plan_kind not in _PLAN_KINDS:
+            raise ValueError(f"plan plan_kind must be one of {sorted(_PLAN_KINDS)}")
+        execution_ready = value.get("execution_ready")
+        if not isinstance(execution_ready, bool):
+            raise ValueError("plan execution_ready must be a boolean")
+        prompt_calibration = value.get("prompt_calibration")
+        if not isinstance(prompt_calibration, dict):
+            raise ValueError("plan prompt_calibration must be an object")
+        tasks = value.get("tasks")
+        if not isinstance(tasks, list):
+            raise ValueError("plan tasks must be a list")
+        return cls(
+            schema_version=schema_version,
+            plan_kind=plan_kind,
+            planner_version=_str_field(value, "planner_version"),
+            execution_ready=execution_ready,
+            execution_unavailable_reason=_opt_str_field(value, "execution_unavailable_reason"),
+            source=_str_field(value, "source"),
+            source_sha256=_str_field(value, "source_sha256"),
+            source_bundle_sha256=_opt_str_field(value, "source_bundle_sha256"),
+            source_sessions=_nonneg_int_field(value, "source_sessions"),
+            replayable_source_sessions=_nonneg_int_field(value, "replayable_source_sessions"),
+            sample_seed=_nonneg_int_field(value, "sample_seed"),
+            plan_namespace=_str_field(value, "plan_namespace"),
+            workload_fingerprint=_str_field(value, "workload_fingerprint"),
+            prompt_calibration=dict(prompt_calibration),
+            interval_model=_interval_model_from_dict(value.get("interval_model")),
+            tasks=tuple(ReplayTaskPlan.from_dict(task) for task in tasks),
+        )
+
+    @classmethod
+    def load(cls, path: Path) -> ReplayPlan:
+        """Load and structurally validate a plan from a ``replay-plan.json`` file.
+
+        This is the convenience entry for resuming from disk; it reads the
+        JSON, reconstructs the plan, and runs :func:`validate_loaded_plan`.
+        The plan it returns is the structural artifact -- execution readiness
+        and Prompt calibration are still established by the runner, not here.
+        """
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        plan = cls.from_dict(data)
+        validate_loaded_plan(plan)
+        return plan
 
 
 def _canonical_json(value: object) -> str:
@@ -384,6 +556,151 @@ def _validate_task(
         if node.context_mode in {"append", "trim"} and context_after is None:
             raise ValueError(f"{node.context_mode} context requires context_after")
     _validate_acyclic(nodes)
+
+
+def _node_str(node: dict[str, object], field: str) -> str:
+    value = node.get(field)
+    if not isinstance(value, str):
+        raise ValueError(f"node {field} must be a string")
+    return value
+
+
+def _node_optional_str(node: dict[str, object], field: str) -> str | None:
+    value = node.get(field)
+    if value is None or isinstance(value, str):
+        return value
+    raise ValueError(f"node {field} must be a string or null")
+
+
+def _node_enum(node: dict[str, object], field: str, allowed: frozenset[str]) -> str:
+    value = node.get(field)
+    if not isinstance(value, str) or value not in allowed:
+        raise ValueError(f"node {field} must be one of {sorted(allowed)}")
+    return value
+
+
+def _node_finite(node: dict[str, object], field: str) -> float:
+    value = node.get(field)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"node {field} must be a finite number")
+    return float(value)
+
+
+def _node_nonneg_finite(node: dict[str, object], field: str) -> float:
+    value = _node_finite(node, field)
+    if value < 0:
+        raise ValueError(f"node {field} must be non-negative")
+    return value
+
+
+def _node_optional_nonneg_int(node: dict[str, object], field: str) -> int | None:
+    value = node.get(field)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"node {field} must be a non-negative integer or null")
+    return value
+
+
+def _str_field(plan: dict[str, object], field: str) -> str:
+    value = plan.get(field)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"plan {field} must be a non-empty string")
+    return value
+
+
+def _opt_str_field(plan: dict[str, object], field: str) -> str | None:
+    value = plan.get(field)
+    if value is None or isinstance(value, str):
+        return value
+    raise ValueError(f"plan {field} must be a string or null")
+
+
+def _nonneg_int_field(plan: dict[str, object], field: str) -> int:
+    value = plan.get(field)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"plan {field} must be a non-negative integer")
+    return value
+
+
+def _interval_model_from_dict(value: object) -> IntervalModel:
+    """Reconstruct an :class:`IntervalModel` from ``IntervalModel.to_dict()``.
+
+    ``IntervalModel.to_dict`` is ``asdict(self)``; any field not declared on the
+    dataclass (or a mistyped value) is rejected so a drifted artifact cannot
+    load silently.
+    """
+
+    if not isinstance(value, dict):
+        raise ValueError("plan interval_model must be an object")
+    known = {item.name for item in fields(IntervalModel)}
+    for key in value:
+        if key not in known:
+            raise ValueError(f"interval_model has unknown field {key!r}")
+    return IntervalModel(
+        mode=_str_field(value, "mode"),
+        fit_version=_str_field(value, "fit_version"),
+        mu=value.get("mu"),
+        sigma=value.get("sigma"),
+        anchors=value.get("anchors"),
+        anchor_predictions=value.get("anchor_predictions"),
+        anchor_residual_ratios=value.get("anchor_residual_ratios"),
+        log_space_rmse=value.get("log_space_rmse"),
+        mean_predicted=value.get("mean_predicted"),
+        u_clamp=value.get("u_clamp"),
+        cdf_version=value.get("cdf_version"),
+    )
+
+
+def validate_loaded_plan(plan: ReplayPlan) -> None:
+    """Structurally validate a plan reconstructed via ``ReplayPlan.from_dict``.
+
+    This is the load-time counterpart to :func:`_validate_plan`. It checks the
+    facts recoverable from the serialized artifact alone -- type/enum
+    well-formedness (already enforced by ``from_dict``), reference closure,
+    ``send_after`` acyclicity, and node target sanity. It intentionally does
+    **not** re-run :func:`_validate_plan`: that pass needs the original source
+    (``source_status``, context token targets, hash-snapshot offsets) which a
+    standalone artifact does not carry. Likewise it does not re-derive
+    ``workload_fingerprint``/``plan_namespace`` -- both embed the build-time
+    workload config, so they are checked for presence only; build-side stability
+    is already covered by the existing planner tests.
+    """
+
+    if plan.plan_kind not in _PLAN_KINDS:
+        raise ValueError(f"plan plan_kind must be one of {sorted(_PLAN_KINDS)}")
+    if plan.schema_version not in _SCHEMA_VERSIONS:
+        raise ValueError(f"plan schema_version must be one of {sorted(_SCHEMA_VERSIONS)}")
+    if not isinstance(plan.workload_fingerprint, str) or not plan.workload_fingerprint:
+        raise ValueError("plan workload_fingerprint must be a non-empty string")
+    if not isinstance(plan.plan_namespace, str) or not plan.plan_namespace:
+        raise ValueError("plan plan_namespace must be a non-empty string")
+    if not isinstance(plan.prompt_calibration, dict):
+        raise ValueError("plan prompt_calibration must be an object")
+
+    runtime_sessions: set[str] = set()
+    for task in plan.tasks:
+        if task.task_index < 0:
+            raise ValueError(f"task {task.task_id} task_index must be non-negative")
+        if task.runtime_session_id in runtime_sessions:
+            raise ValueError("runtime session ids must be unique")
+        runtime_sessions.add(task.runtime_session_id)
+        nodes = task.requests
+        by_key = {node.source_key: node for node in nodes}
+        if len(by_key) != len(nodes):
+            raise ValueError(f"duplicate source request key in {task.task_id}")
+        runtime_ids = [node.runtime_request_id for node in nodes]
+        if len(runtime_ids) != len(set(runtime_ids)):
+            raise ValueError(f"duplicate runtime request id in {task.task_id}")
+        for node in nodes:
+            for field, reference in (("send_after", node.send_after), ("context_after", node.context_after)):
+                if reference is not None and reference not in by_key:
+                    raise ValueError(f"{field} reference {reference} is missing in {task.task_id}")
+            if node.node_type == "request" and not (
+                isinstance(node.planned_input_tokens, int) and node.planned_input_tokens > 0
+            ):
+                raise ValueError(f"request {node.source_key} has no positive input target")
+        _validate_acyclic(nodes)
 
 
 def _validate_plan(
