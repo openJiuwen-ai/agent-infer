@@ -1,0 +1,7 @@
+# typos whitelist for sr-config-tool.
+# "nothink" is the project's term for "no-think" mode (thinking disabled),
+# used in the CLI subcommand `run-nothink`, result dirs (`calib_nthink`),
+# and the template file `gen_params_large_nthink.json`.
+[default.extend-words]
+nothink = "nothink"
+NOTHINK = "NOTHINK"
