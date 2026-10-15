@@ -1,0 +1,474 @@
+{
+  "schema_version": "1.0",
+  "source": "real_vllm",
+  "policy_sha256": "1a81f1314c235f3bd0661f93a7316324341e53b3b834465e314acf546affd3dc",
+  "config_sha256": "",
+  "git_sha": "",
+  "vllm_version": "0.14.0",
+  "vllm_commit": null,
+  "cuda_version": null,
+  "gpu_driver_version": null,
+  "hardware_profile": "A6000",
+  "hardware_sku": null,
+  "docker_image_digest": null,
+  "profile": "throughput",
+  "regime": "throughput",
+  "primary_metric": "goodput_req_s",
+  "seeds": [
+    1,
+    2,
+    3,
+    5,
+    8,
+    13,
+    21,
+    34,
+    55,
+    89
+  ],
+  "sample_count": 10,
+  "raw_per_seed_metrics": [
+    {
+      "seed": 1,
+      "metrics": {
+        "num_requests": 24,
+        "num_completed": 24,
+        "num_failed": 0,
+        "duration_s": 1.025712102651596,
+        "request_throughput_req_s": 23.39837849037459,
+        "output_throughput_tok_s": 647.3551382336971,
+        "total_token_throughput_tok_s": 1879.6697387267589,
+        "ttft_ms": {
+          "p50": 112.99296468496323,
+          "p90": 122.76589288376272,
+          "p95": 124.67096042819321,
+          "p99": 125.41403638664633
+        },
+        "tpot_ms": {
+          "p50": 12.13957448489964,
+          "p90": 13.371791231579014,
+          "p95": 13.379663162465606,
+          "p99": 13.561123723297246
+        },
+        "e2e_ms": {
+          "p50": 300.4785473458469,
+          "p90": 840.7346696592867,
+          "p95": 841.3745562080294,
+          "p99": 842.1485808352008
+        },
+        "mean_ttft_ms": 115.42060173815116,
+        "mean_tpot_ms": 12.339632041469159,
+        "mean_e2e_ms": 430.5140640741835
+      },
+      "slo_result": {
+        "total": 24,
+        "completed": 24,
+        "attained": 24,
+        "attainment_rate": 1.0,
+        "goodput_req_s": 23.39837849037459,
+        "goodput_tok_s": 647.3551382336971
+      },
+      "primary_value": 23.39837849037459
+    },
+    {
+      "seed": 2,
+      "metrics": {
+        "num_requests": 24,
+        "num_completed": 24,
+        "num_failed": 0,
+        "duration_s": 1.2410463127307594,
+        "request_throughput_req_s": 19.338520854383873,
+        "output_throughput_tok_s": 696.1867507578194,
+        "total_token_throughput_tok_s": 1579.3125364413497,
+        "ttft_ms": {
+          "p50": 131.52235932648182,
+          "p90": 136.27517321147025,
+          "p95": 139.2193374922499,
+          "p99": 140.01864868216217
+        },
+        "tpot_ms": {
+          "p50": 13.316155629112355,
+          "p90": 15.330518176779151,
+          "p95": 18.433297096219437,
+          "p99": 18.990152038500778
+        },
+        "e2e_ms": {
+          "p50": 542.5541319418699,
+          "p90": 904.8153391573578,
+          "p95": 907.634962303564,
+          "p99": 908.2246693177149
+        },
+        "mean_ttft_ms": 131.18643109919503,
+        "mean_tpot_ms": 14.00790337605008,
+        "mean_e2e_ms": 586.7402974399738
+      },
+      "slo_result": {
+        "total": 24,
+        "completed": 24,
+        "attained": 24,
+        "attainment_rate": 1.0,
+        "goodput_req_s": 19.338520854383873,
+        "goodput_tok_s": 696.1867507578194
+      },
+      "primary_value": 19.338520854383873
+    },
+    {
+      "seed": 3,
+      "metrics": {
+        "num_requests": 24,
+        "num_completed": 24,
+        "num_failed": 0,
+        "duration_s": 1.4120750850997865,
+        "request_throughput_req_s": 16.996263338435718,
+        "output_throughput_tok_s": 498.5570579274478,
+        "total_token_throughput_tok_s": 1461.6786471054718,
+        "ttft_ms": {
+          "p50": 88.5691731236875,
+          "p90": 94.23746624961495,
+          "p95": 95.1007341966033,
+          "p99": 99.43163445219398
+        },
+        "tpot_ms": {
+          "p50": 14.031671670575937,
+          "p90": 15.289639980931367,
+          "p95": 15.354999830015004,
+          "p99": 15.372978350413698
+        },
+        "e2e_ms": {
+          "p50": 304.2675780598074,
+          "p90": 849.4771531317383,
+          "p95": 853.12269104179,
+          "p99": 858.4957530256361
+        },
+        "mean_ttft_ms": 88.67771234751369,
+        "mean_tpot_ms": 13.613160950784065,
+        "mean_e2e_ms": 451.87518184926984
+      },
+      "slo_result": {
+        "total": 24,
+        "completed": 24,
+        "attained": 24,
+        "attainment_rate": 1.0,
+        "goodput_req_s": 16.996263338435718,
+        "goodput_tok_s": 498.5570579274478
+      },
+      "primary_value": 16.996263338435718
+    },
+    {
+      "seed": 5,
+      "metrics": {
+        "num_requests": 24,
+        "num_completed": 24,
+        "num_failed": 0,
+        "duration_s": 1.2742339218966663,
+        "request_throughput_req_s": 18.83484624571647,
+        "output_throughput_tok_s": 552.4888232076831,
+        "total_token_throughput_tok_s": 1155.2039030706103,
+        "ttft_ms": {
+          "p50": 60.62552356161177,
+          "p90": 64.1078379470855,
+          "p95": 67.7546050865203,
+          "p99": 69.29490739945322
+        },
+        "tpot_ms": {
+          "p50": 12.577405117291917,
+          "p90": 12.900534751159803,
+          "p95": 12.912702517184828,
+          "p99": 12.960787267823305
+        },
+        "e2e_ms": {
+          "p50": 345.221278257668,
+          "p90": 660.664970241487,
+          "p95": 661.6985186934471,
+          "p99": 666.9439298240468
+        },
+        "mean_ttft_ms": 61.35665285789097,
+        "mean_tpot_ms": 11.944715017940036,
+        "mean_e2e_ms": 375.0484125339426
+      },
+      "slo_result": {
+        "total": 24,
+        "completed": 24,
+        "attained": 24,
+        "attainment_rate": 1.0,
+        "goodput_req_s": 18.83484624571647,
+        "goodput_tok_s": 552.4888232076831
+      },
+      "primary_value": 18.83484624571647
+    },
+    {
+      "seed": 8,
+      "metrics": {
+        "num_requests": 24,
+        "num_completed": 24,
+        "num_failed": 0,
+        "duration_s": 0.982673313934356,
+        "request_throughput_req_s": 24.42317264514953,
+        "output_throughput_tok_s": 667.5667189674205,
+        "total_token_throughput_tok_s": 2075.96967483771,
+        "ttft_ms": {
+          "p50": 64.13380382582545,
+          "p90": 67.07568857818842,
+          "p95": 68.34746603854,
+          "p99": 70.8880648529157
+        },
+        "tpot_ms": {
+          "p50": 12.524801958352327,
+          "p90": 13.092296929763895,
+          "p95": 13.100227760151029,
+          "p99": 13.10774023445057
+        },
+        "e2e_ms": {
+          "p50": 254.36967029236257,
+          "p90": 656.4832749310881,
+          "p95": 657.7126411953941,
+          "p99": 658.6742918379605
+        },
+        "mean_ttft_ms": 64.52838160718481,
+        "mean_tpot_ms": 11.859828215593927,
+        "mean_e2e_ms": 344.25290398454916
+      },
+      "slo_result": {
+        "total": 24,
+        "completed": 24,
+        "attained": 24,
+        "attainment_rate": 1.0,
+        "goodput_req_s": 24.42317264514953,
+        "goodput_tok_s": 667.5667189674205
+      },
+      "primary_value": 24.42317264514953
+    },
+    {
+      "seed": 13,
+      "metrics": {
+        "num_requests": 24,
+        "num_completed": 24,
+        "num_failed": 0,
+        "duration_s": 1.0187444603070617,
+        "request_throughput_req_s": 23.558410312990674,
+        "output_throughput_tok_s": 738.1635231403744,
+        "total_token_throughput_tok_s": 1868.9672181639269,
+        "ttft_ms": {
+          "p50": 74.40441264770925,
+          "p90": 77.97785853035748,
+          "p95": 78.43476941343397,
+          "p99": 78.7851686635986
+        },
+        "tpot_ms": {
+          "p50": 13.00428498296007,
+          "p90": 14.437980372458696,
+          "p95": 15.381913231020524,
+          "p99": 15.55683925149164
+        },
+        "e2e_ms": {
+          "p50": 473.4180406667292,
+          "p90": 695.6125559285283,
+          "p95": 697.2554806387052,
+          "p99": 698.3644235320389
+        },
+        "mean_ttft_ms": 74.0280887694098,
+        "mean_tpot_ms": 13.043836348583271,
+        "mean_e2e_ms": 436.317508671588
+      },
+      "slo_result": {
+        "total": 24,
+        "completed": 24,
+        "attained": 24,
+        "attainment_rate": 1.0,
+        "goodput_req_s": 23.558410312990674,
+        "goodput_tok_s": 738.1635231403744
+      },
+      "primary_value": 23.558410312990674
+    },
+    {
+      "seed": 21,
+      "metrics": {
+        "num_requests": 24,
+        "num_completed": 24,
+        "num_failed": 0,
+        "duration_s": 1.2566364202648401,
+        "request_throughput_req_s": 19.09860291566428,
+        "output_throughput_tok_s": 579.3242884418165,
+        "total_token_throughput_tok_s": 1426.029017702933,
+        "ttft_ms": {
+          "p50": 63.2790089584887,
+          "p90": 67.47819911688566,
+          "p95": 68.07014702353626,
+          "p99": 72.23018857184798
+        },
+        "tpot_ms": {
+          "p50": 12.408739405994613,
+          "p90": 13.013480876439385,
+          "p95": 13.019339430944196,
+          "p99": 13.024482735033546
+        },
+        "e2e_ms": {
+          "p50": 257.4984855018556,
+          "p90": 652.706137439236,
+          "p95": 653.2738694222644,
+          "p99": 653.3961547166109
+        },
+        "mean_ttft_ms": 64.16803705117975,
+        "mean_tpot_ms": 11.616913837116128,
+        "mean_e2e_ms": 370.58372124253464
+      },
+      "slo_result": {
+        "total": 24,
+        "completed": 24,
+        "attained": 24,
+        "attainment_rate": 1.0,
+        "goodput_req_s": 19.09860291566428,
+        "goodput_tok_s": 579.3242884418165
+      },
+      "primary_value": 19.09860291566428
+    },
+    {
+      "seed": 34,
+      "metrics": {
+        "num_requests": 24,
+        "num_completed": 24,
+        "num_failed": 0,
+        "duration_s": 0.9388173618353903,
+        "request_throughput_req_s": 25.564077716969294,
+        "output_throughput_tok_s": 698.7514575971607,
+        "total_token_throughput_tok_s": 1823.5708771438096,
+        "ttft_ms": {
+          "p50": 69.8835733346641,
+          "p90": 72.6847258862108,
+          "p95": 73.68966576177627,
+          "p99": 74.22252835240215
+        },
+        "tpot_ms": {
+          "p50": 12.72722884852399,
+          "p90": 14.01938168731119,
+          "p95": 14.158500182176274,
+          "p99": 14.689176689301219
+        },
+        "e2e_ms": {
+          "p50": 359.41857751458883,
+          "p90": 805.9320566244423,
+          "p95": 807.0333338575438,
+          "p99": 809.8605081019923
+        },
+        "mean_ttft_ms": 68.98960777713607,
+        "mean_tpot_ms": 12.876407776773341,
+        "mean_e2e_ms": 394.19190894113854
+      },
+      "slo_result": {
+        "total": 24,
+        "completed": 24,
+        "attained": 24,
+        "attainment_rate": 1.0,
+        "goodput_req_s": 25.564077716969294,
+        "goodput_tok_s": 698.7514575971607
+      },
+      "primary_value": 25.564077716969294
+    },
+    {
+      "seed": 55,
+      "metrics": {
+        "num_requests": 24,
+        "num_completed": 24,
+        "num_failed": 0,
+        "duration_s": 0.8896571807563305,
+        "request_throughput_req_s": 26.976683287821846,
+        "output_throughput_tok_s": 629.4559433825098,
+        "total_token_throughput_tok_s": 2014.2590188240313,
+        "ttft_ms": {
+          "p50": 59.7518514841795,
+          "p90": 62.812423100695014,
+          "p95": 64.31002144236118,
+          "p99": 65.86354408878833
+        },
+        "tpot_ms": {
+          "p50": 12.243070701758068,
+          "p90": 12.93564626414861,
+          "p95": 12.943856145388315,
+          "p99": 12.94868150992053
+        },
+        "e2e_ms": {
+          "p50": 242.9925063624978,
+          "p90": 509.4353714492171,
+          "p95": 574.8239940963686,
+          "p99": 575.0746781146154
+        },
+        "mean_ttft_ms": 59.78791233307371,
+        "mean_tpot_ms": 11.367840107904216,
+        "mean_e2e_ms": 285.0409049618368
+      },
+      "slo_result": {
+        "total": 24,
+        "completed": 24,
+        "attained": 24,
+        "attainment_rate": 1.0,
+        "goodput_req_s": 26.976683287821846,
+        "goodput_tok_s": 629.4559433825098
+      },
+      "primary_value": 26.976683287821846
+    },
+    {
+      "seed": 89,
+      "metrics": {
+        "num_requests": 24,
+        "num_completed": 24,
+        "num_failed": 0,
+        "duration_s": 1.057452592998743,
+        "request_throughput_req_s": 22.696052909511877,
+        "output_throughput_tok_s": 771.6657989234038,
+        "total_token_throughput_tok_s": 1467.6780881484347,
+        "ttft_ms": {
+          "p50": 58.96156933158636,
+          "p90": 62.453459203243256,
+          "p95": 63.342747394926846,
+          "p99": 67.42167053744197
+        },
+        "tpot_ms": {
+          "p50": 12.35448248353937,
+          "p90": 13.033767363854817,
+          "p95": 13.05763508259718,
+          "p99": 13.06471205582576
+        },
+        "e2e_ms": {
+          "p50": 441.9163283891976,
+          "p90": 662.760273553431,
+          "p95": 664.144262787886,
+          "p99": 664.5570676540956
+        },
+        "mean_ttft_ms": 59.58944865657637,
+        "mean_tpot_ms": 11.845222414828624,
+        "mean_e2e_ms": 425.71505180482444
+      },
+      "slo_result": {
+        "total": 24,
+        "completed": 24,
+        "attained": 24,
+        "attainment_rate": 1.0,
+        "goodput_req_s": 22.696052909511877,
+        "goodput_tok_s": 771.6657989234038
+      },
+      "primary_value": 22.696052909511877
+    }
+  ],
+  "aggregate_metrics": {
+    "primary_metric": "goodput_req_s",
+    "median": 23.047215699943234,
+    "mean": 22.088500871701815,
+    "std": 3.3114149049422026,
+    "cv": 0.14991578306631698,
+    "n": 10
+  },
+  "slo": {
+    "ttft_ms": 5000,
+    "tpot_ms": 100,
+    "e2e_ms": null
+  },
+  "goodput": {
+    "median_req_s": 23.047215699943234
+  },
+  "outcome_class": "high_variance_inconclusive",
+  "score_aggregation_formula_version": "median-v1",
+  "warmup_policy_version": null,
+  "command_line": "native.py --policy /tmp/ve_1a81f1314c23_policy.py --profile config/bench/profiles/throughput.yaml",
+  "wall_time_s": 50.62761622807011,
+  "error_text": null
+}

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 650 120" fill="none">
+  <defs>
+    <linearGradient id="evolveGrad" x1="0" y1="0.2" x2="1" y2="0.8">
+      <stop offset="0%" stop-color="#E65100"/>
+      <stop offset="18%" stop-color="#F4511E"/>
+      <stop offset="38%" stop-color="#D81B60"/>
+      <stop offset="58%" stop-color="#AD1457"/>
+      <stop offset="78%" stop-color="#7B1FA2"/>
+      <stop offset="100%" stop-color="#4527A0"/>
+    </linearGradient>
+    <linearGradient id="dnaG" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#E65100"/>
+      <stop offset="25%" stop-color="#F4511E"/>
+      <stop offset="50%" stop-color="#D81B60"/>
+      <stop offset="75%" stop-color="#AD1457"/>
+      <stop offset="100%" stop-color="#7B1FA2"/>
+    </linearGradient>
+  </defs>
+
+  <!-- vLLM "v" checkmark -->
+  <g transform="translate(8, 10) scale(1.15)">
+    <path fill="#fdb515" d="M38.5 10 L38.5 65.3 L10.85 10Z"/>
+    <path fill="#30a2ff" d="M38.5 65.3 L60.23 65.3 L78.88 -5.08 L53.3 8.38Z"/>
+  </g>
+
+  <!-- "LLM-" bold dark -->
+  <text x="110" y="93" font-family="Arial, Helvetica, sans-serif" font-size="88" font-weight="700" fill="#434343" letter-spacing="-3">LLM-</text>
+
+  <!-- "Evolve" gradient text (standard font E) -->
+  <text x="318" y="93" font-family="Arial, Helvetica, sans-serif" font-size="88" font-weight="400" fill="url(#evolveGrad)" letter-spacing="-3">Evolve</text>
+
+</svg>

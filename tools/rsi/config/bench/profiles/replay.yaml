@@ -1,0 +1,21 @@
+# Real-workload regime: replay a production trace at its own arrival pattern.
+# Set `dataset` to one of burstgpt|azure|sharegpt|mooncake and `trace_path` to
+# the downloaded file. The trace's own timestamps drive arrivals (except
+# ShareGPT, which has no timestamps — those are synthesized at request_rate_qps).
+name: replay
+regime: replay
+description: Replay a real production trace at its own arrival pattern.
+workload:
+  kind: trace
+  dataset: burstgpt
+  trace_path: null             # user supplies the downloaded trace file
+  max_requests: 2000
+  request_rate_qps: 10.0       # only used when the trace has no timestamps (ShareGPT)
+slo:
+  ttft_ms: 2000
+  tpot_ms: 80
+primary_metric: goodput_req_s
+primary_higher_is_better: true
+seeds: [1, 2, 3, 5, 8, 13, 21, 34, 55, 89]
+seed_tiers: [3, 5, 10]
+cv_threshold: 0.10

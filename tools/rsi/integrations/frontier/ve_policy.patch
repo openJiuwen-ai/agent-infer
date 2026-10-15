@@ -1,0 +1,291 @@
+diff --git a/frontier/config/config.py b/frontier/config/config.py
+index 615da4c..5bc96d8 100644
+--- a/frontier/config/config.py
++++ b/frontier/config/config.py
+@@ -834,6 +834,16 @@ class VllmV1SchedulerConfig(BaseReplicaSchedulerConfig):
+         return ReplicaSchedulerType.VLLM_V1
+ 
+ 
++@dataclass
++class VePolicySchedulerConfig(VllmV1SchedulerConfig):
++    """vllm_v1 semantics with the waiting-queue order delegated to an external
++    vllm-evolve policy (env VE_POLICY_PATH). See ve_policy_replica_scheduler.py."""
++
++    @staticmethod
++    def get_type():
++        return ReplicaSchedulerType.VE_POLICY
++
++
+ @dataclass
+ class Sj2qFastserveLiteSchedulerConfig(VllmV1SchedulerConfig):
+     """
+diff --git a/frontier/scheduler/replica_scheduler/replica_scheduler_registry.py b/frontier/scheduler/replica_scheduler/replica_scheduler_registry.py
+index f977d6d..dbe6653 100644
+--- a/frontier/scheduler/replica_scheduler/replica_scheduler_registry.py
++++ b/frontier/scheduler/replica_scheduler/replica_scheduler_registry.py
+@@ -25,6 +25,9 @@ from frontier.scheduler.replica_scheduler.sglang_style_replica_scheduler import
+ from frontier.scheduler.replica_scheduler.vllm_replica_scheduler import (
+     VLLMReplicaScheduler,
+ )
++from frontier.scheduler.replica_scheduler.ve_policy_replica_scheduler import (
++    VePolicyReplicaScheduler,
++)
+ from frontier.scheduler.replica_scheduler.vllm_v1_engine_replica_scheduler import (
+     VLLMv1EngineReplicaScheduler,
+ )
+@@ -61,3 +64,7 @@ ReplicaSchedulerRegistry.register(
+ ReplicaSchedulerRegistry.register(
+     ReplicaSchedulerType.SGLANG, SGLangStyleReplicaScheduler
+ )
++
++ReplicaSchedulerRegistry.register(
++    ReplicaSchedulerType.VE_POLICY, VePolicyReplicaScheduler
++)
+diff --git a/frontier/scheduler/replica_scheduler/ve_policy_replica_scheduler.py b/frontier/scheduler/replica_scheduler/ve_policy_replica_scheduler.py
+new file mode 100644
+index 0000000..7ba0645
+--- /dev/null
++++ b/frontier/scheduler/replica_scheduler/ve_policy_replica_scheduler.py
+@@ -0,0 +1,213 @@
++"""ve_policy scheduler — delegates waiting-queue ORDERING to an external vllm-evolve policy.
++
++Bridge for the vllm-evolve project: loads a `schedule_batch` policy (the evolvable function from
++targets/scheduling/skeleton.py) from the file named by the VE_POLICY_PATH environment variable and
++lets it decide the waiting-queue order. Capacity, token-budget and KV admission stay enforced by the
++parent VLLMv1EngineReplicaScheduler downstream — the policy can only reorder, never over-admit.
++
++Two admission channels (bridge v2, strictly separated — C3):
++* FORGOTTEN — a request the policy never mentions keeps parent (FCFS) order behind the chosen ones
++  (no starvation; identical to v1).
++* DEFERRED — a request in `decision.defer_ids` is moved to the TAIL of the complete parent view, so
++  capacity pressure delays it without risking event-loop stranding; an id deferred for >= N
++  consecutive scheduling events (default 8) is FORCED to the queue head. The decay logic
++  lives single-sourced in the vllm-evolve repo (integrations/frontier/ve_defer.py), imported via
++  VE_POLICY_ROOT; if it cannot be imported, defer_ids is ignored (FCFS append only — still no
++  starvation).
++
++Honesty contract:
++* VE_POLICY_PATH missing/unloadable -> exit non-zero at construction (never silently run vanilla).
++* A policy exception during a decision -> that iteration falls back to the parent's order and
++  `fallbacks` is incremented (never silent).
++* At process exit a marker file `ve_policy_marker.json` ({policy_sha256, invocations, fallbacks,
++  defers}) is written to the directory named by VE_MARKER_DIR (or cwd) so the caller can verify the
++  policy actually ran. A missing marker / fallbacks==invocations is treated by the caller as a
++  FAILED trial.
++"""
++from __future__ import annotations
++
++import atexit
++import hashlib
++import importlib.util
++import json
++import os
++import sys
++from typing import List
++
++from frontier.entities.batch import Request
++from frontier.logger import init_logger
++from frontier.scheduler.replica_scheduler.vllm_v1_engine_replica_scheduler import (
++    VLLMv1EngineReplicaScheduler,
++)
++
++logger = init_logger(__name__)
++
++_KV_BLOCKS_PLACEHOLDER = 2**31  # KV admission is enforced by the parent downstream
++
++
++def _load_policy(path: str):
++    # policies may import their own package (e.g. targets.scheduling.skeleton); the caller
++    # names the repo root explicitly via VE_POLICY_ROOT — never guessed.
++    root = os.environ.get("VE_POLICY_ROOT")
++    if root and root not in sys.path:
++        sys.path.insert(0, root)
++    spec = importlib.util.spec_from_file_location("ve_policy_module", path)
++    if spec is None or spec.loader is None:
++        raise SystemExit(3)
++    mod = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(mod)
++    if not hasattr(mod, "schedule_batch"):
++        logger.error("VE_POLICY_PATH file %s has no schedule_batch()", path)
++        raise SystemExit(3)
++    return mod
++
++
++def _load_defer_tracker():
++    """Bridge-v2 two-channel decay logic is single-sourced in the vllm-evolve repo; import it via
++    VE_POLICY_ROOT/integrations/frontier. If unavailable -> None: defer_ids ignored (FCFS append,
++    no starvation) so the bridge degrades honestly rather than risk a starved request."""
++    root = os.environ.get("VE_POLICY_ROOT")
++    if root:
++        cand = os.path.join(root, "integrations", "frontier")
++        if cand not in sys.path:
++            sys.path.insert(0, cand)
++    try:
++        import ve_defer
++        return ve_defer.DeferTracker()
++    except Exception as exc:  # noqa: BLE001 - degrade honestly, never starve
++        logger.warning("ve_defer unavailable (%s); defer_ids ignored (FCFS append only)", exc)
++        return None
++
++
++class VePolicyReplicaScheduler(VLLMv1EngineReplicaScheduler):
++    """vllm_v1 with the waiting-queue order decided by an external evolved policy."""
++
++    def __init__(self, *args, **kwargs) -> None:
++        super().__init__(*args, **kwargs)
++        path = os.environ.get("VE_POLICY_PATH")
++        if not path or not os.path.isfile(path):
++            logger.error("ve_policy scheduler requires VE_POLICY_PATH (got %r)", path)
++            raise SystemExit(3)
++        self._ve_policy = _load_policy(path)
++        src = open(path, "rb").read()
++        self._ve_policy_sha = hashlib.sha256(src).hexdigest()
++        self._ve_invocations = 0
++        self._ve_fallbacks = 0
++        self._ve_defers = 0
++        self._ve_forced = 0
++        self._ve_preemptions = 0
++        self._ve_defer = _load_defer_tracker()
++        atexit.register(self._ve_write_marker)
++        logger.info("ve_policy loaded %s (sha=%s)", path, self._ve_policy_sha[:12])
++
++    # ------------------------------------------------------------------
++    def _ve_request_view(self, req: Request, is_prefill: bool) -> dict:
++        """Frontier Request -> the policy's RequestInfo field set (plain dict — the policy's
++        dataclass only needs attribute access, which SimpleNamespace-style objects provide).
++        `session_id` is the native tenant signal (Request._session_id, from the trace_replay CSV);
++        a tenant-aware policy groups by it (None when the trace carries no session)."""
++        return {
++            "request_id": str(req.id),
++            "session_id": (None if getattr(req, "session_id", None) is None
++                           else int(req.session_id)),
++            "num_prompt_tokens": int(getattr(req, "num_prefill_tokens", 0) or 0),
++            "num_computed_tokens": int(getattr(req, "num_processed_tokens", 0) or 0),
++            "num_output_tokens": int(getattr(req, "num_decode_tokens", 0) or 0),
++            "generated_output_tokens": int(
++                getattr(req, "num_processed_decode_tokens", 0) or 0
++            ),
++            "arrival_time_s": float(getattr(req, "arrived_at", 0.0) or 0.0),
++            "waiting_age_s": max(
++                0.0,
++                float(getattr(self, "_current_schedule_time", 0.0))
++                - float(getattr(req, "arrived_at", 0.0) or 0.0),
++            ),
++            "is_prefill": is_prefill,
++            "kv_blocks_used": 0,
++            "prefix_cached_tokens": int(getattr(req, "num_cached_prefill_tokens", 0) or 0),
++            "has_prefix_hint": bool(getattr(req, "block_hash_ids", None)),
++            "num_preemptions": 1 if getattr(req, "_preempted", False) else 0,
++        }
++
++    def _get_sorted_waiting_queue(self) -> List[Request]:
++        parent_order = super()._get_sorted_waiting_queue()
++        if not parent_order:
++            return parent_order
++        self._ve_invocations += 1
++        try:
++            from types import SimpleNamespace
++
++            def _info(d):
++                ns = SimpleNamespace(**d)
++                ns.remaining_prompt_tokens = d["num_prompt_tokens"] - d["num_computed_tokens"]
++                ns.remaining_output_tokens = (
++                    d["num_output_tokens"] - d["generated_output_tokens"]
++                )
++                return ns
++
++            waiting = [_info(self._ve_request_view(r, True)) for r in parent_order]
++            running = [_info(self._ve_request_view(r, False))
++                       for r in getattr(self, "_running_requests", [])]
++            decision = self._ve_policy.schedule_batch(
++                waiting,
++                running,
++                int(getattr(self._config, "max_tokens_in_batch", 0) or 0),
++                int(getattr(self._config, "batch_size_cap", 0) or 0),
++                _KV_BLOCKS_PLACEHOLDER,
++                0.0,
++            )
++            chosen = [str(rid) for rid in getattr(decision, "prefill_batch", [])]
++            defer = [str(rid) for rid in (getattr(decision, "defer_ids", ()) or ())]
++            preempt = [
++                str(rid)
++                for rid in (getattr(decision, "preempt_ids", ()) or ())
++            ]
++        except Exception as exc:  # noqa: BLE001 - loud fallback, never silent
++            self._ve_fallbacks += 1
++            logger.warning("ve_policy schedule_batch failed (%s); falling back this step", exc)
++            return parent_order
++        if preempt:
++            by_running_id = {
++                str(request.id): request
++                for request in list(getattr(self, "_running_requests", []))
++            }
++            preempted_requests = []
++            for request_id in preempt:
++                victim = by_running_id.get(request_id)
++                if victim is not None:
++                    self._preempt_request(victim, preempted_requests)
++            self._ve_preemptions += len(preempted_requests)
++            if preempted_requests:
++                parent_order = super()._get_sorted_waiting_queue()
++        by_id = {str(r.id): r for r in parent_order}
++        if self._ve_defer is None:
++            # ve_defer unimportable -> degrade to v1: policy order first, anything unmentioned keeps
++            # parent (FCFS) order behind (defer_ids ignored). A forgetful policy cannot starve.
++            chosen_reqs = [by_id.pop(rid) for rid in chosen if rid in by_id]
++            return chosen_reqs + list(by_id.values())
++        # bridge v2: ALWAYS delegate to the single-source tracker — even when defer is empty, so a
++        # no-defer event clears prior streaks (the decay rule is CONSECUTIVE defers; Codex R5 #1).
++        # Forgotten = FCFS append; deferred = soft tail delay + decay-force at the head.
++        result = self._ve_defer.reorder([str(r.id) for r in parent_order], chosen, defer)
++        self._ve_defers += len(result.deferred)
++        self._ve_forced += len(result.forced)
++        return [by_id[rid] for rid in result.order if rid in by_id]
++
++    # ------------------------------------------------------------------
++    def _ve_write_marker(self) -> None:
++        out_dir = os.environ.get("VE_MARKER_DIR") or os.getcwd()
++        try:
++            os.makedirs(out_dir, exist_ok=True)
++            with open(os.path.join(out_dir, "ve_policy_marker.json"), "w",
++                      encoding="utf-8") as fh:
++                json.dump({
++                    "scheduler": "ve_policy",
++                    "policy_sha256": self._ve_policy_sha,
++                    "invocations": self._ve_invocations,
++                    "fallbacks": self._ve_fallbacks,
++                    "defers": self._ve_defers,
++                    "forced": self._ve_forced,
++                    "preemptions": self._ve_preemptions,
++                }, fh)
++        except OSError as exc:  # pragma: no cover - marker write must never crash the sim
++            print(f"ve_policy marker write failed: {exc}", file=sys.stderr)
+diff --git a/frontier/types/replica_scheduler_type.py b/frontier/types/replica_scheduler_type.py
+index 7b71a1d..5014302 100644
+--- a/frontier/types/replica_scheduler_type.py
++++ b/frontier/types/replica_scheduler_type.py
+@@ -12,3 +12,4 @@ class ReplicaSchedulerType(BaseIntEnum):
+     SJ2Q_FASTSERVE_LITE = 8
+     SJ2Q_PENALTY_ONLY = 9
+     SJ2Q_BOUNDED_CARRYOVER = 10
++    VE_POLICY = 11
+diff --git a/frontier/scheduler/cluster_scheduler/base_cluster_scheduler.py b/frontier/scheduler/cluster_scheduler/base_cluster_scheduler.py
+index 28c6bc7..d134d63 100644
+--- a/frontier/scheduler/cluster_scheduler/base_cluster_scheduler.py
++++ b/frontier/scheduler/cluster_scheduler/base_cluster_scheduler.py
+@@ -60,12 +60,14 @@ class BaseClusterScheduler(ABC):
+         scheduler_type = replica_scheduler_config.get_type()
+         if scheduler_type not in {
+             ReplicaSchedulerType.VLLM_V1,
++            ReplicaSchedulerType.VE_POLICY,
+             ReplicaSchedulerType.SGLANG,
+             ReplicaSchedulerType.SJ2Q_FASTSERVE_LITE,
+             ReplicaSchedulerType.SJ2Q_PENALTY_ONLY,
+             ReplicaSchedulerType.SJ2Q_BOUNDED_CARRYOVER,
+         }:
+             raise ValueError(
+-                "Prefix caching only supports vllm_v1, sj2q_fastserve_lite, sj2q_penalty_only, sj2q_bounded_carryover, or sglang replica schedulers. "
++                "Prefix caching only supports vllm_v1-compatible, sj2q, or sglang "
++                "replica schedulers. "
+                 f"Got {scheduler_type}."
+             )

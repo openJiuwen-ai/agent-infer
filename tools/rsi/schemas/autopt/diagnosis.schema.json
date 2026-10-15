@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "autopt Diagnosis — L1 bottleneck contract (ar diagnose output / what ve-diagnose produces)",
+  "type": "object",
+  "required": ["bottleneck", "status"],
+  "additionalProperties": false,
+  "$defs": {
+    "bottleneck": {
+      "type": "string",
+      "enum": ["compute", "kv_capacity", "mem_bandwidth", "prefill",
+               "scheduling_queue", "under_saturated", "comm", "unknown"]
+    },
+    "status": {"type": "string", "enum": ["confirmed", "suspected", "unknown"]}
+  },
+  "properties": {
+    "bottleneck": {"$ref": "#/$defs/bottleneck"},
+    "status": {"$ref": "#/$defs/status"},
+    "evidence_refs": {"type": "array", "items": {"type": "string"}},
+    "detail": {"type": "string"},
+    "limitations": {"type": "array", "items": {"type": "string"}},
+    "ranked": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "bottleneck": {"$ref": "#/$defs/bottleneck"},
+          "status": {"$ref": "#/$defs/status"},
+          "score": {"type": "number"}
+        }
+      }
+    }
+  }
+}
