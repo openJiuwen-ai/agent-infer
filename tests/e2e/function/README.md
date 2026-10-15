@@ -13,11 +13,11 @@ tests/e2e/
 ├── perf/             # BenchKit plan-subagent; baseline vs AgentInfer
 └── function/         # replay repeatability, future serve smoke, etc.
     └── tracereplay/
-        ├── helpers/  # shared replay E2E (config, executor, compare, pytest options)
-        ├── specs.py  # inferact / tracelab / agentx ReplaySuiteSpec
-        ├── inferact/ # cases + thin pytest entry
-        ├── tracelab/
-        └── agentx/
+        ├── test_replay.py  # parametrized E2E + ReplaySuiteSpec per trace family
+        ├── helpers/        # shared replay E2E (config, executor, compare, pytest options)
+        ├── inferact/cases/
+        ├── tracelab/cases/
+        └── agentx/cases/
 ```
 
 | Concern | `perf/` | `function/` (Inferact / TraceLab / AgentX replay) |
@@ -29,20 +29,22 @@ tests/e2e/
 
 Both reuse [`../helpers/`](../helpers/) for loading case JSON and managing `vllm serve`.
 
-## Shared replay E2E (`tracereplay/helpers/` + `specs.py`)
+## Shared replay E2E (`tracereplay/test_replay.py` + `helpers/`)
 
 | File | Role |
 | ---- | ---- |
-| `specs.py` | `INFERACT_REPLAY_SUITE`, `TRACELAB_REPLAY_SUITE`, `AGENTX_REPLAY_SUITE` (workload, default YAML, trace-path policy) |
-| `helpers/replay_e2e_config.py` | `ReplayE2EConfig.from_case_file(case, suite)` |
+| `test_replay.py` | Parametrized pytest + `ReplaySuiteSpec` for inferact / tracelab / agentx |
+| `helpers/replay_e2e_config.py` | `ReplaySuiteSpec` dataclass; `ReplayE2EConfig.from_case_file(case, suite)` |
 | `helpers/replay_executor.py` | `run_replay_cold_starts` |
 | `helpers/replay_compare.py` | Repeatability compare between two run dirs |
 | `helpers/replay_repeatability.py` | Shared pytest body |
 | `helpers/conftest_options.py` | `--test-config-file`, `--bench-config`, etc. |
 
-`tracereplay/conftest.py` registers shared CLI options once (avoids duplicate `--test-config-file` across suites).
-Each suite under `tracereplay/<name>/` keeps `cases/*.json` and a thin `test_*_replay.py`.
-Add a new trace family: one entry in `specs.py`, then `<name>/cases/` + pytest shim.
+`tracereplay/conftest.py` registers shared CLI options once.
+`test_replay.py` parametrizes the three suites (`ids`: `inferact`, `tracelab`, `agentx`); only the param whose
+`workload` matches `--test-config-file` runs—the others **skip**. Select one suite explicitly, e.g.
+`test_replay.py::test_trace_replay[tracelab]`.
+Add a new trace family: define a `ReplaySuiteSpec` and param row in `test_replay.py`, then `<name>/cases/`.
 
 ## TraceLab layout (`tracereplay/tracelab/`)
 
@@ -66,7 +68,7 @@ Copy or extend the packaged YAML on your host (model, `base_url`, `trace_path`, 
 ### Run TraceLab replay E2E
 
 ```bash
-pytest -s -v tests/e2e/function/tracereplay/tracelab/test_tracelab_replay.py::test_tracelab_replay \
+pytest -s -v tests/e2e/function/tracereplay/test_replay.py::test_trace_replay[tracelab] \
   --test-config-file tests/e2e/function/tracereplay/tracelab/cases/glm52_8x4_tracelab_replay.json \
   --cold-runs 2 \
   --stability-tolerance 0.05
@@ -107,7 +109,7 @@ vLLM **serve** matches Inferact/TraceLab E2E (`serve_env` / `server_params` in t
 ### Run AgentX replay E2E
 
 ```bash
-pytest -s -v tests/e2e/function/tracereplay/agentx/test_agentx_replay.py::test_agentx_replay \
+pytest -s -v tests/e2e/function/tracereplay/test_replay.py::test_trace_replay[agentx] \
   --test-config-file tests/e2e/function/tracereplay/agentx/cases/glm52_8x4_agentx_replay.json \
   --cold-runs 2 \
   --stability-tolerance 0.05
@@ -151,7 +153,7 @@ E2E overrides model, base URL, trace path, task count, and concurrency via CLI.
 ## Run Inferact replay E2E
 
 ```bash
-pytest -s -v tests/e2e/function/tracereplay/inferact/test_inferact_replay.py::test_inferact_replay \
+pytest -s -v tests/e2e/function/tracereplay/test_replay.py::test_trace_replay[inferact] \
   --test-config-file tests/e2e/function/tracereplay/inferact/cases/glm52_8x4_inferact_replay.json \
   --cold-runs 2 \
   --stability-tolerance 0.05

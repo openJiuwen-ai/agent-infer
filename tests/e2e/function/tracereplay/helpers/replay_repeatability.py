@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from ....helpers.case_loader import load_case_file
 from .replay_compare import compare_replay_stability, format_stability_report
 from .replay_e2e_config import ReplayE2EConfig, ReplaySuiteSpec
 from .replay_executor import run_replay_cold_starts
@@ -25,11 +26,17 @@ def run_replay_repeatability_e2e(
     if not test_config_file:
         raise pytest.UsageError(f"--test-config-file is required for {suite_label} replay E2E")
 
+    case_path = Path(test_config_file)
+    case = load_case_file(case_path)
+    case_workload = case.benchmark_params.get("workload")
+    if case_workload != suite.workload:
+        pytest.skip(f"--test-config-file workload {case_workload!r} does not match {suite_label} ({suite.workload!r})")
+
     cold_runs = int(pytestconfig.getoption("--cold-runs"))
     if cold_runs < 2:
         raise pytest.UsageError("--cold-runs must be >= 2 (repeatability compares the first two runs)")
 
-    config = ReplayE2EConfig.from_case_file(Path(test_config_file), suite).with_benchmark_load(
+    config = ReplayE2EConfig.from_case_file(case_path, suite).with_benchmark_load(
         task_num=pytestconfig.getoption("--task-num"),
         max_concurrency=pytestconfig.getoption("--max-concurrency"),
         bench_config=pytestconfig.getoption("--bench-config"),

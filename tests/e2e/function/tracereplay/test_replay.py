@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
-"""Per-trace-family Replay E2E suite specifications."""
+"""Parametrized Trace Replay functional E2E (cold starts + repeatability compare)."""
 
 from __future__ import annotations
 
+import pytest
+
 from .helpers.replay_e2e_config import ReplaySuiteSpec
+from .helpers.replay_repeatability import run_replay_repeatability_e2e
 
 INFERACT_REPLAY_SUITE = ReplaySuiteSpec(
     workload="inferact-replay",
@@ -34,3 +37,24 @@ AGENTX_REPLAY_SUITE = ReplaySuiteSpec(
         "(AgentX full hash-block snapshot JSONL, e.g. traces-shortest-16-sessions.jsonl)"
     ),
 )
+
+_REPLAY_SUITES: tuple[tuple[ReplaySuiteSpec, str], ...] = (
+    (INFERACT_REPLAY_SUITE, "Inferact"),
+    (TRACELAB_REPLAY_SUITE, "TraceLab"),
+    (AGENTX_REPLAY_SUITE, "AgentX"),
+)
+
+
+@pytest.mark.parametrize(
+    ("suite", "suite_label"),
+    _REPLAY_SUITES,
+    ids=["inferact", "tracelab", "agentx"],
+)
+def test_trace_replay(
+    pytestconfig: pytest.Config,
+    suite: ReplaySuiteSpec,
+    suite_label: str,
+) -> None:
+    """Run a case N times (cold vLLM each time), then compare run 1 vs run 2 for repeatability."""
+
+    run_replay_repeatability_e2e(pytestconfig, suite=suite, suite_label=suite_label)
