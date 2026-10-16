@@ -17,7 +17,7 @@ from pathlib import Path
 
 import httpx
 
-from .case_loader import E2EPerfConfig, PerfScenario, build_vllm_serve_argv, build_vllm_serve_env
+from .case_loader import E2EConfig, PerfScenario, build_vllm_serve_argv, build_vllm_serve_env
 
 _READY_POLL_INTERVAL_SECONDS = 5
 
@@ -139,7 +139,7 @@ def _remove_lifecycle_sockets(base_path: str) -> None:
             pass
 
 
-def _pre_start_cleanup(config: E2EPerfConfig) -> None:
+def _pre_start_cleanup(config: E2EConfig) -> None:
     """Ensure bind port and agentinfer sockets are free before launching vLLM."""
 
     ensure_port_free(config.host, config.port)
@@ -148,7 +148,7 @@ def _pre_start_cleanup(config: E2EPerfConfig) -> None:
 
 
 def _wait_for_vllm_ready(
-    config: E2EPerfConfig,
+    config: E2EConfig,
     proc: subprocess.Popen[str],
     *,
     log_path: Path,
@@ -177,7 +177,7 @@ def _wait_for_vllm_ready(
 class VllmServer:
     """Launch and tear down one vLLM serve process for a benchmark case."""
 
-    config: E2EPerfConfig
+    config: E2EConfig
     proc: subprocess.Popen[str] | None = None
     log_path: Path | None = None
     _log_thread: threading.Thread | None = field(default=None, repr=False)
@@ -277,7 +277,7 @@ def _shutdown_process(proc: subprocess.Popen[str]) -> None:
         return
 
 
-def managed_vllm(config: E2EPerfConfig) -> AbstractContextManager[VllmServer]:
+def managed_vllm(config: E2EConfig) -> AbstractContextManager[VllmServer]:
     """Return a context manager that starts and stops vLLM for one benchmark case."""
 
     return VllmServer(config=config)

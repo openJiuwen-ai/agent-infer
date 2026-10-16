@@ -1,1 +1,1 @@
-"""Shared helpers for E2E performance tests."""
+"""Shared helpers for E2E tests (perf benchmarks and functional suites)."""

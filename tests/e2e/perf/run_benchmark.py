@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from .helpers.benchmark import run_benchmark, validate_completed_run
-from .helpers.case_loader import E2EPerfConfig, load_case_file
+from ..helpers.benchmark import run_benchmark, validate_completed_run
+from ..helpers.case_loader import E2EConfig, load_case_file
 
 
 @pytest.mark.e2e_perf
@@ -21,7 +21,7 @@ def test_benchmark_completes(pytestconfig: pytest.Config) -> None:
         pytest.skip("--test-config-file is required for e2e perf benchmarks")
 
     case = load_case_file(Path(test_config_file))
-    config = E2EPerfConfig.from_case(case).with_benchmark_load(
+    config = E2EConfig.from_case(case).with_benchmark_load(
         task_num=pytestconfig.getoption("--task-num"),
         max_concurrency=pytestconfig.getoption("--max-concurrency"),
     )
