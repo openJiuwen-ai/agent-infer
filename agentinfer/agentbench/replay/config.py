@@ -45,6 +45,7 @@ class ReplayBackendConfig(ReplayStrictModel):
     type: Literal["vllm"] = "vllm"
     base_url: str = Field("http://127.0.0.1:8000", json_schema_extra={"cli": True})
     metrics_url: str | None = Field(None, json_schema_extra={"cli": {"flag": "--metrics-url"}})
+    router_metrics_url: str | None = None
     tokenizer_base_url: str | None = None
     model: str = Field(
         "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
@@ -137,6 +138,9 @@ class ReplayConfig(ReplayStrictModel):
         le=8,
         description="Residual allowance for synthetic prompts; Inferact always uses exact input lengths.",
     )
+    workflow_profile_id: str | None = None
+    profile_version: str | None = None
+    profile_role_source: Literal["none", "request_purpose", "actor_id", "agent_role"] = "none"
     request_timeout_seconds: int = Field(3600, ge=1)
 
     @property
