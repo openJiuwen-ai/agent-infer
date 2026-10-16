@@ -53,6 +53,7 @@ class ReplayPlanNode:
     response_validation: Literal["exact_tokens"] | None = None
     source_prefix_tokens: int | None = None
     source_output_tokens: int | None = None
+    source_request_purpose: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Serialize only the materialized fields required to execute the node."""
@@ -91,6 +92,8 @@ class ReplayPlanNode:
                 value["effective_output_tokens"] = self.planned_output_tokens
         if self.source_prefix_tokens is not None:
             value["source_prefix_tokens"] = self.source_prefix_tokens
+        if self.source_request_purpose is not None:
+            value["source_request_purpose"] = self.source_request_purpose
         return value
 
 
@@ -300,6 +303,7 @@ def _task_plan(
                 source_prefix_tokens=(
                     request.source_cached_tokens if config.replay.prompt_shape == "tracelab_synthetic" else None
                 ),
+                source_request_purpose=request.source_request_purpose,
             )
         )
     return ReplayTaskPlan(

@@ -21,6 +21,7 @@ from ..benchkit.artifacts import build_run_manifest, build_run_summary, finalize
 from ..benchkit.collectors.vllm import capture_vllm_metrics
 from ..benchkit.common import atomic_write_json, utc_now, write_text
 from ..benchkit.metrics.request import aggregate_request_metrics
+from ..benchkit.metrics.router import aggregate_router_prediction_metrics
 from ..benchkit.metrics.schema import EvidenceCapture
 from ..benchkit.metrics.source_health import evaluate_captures
 from ..benchkit.metrics.task import aggregate_task_results
@@ -418,6 +419,25 @@ async def _run_replay(
         captures.append(
             _capture("vllm_start", vllm_start_path, vllm_start_capture.available, vllm_start_capture.reason)
         )
+        router_start: str | None = None
+        if config.backend.router_metrics_url:
+            router_start_capture = await capture_vllm_metrics(config.backend.router_metrics_url)
+            router_start = (
+                str(router_start_capture.metadata.get("text"))
+                if router_start_capture.available
+                else None
+            )
+            router_start_path = evidence_dir / "router_metrics_start.prom"
+            if router_start is not None:
+                write_text(router_start_path, router_start)
+            captures.append(
+                _capture(
+                    "router_start",
+                    router_start_path,
+                    router_start_capture.available,
+                    router_start_capture.reason,
+                )
+            )
 
         transport = ReplayTransport(config, output_dir.name, writer)
         measured_started_at = utc_now()
@@ -505,6 +525,25 @@ async def _run_replay(
         if vllm_end is not None:
             write_text(vllm_end_path, vllm_end)
         captures.append(_capture("vllm_end", vllm_end_path, vllm_end_capture.available, vllm_end_capture.reason))
+        router_end: str | None = None
+        if config.backend.router_metrics_url:
+            router_end_capture = await capture_vllm_metrics(config.backend.router_metrics_url)
+            router_end = (
+                str(router_end_capture.metadata.get("text"))
+                if router_end_capture.available
+                else None
+            )
+            router_end_path = evidence_dir / "router_metrics_end.prom"
+            if router_end is not None:
+                write_text(router_end_path, router_end)
+            captures.append(
+                _capture(
+                    "router_end",
+                    router_end_path,
+                    router_end_capture.available,
+                    router_end_capture.reason,
+                )
+            )
 
         finished_at = utc_now()
         run_wall_time = max((measured_finished_at - measured_started_at).total_seconds(), 1e-9)
@@ -522,6 +561,11 @@ async def _run_replay(
             },
             run_wall_time,
             execution={"available": True, "reason": None, "metadata": execution_metadata},
+            router_prediction=(
+                aggregate_router_prediction_metrics(router_start, router_end)
+                if config.backend.router_metrics_url
+                else None
+            ),
         ).to_dict()
         if cli_metadata is not None:
             summary["cli"] = cli_metadata

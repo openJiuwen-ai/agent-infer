@@ -105,8 +105,16 @@ def test_compare_finalized_artifacts_and_router_schema(tmp_path: Path) -> None:
     assert result["metrics"]["cache_creation_input_tokens"]["baseline"] == 0
     assert result["metrics"]["latency_p99_seconds"]["baseline"] == 1.0
     assert result["metrics"]["ttft_p99_seconds"]["baseline"] == 0.2
-    assert result["metadata"]["baseline_router"] == {"applicable": False, "events": {}}
-    assert result["metadata"]["candidate_router"] == {"applicable": True, "events": {"admit": 2}}
+    assert result["metadata"]["baseline_router"] == {
+        "applicable": False,
+        "events": {},
+        "prediction": {},
+    }
+    assert result["metadata"]["candidate_router"] == {
+        "applicable": True,
+        "events": {"admit": 2},
+        "prediction": {},
+    }
 
 
 def test_compare_accepts_cli_metadata_in_finalized_summary(tmp_path: Path) -> None:
