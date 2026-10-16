@@ -94,10 +94,10 @@ def test_replay_sample_yaml_loads() -> None:
     assert config.backend.effective_metrics_url == "http://127.0.0.1:8000/metrics"
     assert config.replay.interval_mode == "trace"
     assert config.replay.prompt_shape == "agentinfer_synthetic"
-    assert config.replay.lead_title_sys_shared_prefix == 0
-    assert config.replay.lead_name_sys_shared_prefix == 0
+    assert config.replay.lead_title_sys_shared_prefix == 296
+    assert config.replay.lead_name_sys_shared_prefix == 105
     assert config.replay.lead_1st_sys_shared_prefix == 18
-    assert config.replay.lead_1st_sys_session_prefix == 0
+    assert config.replay.lead_1st_sys_session_prefix == 18
     assert config.replay.lead_1st_tool_shared_prefix == 2200
     assert config.replay.lead_1st_msg_shared_prefix == 74
     assert config.replay.lead_1st_trailing_system_prefix == 459

@@ -27,11 +27,11 @@ replay:
   sample_seed: 0
   prompt_transport: completion_token_ids
   tokenizer_max_concurrency: 16
-  lead_title_sys_shared_prefix: 0
-  lead_name_sys_shared_prefix: 0
+  lead_title_sys_shared_prefix: 296
+  lead_name_sys_shared_prefix: 105
   # Synthetic prefix budgets; adjust them to fit the selected trace's input lengths.
   lead_1st_sys_shared_prefix: 18
-  lead_1st_sys_session_prefix: 0
+  lead_1st_sys_session_prefix: 18
   lead_1st_tool_shared_prefix: 2200
   lead_1st_msg_shared_prefix: 74
   lead_1st_trailing_system_prefix: 459
