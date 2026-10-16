@@ -253,6 +253,20 @@ def test_plan_is_stable_isolated_and_endpoint_independent(
     assert {task.source_session_id for task in chat.tasks[2:4]} == {"s1", "s2"}
 
 
+def test_plan_preserves_source_request_purpose_for_profile_role(tmp_path: Path) -> None:
+    source = tmp_path / "requests.jsonl"
+    row = _row("request", "session", "engineer", 0, 1)
+    row["request_purpose"] = "engineer"
+    source.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    plan = build_replay_plan(
+        _config(source, tmp_path / "result"),
+        analyze_replay_trace(source),
+    )
+
+    assert plan.tasks[0].requests[0].source_request_purpose == "engineer"
+
+
 def test_plan_materializes_retry_targets_and_prunes_terminal_timing_nodes(
     tmp_path: Path,
 ) -> None:
