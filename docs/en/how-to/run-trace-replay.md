@@ -199,6 +199,13 @@ vllm bench serve --agentinfer compare \
   --baseline results/replay-baseline --candidate results/replay-candidate
 ```
 
+Replay marks a run `failed` if any planned task or request fails or is missing, while retaining available results.
+The same comparison command accepts finalized failed runs and automatically displays failure status, request
+coverage, and available node errors alongside descriptive metrics.
+It does not treat an incomplete run as a successful performance sample. Add `--json` for all run diagnostics;
+confidence intervals and significance are omitted (`null`) when any run failed. See
+[CLI reference](../reference/benchmark-cli.md#compare) for artifact requirements.
+
 Fair comparisons use the same trace, seed, prefix budgets, concurrency, and deployment settings. Restart the service
 before each cold run and verify starting Prefix Cache metrics. Replay provides no task correctness conclusion;
 see [benchmark methodology](../explanation/benchmark-methodology.md).

@@ -21,17 +21,20 @@ def write_run(
     run_dir: Path,
     *,
     completed: int = 1,
+    failed: int = 0,
+    status: str = "completed",
     duration: float = 10.0,
     requests: int = 2,
     cache_creation: int | None = 0,
     cached_input: int | None = 5,
     router_events: dict[str, int] | None = None,
     vllm_available: bool = False,
+    execution: dict | None = None,
 ) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     task_metrics = TaskMetrics(
         completed,
-        0,
+        failed,
         completed,
         {"mean": duration, "p50": duration, "p95": duration, "p99": duration},
     )
@@ -66,8 +69,9 @@ def write_run(
         vllm,
         {"available": False, "reason": "artifact missing", "metadata": {}},
         health,
-        {"status": "completed", "error": None, "proxy_close": None},
+        {"status": status, "error": "Replay incomplete" if status == "failed" else None, "proxy_close": None},
         duration,
+        execution=execution,
     )
     summary_data = summary.to_dict()
     if router_events is not None:
@@ -79,6 +83,7 @@ def write_run(
     manifest = finalize_run_manifest(
         manifest,
         (),
+        status=status,
         finished_at=manifest.created_at + timedelta(seconds=duration),
     )
     (run_dir / "manifest.json").write_text(json.dumps(manifest.to_dict()), encoding="utf-8")
@@ -185,15 +190,181 @@ def test_compare_rejects_invalid_artifact_identity_and_confidence(tmp_path: Path
         compare(candidate, candidate, confidence=0.9)
 
 
-def test_compare_rejects_failed_run(tmp_path: Path) -> None:
-    baseline = tmp_path / "baseline"
-    write_run(baseline)
-    manifest = json.loads((baseline / "manifest.json").read_text(encoding="utf-8"))
-    manifest["status"] = "failed"
-    (baseline / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+def test_compare_accepts_failed_run_without_replay_metadata(tmp_path: Path) -> None:
+    baseline, candidate = tmp_path / "baseline", tmp_path / "candidate"
+    write_run(baseline, status="failed", failed=1)
+    write_run(candidate)
 
-    with pytest.raises(ValueError, match="did not complete successfully"):
-        compare(baseline, tmp_path / "candidate")
+    report = json.loads(compare(baseline, candidate, as_json=True))
+    run = report["metadata"]["baseline_runs"][0]
+    assert report["metadata"]["diagnostic_only"] is True
+    assert run["status"] == "failed"
+    assert run["error"] == "Replay incomplete"
+    assert run["planned_requests"] is None
+    assert run["request_completion_ratio"] is None
+    assert report["metrics"]["failed_tasks"]["baseline"] == 1
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+def test_failed_replay_comparison_through_vllm_entrypoint(tmp_path: Path, capsys, as_json: bool) -> None:
+    from agentinfer.agentcache.entrypoints.cli.main import main
+
+    baseline, candidate = tmp_path / "baseline", tmp_path / "candidate"
+    snapshots = {}
+    for path in (baseline, candidate):
+        write_run(
+            path,
+            status="failed",
+            completed=23,
+            failed=1,
+            requests=767,
+            execution={
+                "available": True,
+                "reason": None,
+                "metadata": {
+                    "planned_requests": 768,
+                    "pre_send_failed_requests": 1,
+                    "dependency_skipped_requests": 0,
+                    "complete_replay": False,
+                    "workload_fingerprint": "same-plan",
+                },
+            },
+        )
+        (path / "replay-execution.json").write_text(
+            json.dumps(
+                {
+                    "tasks": [
+                        {
+                            "task_id": "t1",
+                            "nodes": [
+                                {
+                                    "status": "failed",
+                                    "source_key": "root",
+                                    "runtime_request_id": "r1",
+                                    "error": "independent needs 12552 tokens, target is 3136",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            )
+        )
+        snapshots.update({file: file.read_bytes() for file in path.iterdir()})
+
+    args = [
+        "vllm",
+        "bench",
+        "serve",
+        "--agentinfer",
+        "compare",
+        "--baseline",
+        str(baseline),
+        "--candidate",
+        str(candidate),
+    ]
+    if as_json:
+        args.append("--json")
+    assert main(args) == 0
+    output = capsys.readouterr().out
+    if as_json:
+        report = json.loads(output)
+        assert report["metadata"]["diagnostic_only"] is True
+        for label in ("baseline", "candidate"):
+            run = report["metadata"][f"{label}_runs"][0]
+            assert run["status"] == "failed"
+            assert run["request_completion_ratio"] == pytest.approx(767 / 768)
+            assert run["pre_send_failed_requests"] == 1
+            assert run["failed_nodes"][0]["error"] == "independent needs 12552 tokens, target is 3136"
+        assert report["metrics"]["failed_tasks"]["baseline"] == 1
+        assert report["metrics"]["requests"]["candidate"] == 767
+    else:
+        assert "diagnostic comparison only" in output
+        assert "status=failed" in output
+        assert "successful_requests=767/768" in output
+        assert "pre_send_failed_requests=1" in output
+        assert "independent needs 12552 tokens, target is 3136" in output
+    assert all(file.read_bytes() == content for file, content in snapshots.items())
+
+
+def test_failed_runs_suppress_significance_even_with_multiple_samples(tmp_path: Path) -> None:
+    baseline, candidate = [], []
+    for index in range(3):
+        base, cand = tmp_path / f"b{index}", tmp_path / f"c{index}"
+        write_run(base, duration=100 + index)
+        write_run(cand, duration=1 + index, requests=1, status="failed", failed=1)
+        baseline.append(base)
+        candidate.append(cand)
+    report = json.loads(compare(baseline, candidate, as_json=True))
+    assert report["metadata"]["diagnostic_only"] is True
+    assert len(report["metadata"]["baseline_runs"]) == 3
+    assert len(report["metadata"]["candidate_runs"]) == 3
+    for metric in report["metrics"].values():
+        assert metric["baseline_ci"] is None
+        assert metric["candidate_ci"] is None
+        if "delta_absolute" in metric:
+            assert metric["delta_ci"] is None
+            assert metric["significant"] is None
+    assert report["metrics"]["requests"]["delta_absolute"] == -1
+    assert report["metadata"]["candidate_runs"][0]["planned_requests"] is None
+    assert report["metadata"]["candidate_runs"][0]["request_completion_ratio"] is None
+
+
+def test_successful_comparison_keeps_statistical_reporting(tmp_path: Path) -> None:
+    baseline, candidate = tmp_path / "baseline", tmp_path / "candidate"
+    write_run(baseline)
+    write_run(candidate)
+    report = json.loads(compare(baseline, candidate, as_json=True))
+    assert report["metadata"]["diagnostic_only"] is False
+    assert not any("Failed runs included" in warning for warning in report["warnings"])
+    assert report["metrics"]["requests"]["baseline_ci"] == [2, 2]
+    assert report["metrics"]["requests"]["delta_ci"] == [0, 0]
+    assert report["metrics"]["requests"]["significant"] is False
+
+
+@pytest.mark.parametrize(
+    "problem,expected",
+    [
+        ("running", "still running"),
+        ("unfinished", "no finish timestamp"),
+        ("identity", "identify different runs"),
+        ("lifecycle", "inconsistent lifecycle"),
+        ("schema", "finalized schemas"),
+        ("missing_summary", "summary.json not found"),
+    ],
+)
+def test_compare_still_validates_finalization_and_artifacts(tmp_path: Path, problem: str, expected: str) -> None:
+    run = tmp_path / "run"
+    write_run(run, status="failed", failed=1)
+    manifest_path, summary_path = run / "manifest.json", run / "summary.json"
+    manifest, summary = json.loads(manifest_path.read_text()), json.loads(summary_path.read_text())
+    if problem == "running":
+        manifest["status"] = "running"
+    elif problem == "unfinished":
+        manifest["finished_at"] = None
+    elif problem == "identity":
+        summary["run_id"] = "other"
+    elif problem == "lifecycle":
+        summary["lifecycle"]["status"] = "completed"
+    elif problem == "schema":
+        summary["requests"] = None
+    manifest_path.write_text(json.dumps(manifest))
+    summary_path.write_text(json.dumps(summary))
+    if problem == "missing_summary":
+        summary_path.unlink()
+    with pytest.raises((ValueError, FileNotFoundError), match=expected):
+        load_summary(run)
+
+
+@pytest.mark.parametrize("contents", ["not json", '{"tasks": [{"nodes": [null]}]}'])
+def test_failed_comparison_reports_unreadable_optional_failure_details(tmp_path: Path, contents: str) -> None:
+    baseline, candidate = tmp_path / "baseline", tmp_path / "candidate"
+    write_run(baseline, status="failed")
+    write_run(candidate)
+    (baseline / "replay-execution.json").write_text(contents)
+    report = json.loads(compare(baseline, candidate, as_json=True))
+    assert report["metrics"]["requests"]["baseline"] == 2
+    assert report["metadata"]["baseline_runs"][0]["error"] == "Replay incomplete"
+    assert any("could not read" in warning for warning in report["warnings"])
 
 
 def test_compare_accepts_same_mode_and_optional_router_metrics(tmp_path: Path) -> None:

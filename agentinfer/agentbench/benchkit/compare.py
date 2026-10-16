@@ -62,6 +62,8 @@ _MANIFEST_ADAPTER = TypeAdapter(RunManifest)
 
 
 def load_summary(run_dir: Path) -> dict[str, Any]:
+    """Load finalized, consistent artifacts from completed or failed runs."""
+
     path = run_dir / "summary.json"
     if not path.exists():
         raise FileNotFoundError(f"summary.json not found in {run_dir}")
@@ -75,10 +77,10 @@ def load_summary(run_dir: Path) -> dict[str, Any]:
         raise ValueError(f"run artifacts in {run_dir} do not match the finalized schemas") from exc
     if not isinstance(summary_data, dict):
         raise ValueError(f"run artifacts in {run_dir} do not match the finalized schemas")
-    if manifest.status != "completed":
-        raise ValueError(f"run in {run_dir} did not complete successfully")
+    if manifest.status == "running":
+        raise ValueError(f"run in {run_dir} is still running; compare requires finalized artifacts")
     if manifest.finished_at is None:
-        raise ValueError(f"completed run in {run_dir} has no finish timestamp")
+        raise ValueError(f"{manifest.status} run in {run_dir} has no finish timestamp")
     if "run_wall_time_seconds" not in summary_data:
         warnings.warn(
             "comparing legacy summary without run-level throughput metrics; manifest fallback is deprecated",
@@ -87,7 +89,7 @@ def load_summary(run_dir: Path) -> dict[str, Any]:
         )
         wall_time = (manifest.finished_at - manifest.created_at).total_seconds()
         if wall_time <= 0:
-            raise ValueError(f"completed run in {run_dir} has non-positive wall time")
+            raise ValueError(f"{manifest.status} run in {run_dir} has non-positive wall time")
         requests = summary_data.get("requests")
         if not isinstance(requests, dict):
             raise ValueError(f"run artifacts in {run_dir} do not match the finalized schemas")
@@ -107,8 +109,8 @@ def load_summary(run_dir: Path) -> dict[str, Any]:
         raise ValueError(f"run artifacts in {run_dir} do not match the finalized schemas") from exc
     if summary.run_id != manifest.run_id or summary.run_id != run_dir.name:
         raise ValueError(f"run artifacts in {run_dir} identify different runs")
-    if summary.lifecycle.status != "completed":
-        raise ValueError(f"run in {run_dir} did not complete successfully")
+    if summary.lifecycle.status != manifest.status:
+        raise ValueError(f"run artifacts in {run_dir} have inconsistent lifecycle statuses")
     return asdict(summary)
 
 
@@ -136,11 +138,15 @@ def _t_crit(n: int, confidence: float) -> float:
     return _T95[n - 1]
 
 
-def _aggregate(values: list[float | None], confidence: float) -> dict[str, Any] | None:
+def _aggregate(
+    values: list[float | None], confidence: float, *, diagnostic_only: bool = False
+) -> dict[str, Any] | None:
     samples = [value for value in values if value is not None]
     if not samples:
         return None
     mean = fmean(samples)
+    if diagnostic_only:
+        return {"mean": mean, "ci": None, "n": len(samples)}
     if len(samples) == 1:
         return {"mean": mean, "stddev": 0.0, "ci": [mean, mean], "n": 1}
     stddev = stdev(samples)
@@ -162,6 +168,9 @@ def _comparison(base: dict[str, Any] | None, candidate: dict[str, Any] | None, c
     delta = candidate["mean"] - base["mean"]
     entry["delta_absolute"] = delta
     entry["delta_percent"] = delta / base["mean"] * 100 if base["mean"] else None
+    if base["ci"] is None or candidate["ci"] is None:
+        entry.update({"delta_ci": None, "significant": None, "low_power": True})
+        return entry
     if base["n"] < 2 or candidate["n"] < 2:
         entry.update({"delta_ci": [delta, delta], "significant": False, "low_power": True})
         return entry
@@ -186,6 +195,57 @@ def _cold_confirmed(run_dir: Path) -> bool:
     return bool(query_values) and sum(query_values) < 1
 
 
+def _run_diagnostics(run_dir: Path, summary: dict[str, Any]) -> dict[str, Any]:
+    """Expose run status and available coverage without inventing missing plans."""
+
+    execution = summary.get("execution") or {}
+    metadata = execution.get("metadata", {})
+    planned = metadata.get("planned_requests")
+    successful = summary["requests"]["successful_requests"]
+    result = {
+        "run_id": summary["run_id"],
+        "status": summary["lifecycle"]["status"],
+        "error": summary["lifecycle"]["error"],
+        "completed_tasks": summary["tasks"]["completed"],
+        "failed_tasks": summary["tasks"]["failed"],
+        "planned_requests": planned,
+        "attempted_requests": summary["requests"]["requests"],
+        "successful_requests": successful,
+        "failed_requests": summary["requests"]["failed_requests"],
+        "pre_send_failed_requests": metadata.get("pre_send_failed_requests"),
+        "dependency_skipped_requests": metadata.get("dependency_skipped_requests"),
+        "request_completion_ratio": successful / planned if type(planned) is int and planned > 0 else None,
+        "complete_replay": metadata.get("complete_replay"),
+        "workload_fingerprint": metadata.get("workload_fingerprint"),
+        "failed_nodes": [],
+    }
+    path = run_dir / "replay-execution.json"
+    if result["status"] == "failed" and path.exists():
+        result["failure_evidence"] = str(path)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or not isinstance(payload.get("tasks"), list):
+                raise ValueError("expected a tasks array")
+            failures = []
+            for task in payload["tasks"]:
+                if not isinstance(task, dict) or not isinstance(task.get("nodes"), list):
+                    raise ValueError("expected task objects with node arrays")
+                for node in task["nodes"]:
+                    if not isinstance(node, dict):
+                        raise ValueError("expected node objects")
+                    if node.get("status") == "failed":
+                        failures.append(
+                            {
+                                "task_id": task.get("task_id"),
+                                **{key: node.get(key) for key in ("source_key", "runtime_request_id", "error")},
+                            }
+                        )
+            result["failed_nodes"] = failures
+        except (OSError, UnicodeError, ValueError) as exc:
+            result["failure_details_error"] = f"could not read {path}: {exc}"
+    return result
+
+
 def compare(
     baseline: Path | str | list[Path] | list[str],
     candidate: Path | str | list[Path] | list[str],
@@ -203,6 +263,9 @@ def compare(
         raise ValueError("candidate must contain at least one run directory")
     base_summaries = [load_summary(path) for path in base_dirs]
     candidate_summaries = [load_summary(path) for path in candidate_dirs]
+    diagnostic_only = any(
+        summary["lifecycle"]["status"] == "failed" for summary in base_summaries + candidate_summaries
+    )
     specs = list(_METRIC_SPECS)
     if any(summary["vllm"].get("available") for summary in base_summaries + candidate_summaries):
         specs.extend(
@@ -211,14 +274,26 @@ def compare(
         )
     metrics = {
         label: _comparison(
-            _aggregate([_extract(summary, path) for summary in base_summaries], confidence),
-            _aggregate([_extract(summary, path) for summary in candidate_summaries], confidence),
+            _aggregate(
+                [_extract(summary, path) for summary in base_summaries], confidence, diagnostic_only=diagnostic_only
+            ),
+            _aggregate(
+                [_extract(summary, path) for summary in candidate_summaries],
+                confidence,
+                diagnostic_only=diagnostic_only,
+            ),
             confidence,
         )
         for label, path in specs
     }
     cold_confirmed = {path: _cold_confirmed(path) for path in (*base_dirs, *candidate_dirs)}
     warnings = []
+    run_diagnostics = {}
+    if diagnostic_only:
+        warnings.append(
+            "Failed runs included: diagnostic comparison only. Request populations may differ; "
+            "metrics and deltas are descriptive, with no confidence intervals or significance conclusions."
+        )
     for label, directories in (("baseline", base_dirs), ("candidate", candidate_dirs)):
         missing = [str(path) for path in directories if not cold_confirmed[path]]
         if missing:
@@ -227,6 +302,12 @@ def compare(
         ("baseline", base_dirs, base_summaries),
         ("candidate", candidate_dirs, candidate_summaries),
     ):
+        run_diagnostics[label] = [
+            _run_diagnostics(path, summary) for path, summary in zip(directories, summaries, strict=True)
+        ]
+        for run in run_diagnostics[label]:
+            if run.get("failure_details_error"):
+                warnings.append(f"{label} {run['failure_details_error']}")
         unavailable = [
             str(path)
             for path, summary in zip(directories, summaries, strict=True)
@@ -240,6 +321,9 @@ def compare(
         "warnings": warnings,
         "metrics": metrics,
         "metadata": {
+            "diagnostic_only": diagnostic_only,
+            "baseline_runs": run_diagnostics["baseline"],
+            "candidate_runs": run_diagnostics["candidate"],
             "baseline_router": base_summaries[0]["router"],
             "candidate_router": candidate_summaries[0]["router"],
             "baseline_execution": base_summaries[0]["execution"],
@@ -255,6 +339,24 @@ def compare(
         return json.dumps(report, indent=2)
     lines = ["AgentCache Benchmark Comparison"]
     lines.extend(f"WARNING: {warning}" for warning in warnings)
+    if diagnostic_only:
+        for label, runs in run_diagnostics.items():
+            for run in runs:
+                planned = run["planned_requests"] if run["planned_requests"] is not None else "unknown"
+                lines.append(
+                    f"{label} {run['run_id']}: status={run['status']} "
+                    f"completed_tasks={run['completed_tasks']} failed_tasks={run['failed_tasks']} "
+                    f"successful_requests={run['successful_requests']}/{planned} "
+                    f"attempted_requests={run['attempted_requests']} "
+                    f"pre_send_failed_requests={run['pre_send_failed_requests']} "
+                    f"dependency_skipped_requests={run['dependency_skipped_requests']}"
+                )
+                if run["error"]:
+                    lines.append(f"{label} {run['run_id']} error: {run['error']}")
+                for node in run["failed_nodes"][:5]:
+                    lines.append(f"{label} failed node {node['task_id']}/{node['source_key']}: {node['error']}")
+                if len(run["failed_nodes"]) > 5:
+                    lines.append(f"{label}: additional failed nodes are listed in {run['failure_evidence']}")
     for label, metric in metrics.items():
         lines.append(f"{label}: baseline={metric['baseline']} candidate={metric['candidate']}")
     lines.append(f"baseline router.applicable: {report['metadata']['baseline_router'].get('applicable')}")

@@ -77,6 +77,17 @@ vllm bench serve --agentinfer compare --baseline DIR [DIR ...] --candidate DIR [
 | `--confidence FLOAT` | `0.95` | 统计报告使用的置信水平。 |
 | `--json` | `false` | 输出机器可读 JSON，而非文本报告。 |
 
+比较默认支持状态为 `completed` 或 `failed` 的已结束运行，无需额外参数。
+仍要求结束时间、有效的 summary 和 manifest 格式，以及一致的运行标识和生命周期状态。
+尚在运行或缺少 summary 的目录仍不能比较。
+
+只要包含失败运行，报告就仅供诊断：展示状态、可用的请求覆盖信息、错误和描述性指标。
+JSON 中 `metadata.diagnostic_only=true`，每次运行的诊断信息分别位于
+`metadata.baseline_runs` 和 `metadata.candidate_runs`。由于实际执行的请求集合可能不同，
+置信区间和显著性字段为 `null`；缺失的计划请求数保持未知。Replay 节点错误从
+`replay-execution.json` 读取，文本报告每次运行最多展示五条，JSON 保留全部条目。
+比较过程不会修改原始产物。
+
 运行步骤见[运行基准测试](../how-to/run-benchmark.md)，配置字段见[基准配置参考](benchmark-config.md)。
 
 ## 其他参数与 Replay

@@ -246,9 +246,9 @@ Inferact 默认且始终要求每个成功请求的输入 token 数精确匹配�
 
 检查 `manifest.json` 的状态和 `summary.json`，并保留 `requests.jsonl`、`replay-source-analysis.json`、
 `replay-plan.json`、`replay-execution.json` 和 `evidence/`。单个请求或 Session 失败会记录在
-`replay-execution.json` 和请求 trace 中，Runner 仍会汇总其他任务并正常完成结果目录。只有运行级异常
-（例如转换失败、全局超时或资源关闭失败）才写入 `replay-error.json` 并把 manifest 标记为失败，此时
-部分后续产物可能不存在。
+`replay-execution.json` 和请求 trace 中，Runner 仍会汇总其他任务的可用结果。任一计划任务或请求
+失败、缺失，都会将运行标记为 `failed` 并保留错误证据。转换失败、全局超时或资源关闭失败等
+运行级异常也会导致运行失败，此时部分后续产物可能不存在。
 
 TraceLab 和 Inferact 的转换产物都保存在结果目录的 `convert_result/` 下；Inferact 路径还会生成
 `trace-record-validation.json`。
@@ -257,6 +257,11 @@ TraceLab 和 Inferact 的转换产物都保存在结果目录的 `convert_result
 vllm bench serve --agentinfer compare \
   --baseline results/replay-baseline --candidate results/replay-candidate
 ```
+
+同一条比较命令也支持已结束但失败的运行，无需额外参数。报告会自动展示失败状态、请求覆盖
+情况、可用的节点错误和描述性指标。失败运行仍然是不完整的
+性能样本。添加 `--json` 可查看全部运行的诊断信息；只要包含失败运行，置信区间和显著性字段
+就为 `null`。产物要求见 [CLI 参考](../reference/benchmark-cli.md#compare)。
 
 公平比较要求使用相同 trace、抽样种子、前缀预算、并发和部署参数。每次冷启动比较前重启服务，
 并检查起始 Prefix Cache 指标。Replay 不提供任务正确性结论，详见[基准方法](../explanation/benchmark-methodology.md)。
