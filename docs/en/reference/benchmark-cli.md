@@ -79,6 +79,17 @@ vllm bench serve --agentinfer compare --baseline DIR [DIR ...] --candidate DIR [
 | `--confidence FLOAT` | `0.95` | Confidence level used by the statistical report. |
 | `--json` | `false` | Emit machine-readable JSON instead of the text report. |
 
+Comparison accepts finalized runs with status `completed` or `failed` without additional options. Each run must
+have a finish timestamp, valid summary and manifest schemas, and matching run identity and lifecycle status.
+Running runs and missing summaries are still rejected.
+
+When any included run failed, the report is diagnostic only: it shows status, available request coverage, errors,
+and descriptive metrics. JSON marks `metadata.diagnostic_only=true` and records every run under
+`metadata.baseline_runs` and `metadata.candidate_runs`. Confidence intervals and significance are `null` because
+the executed request populations may differ. Missing planned counts remain unknown. Available Replay node errors
+are read from `replay-execution.json`; the text report shows up to five per run, and JSON retains all of them.
+The source artifacts are never modified.
+
 See [Run a benchmark](../how-to/run-benchmark.md) for the procedure and
 [Benchmark configuration](benchmark-config.md) for YAML fields.
 
