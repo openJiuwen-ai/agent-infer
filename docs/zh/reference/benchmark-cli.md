@@ -85,7 +85,7 @@ vllm bench serve --agentinfer compare --baseline DIR [DIR ...] --candidate DIR [
 `run --metrics-url URL` 指定完整的 vLLM 指标端点。`summarize --output-figs-dir PATH` 输出分布图。
 
 ```bash
-vllm bench serve --agentinfer replay --config agentinfer/agentbench/configs/replay_benchmark.yaml
+vllm bench serve --agentinfer replay --config agentinfer/agentbench/configs/replay_agentinfer.yaml --task-num 8
 vllm bench serve --agentinfer replay \
   --trace-type tracelab \
   --task-num 8 --max-concurrency 4 \

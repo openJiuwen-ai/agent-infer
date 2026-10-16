@@ -89,7 +89,7 @@ See [Run a benchmark](../how-to/run-benchmark.md) for the procedure and
 distribution plots.
 
 ```bash
-vllm bench serve --agentinfer replay --config agentinfer/agentbench/configs/replay_benchmark.yaml
+vllm bench serve --agentinfer replay --config agentinfer/agentbench/configs/replay_agentinfer.yaml --task-num 8
 vllm bench serve --agentinfer replay \
   --trace-type tracelab \
   --task-num 8 --max-concurrency 4 \
