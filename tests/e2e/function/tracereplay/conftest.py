@@ -17,7 +17,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store",
         default=None,
         metavar="PATH",
-        help="Replay case JSON under tests/e2e/function/tracereplay/<suite>/cases/",
+        help="Replay case JSON under tests/e2e/function/tracereplay/cases/<suite>/",
     )
     group.addoption(
         "--task-num",
