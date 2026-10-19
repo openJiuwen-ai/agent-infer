@@ -7,12 +7,13 @@ Requires a GPU/NPU host with vLLM, weights, and trace files. Default CI skips `t
 
 ```text
 tracereplay/
-├── test_replay.py       # parametrized test_trace_replay[inferact|tracelab|agentx]
-├── conftest.py          # shared pytest CLI options
-├── helpers/             # config, executor, compare, repeatability
-├── inferact/cases/
-├── tracelab/cases/
-└── agentx/cases/
+├── cases/
+│   ├── inferact/    # *.json
+│   ├── tracelab/
+│   └── agentx/
+├── test_replay.py   # test_trace_replay[inferact|tracelab|agentx]
+├── conftest.py
+└── helpers/
 ```
 
 Shared vLLM/case loading: [`../../helpers/`](../../helpers/).
@@ -27,19 +28,18 @@ Shared vLLM/case loading: [`../../helpers/`](../../helpers/).
 | `conftest.py` | `--test-config-file`, `--bench-config`, `--cold-runs`, etc. |
 
 `test_replay.py` parametrizes three suites; only the param whose `workload` matches `--test-config-file`
-runs—the others **skip**. Prefer selecting one suite explicitly, e.g.
-`test_replay.py::test_trace_replay[tracelab]`.
+runs—the others **skip**. Prefer `test_replay.py::test_trace_replay[tracelab]`.
 
 ## Quick start (pytest)
 
 ```bash
 pytest -s -v tests/e2e/function/tracereplay/test_replay.py::test_trace_replay[inferact] \
-  --test-config-file tests/e2e/function/tracereplay/inferact/cases/glm52_8x4_inferact_replay.json \
+  --test-config-file tests/e2e/function/tracereplay/cases/inferact/glm52_8x4_inferact_replay.json \
   --cold-runs 2 \
   --stability-tolerance 0.05
 ```
 
-Replace `[inferact]` with `[tracelab]` or `[agentx]` and the matching case JSON under `*/cases/`.
+Replace `[inferact]` and `cases/inferact/` with `tracelab` or `agentx` as needed.
 
 | CLI option | Meaning |
 | ---------- | ------- |
@@ -72,12 +72,12 @@ Download [`codex_swebenchpro.json`](https://huggingface.co/datasets/Inferact/cod
 Set `benchmark_params.trace-path` in each case JSON. Bench defaults:
 [`replay_inferact.yaml`](../../../agentinfer/agentbench/configs/replay_inferact.yaml).
 
-| Case JSON | task-num | max-concurrency |
-| --------- | -------- | --------------- |
-| `inferact/cases/glm52_8x4_inferact_replay.json` | 8 | 4 |
-| `inferact/cases/glm52_16x8_inferact_replay.json` | 16 | 8 |
-| `inferact/cases/glm52_24x12_inferact_replay.json` | 24 | 12 |
-| `inferact/cases/glm52_32x16_inferact_replay.json` | 32 | 16 |
+| Case JSON (`cases/inferact/`) | task-num | max-concurrency |
+| ----------------------------- | -------- | --------------- |
+| `glm52_8x4_inferact_replay.json` | 8 | 4 |
+| `glm52_16x8_inferact_replay.json` | 16 | 8 |
+| `glm52_24x12_inferact_replay.json` | 24 | 12 |
+| `glm52_32x16_inferact_replay.json` | 32 | 16 |
 
 ## TraceLab
 
@@ -87,16 +87,16 @@ Bench defaults:
 
 ```bash
 pytest -s -v tests/e2e/function/tracereplay/test_replay.py::test_trace_replay[tracelab] \
-  --test-config-file tests/e2e/function/tracereplay/tracelab/cases/glm52_8x4_tracelab_replay.json \
+  --test-config-file tests/e2e/function/tracereplay/cases/tracelab/glm52_8x4_tracelab_replay.json \
   --cold-runs 2 --stability-tolerance 0.05
 ```
 
-| Case JSON | task-num | max-concurrency |
-| --------- | -------- | --------------- |
-| `tracelab/cases/glm52_8x4_tracelab_replay.json` | 8 | 4 |
-| `tracelab/cases/glm52_16x8_tracelab_replay.json` | 16 | 8 |
-| `tracelab/cases/glm52_24x12_tracelab_replay.json` | 24 | 12 |
-| `tracelab/cases/glm52_32x16_tracelab_replay.json` | 32 | 16 |
+| Case JSON (`cases/tracelab/`) | task-num | max-concurrency |
+| ----------------------------- | -------- | --------------- |
+| `glm52_8x4_tracelab_replay.json` | 8 | 4 |
+| `glm52_16x8_tracelab_replay.json` | 16 | 8 |
+| `glm52_24x12_tracelab_replay.json` | 24 | 12 |
+| `glm52_32x16_tracelab_replay.json` | 32 | 16 |
 
 Manual bench: `vllm bench serve --agentinfer replay --config /path/to/replay_tracelab.yaml --result-dir …`
 
@@ -105,12 +105,12 @@ Manual bench: `vllm bench serve --agentinfer replay --config /path/to/replay_tra
 Bench defaults:
 [`replay_agentX.yaml`](../../../agentinfer/agentbench/configs/replay_agentX.yaml). **`trace-path` is required.**
 
-| Case JSON | task-num | max-concurrency |
-| --------- | -------- | --------------- |
-| `agentx/cases/glm52_8x4_agentx_replay.json` | 8 | 4 |
-| `agentx/cases/glm52_16x8_agentx_replay.json` | 16 | 8 |
-| `agentx/cases/glm52_24x12_agentx_replay.json` | 24 | 12 |
-| `agentx/cases/glm52_32x16_agentx_replay.json` | 32 | 16 |
+| Case JSON (`cases/agentx/`) | task-num | max-concurrency |
+| --------------------------- | -------- | --------------- |
+| `glm52_8x4_agentx_replay.json` | 8 | 4 |
+| `glm52_16x8_agentx_replay.json` | 16 | 8 |
+| `glm52_24x12_agentx_replay.json` | 24 | 12 |
+| `glm52_32x16_agentx_replay.json` | 32 | 16 |
 
 ## Case JSON ↔ bench CLI
 

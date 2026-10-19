@@ -57,6 +57,13 @@ pip install -e ".[dev]"
 pytest tests/agentcache/ tests/agentbench/ -v
 ```
 
-### Run E2E performance benchmarks (GPU / NPU, real model)
+### Run E2E tests (GPU / NPU, real model)
 
-See [`tests/e2e/perf/README.md`](e2e/perf/README.md). These cases are not part of CPU CI.
+End-to-end tests live under [`tests/e2e/`](e2e/README.md) (performance benchmarks and functional suites).
+They are not part of default CPU CI (`pytest --ignore=tests/e2e`).
+
+| Suite | Entry doc |
+| ----- | --------- |
+| Overview | [`tests/e2e/README.md`](e2e/README.md) |
+| Performance (baseline vs AgentInfer) | [`tests/e2e/perf/README.md`](e2e/perf/README.md) |
+| Functional (trace replay, etc.) | [`tests/e2e/function/README.md`](e2e/function/README.md) |
