@@ -1,0 +1,44 @@
+# KernelToLeverMap (M-D1) — evidence -> allowed levers, with CONCRETE thresholds
+# and fixture-verifiable mapping. Input: a KernelBreakdown (from M-B4 CUDA parsing).
+# Output: matched rule(s) -> {status, allowed_knobs, expected_effect, quality_gate,
+# disqualifiers}. No "high/low" hand-waving; every threshold is a number.
+#
+# ops: ">=", ">", "<=", "<", "in" (threshold is [lo, hi], inclusive).
+rules:
+  - name: gemm_compute_bound
+    evidence:
+      gemm_time_frac: {op: ">=", threshold: 0.50}
+      tc_util:        {op: "<",  threshold: 0.40}
+    status: confirmed
+    allowed_knobs: [quantization_fp8, quantization_awq]
+    expected_effect: "higher throughput: fewer FLOPs/bytes per token"
+    quality_gate: [perplexity_delta, task_em]
+    disqualifiers: [no_quant_checkpoint, backend_unsupported]
+
+  - name: kv_bandwidth_bound
+    evidence:
+      dram_bw_util:  {op: ">=", threshold: 0.80}
+      sm_occupancy:  {op: "in", threshold: [0.50, 0.80]}
+    status: confirmed
+    allowed_knobs: [kv_cache_dtype_fp8, max_num_batched_tokens_up]
+    expected_effect: "higher throughput: less KV byte movement / larger amortized batch"
+    quality_gate: [kv_quant_quality]
+    disqualifiers: [kv_fp8_unsupported]
+
+  - name: launch_overhead_bound
+    evidence:
+      launch_gap_frac: {op: ">=", threshold: 0.20}
+    status: confirmed
+    allowed_knobs: [cuda_graph, max_num_batched_tokens_up]
+    expected_effect: "higher throughput: fewer kernel-launch bubbles"
+    quality_gate: []
+    disqualifiers: [cuda_graph_already_on]
+
+  - name: attention_bound
+    evidence:
+      attention_time_frac: {op: ">=", threshold: 0.40}
+    status: suspected
+    allowed_knobs: [chunked_prefill_budget, spec_decode]
+    expected_effect: "lower TTFT / higher throughput"
+    quality_gate: [spec_decode_acceptance, quality]
+    disqualifiers: [no_draft_model]

@@ -1,0 +1,64 @@
+# Shared scenario definitions for DES simulation.
+# Referenced by config/targets/*.yaml via evaluation_scenarios field.
+# Loaded by vllm_evolve.sim.scenario_registry.
+
+scenarios:
+  moderate_load:
+    workload:
+      total_requests: 150
+      arrival_rate_qps: 100.0
+      prompt_len_mean: 512
+      prompt_len_std: 256
+      output_len_mean: 256
+      output_len_std: 128
+      prefix_reuse_rate: 0.2
+      burst_factor: 1.0
+    simulator:
+      kv_blocks: 128
+      max_tokens: 1024
+      max_seqs: 6
+
+  high_load_kv_pressure:
+    workload:
+      total_requests: 150
+      arrival_rate_qps: 150.0
+      prompt_len_mean: 768
+      prompt_len_std: 400
+      output_len_mean: 256
+      output_len_std: 192
+      prefix_reuse_rate: 0.7
+      burst_factor: 1.0
+    simulator:
+      kv_blocks: 256
+      max_tokens: 2048
+      max_seqs: 8
+
+  bimodal_mixed:
+    workload:
+      total_requests: 150
+      arrival_rate_qps: 160.0
+      prompt_len_mean: 384
+      prompt_len_std: 350
+      output_len_mean: 256
+      output_len_std: 200
+      prefix_reuse_rate: 0.3
+      burst_factor: 2.0
+    simulator:
+      kv_blocks: 300
+      max_tokens: 1536
+      max_seqs: 8
+
+  extreme_bimodal:
+    workload:
+      total_requests: 150
+      arrival_rate_qps: 200.0
+      prompt_len_mean: 512
+      prompt_len_std: 400
+      output_len_mean: 256
+      output_len_std: 200
+      prefix_reuse_rate: 0.3
+      burst_factor: 1.0
+    simulator:
+      kv_blocks: 400
+      max_tokens: 1536
+      max_seqs: 8

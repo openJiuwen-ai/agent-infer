@@ -25,6 +25,24 @@ AgentInfer 为智能体工作流提供缓存管理和请求调度能力，可集
 [vLLM 接入](docs/zh/how-to/integrate-vllm.md) · [基准测试指南](docs/zh/how-to/run-benchmark.md) ·
 [AgentRouter WASM affinity + native 补丁](agentinfer/agentrouter/README.md) · [变更日志](CHANGELOG.md)
 
+## 可选：用 RSI 演化调度策略
+
+[RSI / vllm-evolve](tools/rsi/README.md#quick-start) 用于生成、验证和评测调度策略，并保存每次实验的依据。
+它是独立安装的开发工具；在仓库根目录安装 AgentInfer 不会安装 RSI 的 `ve` 命令。
+
+第一次使用请按 [RSI 快速开始](tools/rsi/README.md#quick-start) 操作：在 `tools/rsi/` 中创建独立的
+Python 3.12 环境，安装工具，准备 Frontier 模拟器和 BurstGPT 数据，再运行一次小规模 CPU 搜索。
+需要 Linux 或 WSL 2，不需要 GPU、模型权重或 API key。默认使用确定性的模板生成候选策略；
+若要让 Codex 生成策略，还需显式配置作者适配命令，`ve init` 本身不会连接模型。
+
+运行后先看 `tools/rsi/runs/frontier_local_evolution/report.md`。没有策略通过验收也属于有效实验结果；
+通过模拟器验收的 `sim_winner` 仍需真实 vLLM 验证，不能直接作为生产性能提升的结论。
+远程验证前，将 `tools/rsi/config/remote/gpu.env.example` 复制为本地 `.env`，配置自己的 SSH 别名和目录；
+项目没有预置可直接使用的共享服务器。
+工具最初导入自
+[`JiusiServe/vllm-evolve@a9cf8b6`](https://github.com/JiusiServe/vllm-evolve/tree/a9cf8b67c723daa38dc4010afbb0c453fb525520)，
+本仓库维护集成修复。
+
 ## 环境要求
 
 - 操作系统：Linux，或安装了 WSL 2 的 Windows。

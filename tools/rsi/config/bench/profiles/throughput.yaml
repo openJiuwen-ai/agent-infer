@@ -1,0 +1,23 @@
+# High-throughput regime: drive saturating load and measure how much
+# SLO-meeting goodput the policy sustains at peak. The SLO is generous (we
+# accept higher latency under saturation) so the metric rewards real capacity,
+# not latency tricks.
+name: throughput
+regime: throughput
+description: Saturating load; primary metric is sustained SLO-meeting goodput.
+workload:
+  kind: synthetic
+  arrival: saturating          # send as fast as the server accepts
+  num_requests: 1000
+  prompt_len_mean: 512
+  prompt_len_std: 128
+  output_len_mean: 256
+  output_len_std: 64
+slo:
+  ttft_ms: 5000
+  tpot_ms: 100
+primary_metric: goodput_req_s
+primary_higher_is_better: true
+seeds: [1, 2, 3, 5, 8, 13, 21, 34, 55, 89]
+seed_tiers: [3, 5, 10]
+cv_threshold: 0.10

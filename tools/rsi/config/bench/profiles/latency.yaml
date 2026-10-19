@@ -1,0 +1,23 @@
+# Low-latency regime: light load with no queueing, under a tight SLO. Goodput
+# here measures how reliably single requests stay within strict TTFT/TPOT
+# bounds — i.e. how good the experience is for one user.
+name: latency
+regime: latency
+description: Low load, tight SLO; primary metric is goodput under strict latency bounds.
+workload:
+  kind: synthetic
+  arrival: poisson
+  request_rate_qps: 1.0
+  num_requests: 200
+  prompt_len_mean: 512
+  prompt_len_std: 128
+  output_len_mean: 256
+  output_len_std: 64
+slo:
+  ttft_ms: 500
+  tpot_ms: 50
+primary_metric: goodput_req_s
+primary_higher_is_better: true
+seeds: [1, 2, 3, 5, 8, 13, 21, 34, 55, 89]
+seed_tiers: [3, 5, 10]
+cv_threshold: 0.10

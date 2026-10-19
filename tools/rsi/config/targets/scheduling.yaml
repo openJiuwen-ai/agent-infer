@@ -1,0 +1,32 @@
+api_version: "vllm-evolve/v1"
+kind: Target
+metadata:
+  name: scheduling
+  vllm_version_constraint: ">=0.14.0"
+spec:
+  maturity: supported
+  serving_mode: co_located
+  engine: vllm
+  skeleton_path: targets/scheduling/skeleton.py
+  seed_path: targets/scheduling/seed.py
+  prompt_hints_path: targets/scheduling/prompt_hints.md
+  evolvable_functions:
+    - name: schedule_batch
+      signature: "schedule_batch(waiting_requests: list[RequestInfo], running_requests: list[RequestInfo], max_num_batched_tokens: int, max_num_seqs: int, available_kv_blocks: int, prefix_cache_hit_rate: float) -> ScheduleDecision"
+  metrics:
+    - {name: throughput_tok_s, direction: maximize, weight: 0.30, normalization: ratio_to_seed, ceiling_factor: 2.0}
+    - {name: p50_ttft_ms,      direction: minimize, weight: 0.25, normalization: ratio_to_seed, ceiling_factor: 2.0}
+    - {name: p99_ttft_ms,      direction: minimize, weight: 0.25, normalization: ratio_to_seed, ceiling_factor: 3.0}
+    - {name: kv_hit_rate,      direction: maximize, weight: 0.10, normalization: ratio_to_seed, ceiling_factor: 2.0}
+    - {name: p50_tpot_ms,      direction: minimize, weight: 0.10, normalization: ratio_to_seed, ceiling_factor: 2.0}
+  map_elites:
+    dimensions:
+      - {name: avg_prompt_length, bins: [128, 512, 1024, 4096]}
+      - {name: request_rate_qps,  bins: [1, 5, 20, 100]}
+    max_per_cell: 3
+  # Evaluation is REAL vLLM only (via `ve bench`); the DES simulator was deleted.
+  evaluator: live
+  evaluation_scenarios:
+    - moderate_load
+    - high_load_kv_pressure
+    - extreme_bimodal

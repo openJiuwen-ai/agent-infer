@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "autopt Spec — L0 goal contract (what ve-goal produces / drives the loop)",
+  "type": "object",
+  "required": ["metric", "direction"],
+  "additionalProperties": false,
+  "properties": {
+    "metric": {"type": "string", "minLength": 1},
+    "direction": {"type": "string", "enum": ["max", "min", "threshold"]},
+    "target": {"type": ["number", "null"]},
+    "constraints": {"type": "object"},
+    "workload": {"type": "object"},
+    "hardware": {"type": "object"},
+    "raw_intent": {"type": "string"}
+  }
+}
