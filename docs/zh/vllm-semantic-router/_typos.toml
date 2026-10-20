@@ -1,0 +1,6 @@
+# typos whitelist for the vllm-semantic-router NPU docs.
+# CANN (Compute Architecture for Neural Networks) is Huawei's Ascend
+# compute toolkit; it is not the English word "can".
+[default.extend-words]
+CANN = "CANN"
+cann = "cann"

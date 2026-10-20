@@ -11,6 +11,8 @@ Reference 和 Explanation；开发者内部设计稿位于仓根目录的 `desig
   [Semantic Router 构建与部署](zh/how-to/deploy-semantic-router.md)（Windows 构建见 [deploy-semantic-router-on-windows](zh/how-to/deploy-semantic-router-on-windows.md)），
   用于完成具体任务。
 - **Integrations**：[AgentRouter WASM affinity + native 补丁](../agentinfer/agentrouter/README.md)。
+- **vLLM Semantic Router 昇腾材料**：[昇腾 NPU 部署](zh/vllm-semantic-router/ascend-npu.md)与
+  [NPU 实测记录](zh/vllm-semantic-router/records/npu-perf-baseline-report-20261020.md)（parity / bf16 / 融合算子 / 性能基线）。
 - **Reference**：[Python API](zh/reference/python-api.md)、[基准命令行](zh/reference/benchmark-cli.md)、
   [基准配置](zh/reference/benchmark-config.md)和[运行产物](zh/reference/run-artifacts.md)，用于查询接口和参数。
 - **Explanation**：[架构概述](zh/explanation/architecture.md)、
