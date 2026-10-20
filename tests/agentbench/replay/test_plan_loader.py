@@ -303,3 +303,136 @@ def _minimal_plan_dict() -> dict:
             }
         ],
     }
+
+
+# --- review fixes (2026-10-16): required-field presence, IntervalModel validation,
+# --- negative seed round-trip, context pairing, self-loop, empty tasks, str paths.
+
+
+def test_plan_from_dict_rejects_missing_planned_output_tokens() -> None:
+    data = _minimal_plan_dict()
+    node = _first_request_node(data)
+    del node["planned_output_tokens"]
+    with pytest.raises(ValueError, match="planned_output_tokens"):
+        ReplayPlan.from_dict(data)
+
+
+def test_plan_from_dict_rejects_null_planned_output_tokens() -> None:
+    data = _minimal_plan_dict()
+    node = _first_request_node(data)
+    node["planned_output_tokens"] = None
+    with pytest.raises(ValueError, match="planned_output_tokens"):
+        ReplayPlan.from_dict(data)
+
+
+def test_plan_from_dict_rejects_missing_send_after_key() -> None:
+    data = _minimal_plan_dict()
+    node = _first_request_node(data)
+    del node["send_after"]
+    with pytest.raises(ValueError, match="send_after"):
+        ReplayPlan.from_dict(data)
+
+
+def test_plan_from_dict_accepts_null_send_after_key() -> None:
+    data = _minimal_plan_dict()
+    node = _first_request_node(data)
+    node["send_after"] = None
+    plan = ReplayPlan.from_dict(data)
+    assert plan.tasks[0].requests[0].send_after is None
+
+
+def test_interval_model_rejects_bad_mode() -> None:
+    data = _minimal_plan_dict()
+    data["interval_model"]["mode"] = "garbage"
+    with pytest.raises(ValueError, match="mode"):
+        ReplayPlan.from_dict(data)
+
+
+def test_interval_model_rejects_bad_mu() -> None:
+    data = _minimal_plan_dict()
+    data["interval_model"]["mu"] = "banana"
+    with pytest.raises(ValueError, match="mu"):
+        ReplayPlan.from_dict(data)
+
+
+def test_interval_model_rejects_nonfinite_mu() -> None:
+    data = _minimal_plan_dict()
+    data["interval_model"]["mu"] = float("nan")
+    with pytest.raises(ValueError, match="mu"):
+        ReplayPlan.from_dict(data)
+
+
+def test_interval_model_rejects_bad_sigma() -> None:
+    data = _minimal_plan_dict()
+    data["interval_model"]["sigma"] = -1
+    with pytest.raises(ValueError, match="sigma"):
+        ReplayPlan.from_dict(data)
+
+
+def test_interval_model_rejects_bad_anchors() -> None:
+    data = _minimal_plan_dict()
+    data["interval_model"]["anchors"] = []
+    with pytest.raises(ValueError, match="anchors"):
+        ReplayPlan.from_dict(data)
+
+
+def test_interval_model_rejects_bad_cdf_version() -> None:
+    data = _minimal_plan_dict()
+    data["interval_model"]["cdf_version"] = 123
+    with pytest.raises(ValueError, match="cdf_version"):
+        ReplayPlan.from_dict(data)
+
+
+def test_negative_sample_seed_roundtrips(tmp_path: Path) -> None:
+    data = _minimal_plan_dict()
+    data["sample_seed"] = -1
+    plan = ReplayPlan.from_dict(data)
+    assert plan.sample_seed == -1
+    path = tmp_path / "replay-plan.json"
+    path.write_text(json.dumps(plan.to_dict()), encoding="utf-8")
+    loaded = ReplayPlan.load(path)
+    assert loaded.sample_seed == -1
+
+
+def test_validate_loaded_plan_rejects_empty_tasks() -> None:
+    data = _minimal_plan_dict()
+    data["tasks"] = []
+    plan = ReplayPlan.from_dict(data)
+    with pytest.raises(ValueError, match="at least one task"):
+        validate_loaded_plan(plan)
+
+
+def test_validate_loaded_plan_rejects_independent_with_context_after() -> None:
+    data = _minimal_plan_dict()
+    node = _first_request_node(data)
+    node["context_after"] = node["source_key"]
+    plan = ReplayPlan.from_dict(data)
+    with pytest.raises(ValueError, match="independent context must not reference"):
+        validate_loaded_plan(plan)
+
+
+def test_validate_loaded_plan_rejects_context_after_self_loop() -> None:
+    data = _minimal_plan_dict()
+    node = _first_request_node(data)
+    node["context_after"] = node["source_key"]
+    node["context_mode"] = "append"
+    plan = ReplayPlan.from_dict(data)
+    with pytest.raises(ValueError, match="cycle"):
+        validate_loaded_plan(plan)
+
+
+def test_load_accepts_str_path(tmp_path: Path) -> None:
+    data = _minimal_plan_dict()
+    path = tmp_path / "replay-plan.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    plan = ReplayPlan.load(str(path))
+    assert plan.schema_version == "1"
+
+
+def test_interval_model_rejects_negative_sigma_roundtrip(tmp_path: Path) -> None:
+    """The reviewer's exact repro: sigma=-1 previously loaded silently."""
+    data = _minimal_plan_dict()
+    data["interval_model"]["sigma"] = -1.0
+    data["interval_model"]["mu"] = 1.0
+    with pytest.raises(ValueError, match="sigma"):
+        ReplayPlan.from_dict(data)

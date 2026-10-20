@@ -101,6 +101,19 @@ AgentInfer、Inferact 或 TraceLab 配置的 `trace_path` 为空时会解析对�
 预留 trace 类型抛出 `NotImplementedError`，执行错误在记录失败产物后向调用方传播。
 该同步入口内部使用 `asyncio.run`，不能在已有事件循环的线程内调用。
 
+`agentinfer.agentbench.replay.planner.ReplayPlan.load`
+
+```python
+@classmethod
+def load(cls, path: str | Path) -> ReplayPlan: ...
+```
+
+读取已写出的 `replay-plan.json` 并重建计划。结构损坏（类型/枚举/非负字段非法、必需 key 缺失、
+引用悬空、存在环、会话重复）抛出 `ValueError`，JSON 解析失败抛出 `json.JSONDecodeError`，
+文件不可读抛出 `OSError`。`ReplayPlan.from_dict(value)` 是内存态解析步骤（只解析不校验）；
+`validate_loaded_plan(plan)` 是跨字段校验步骤。加载不会重新推导
+`workload_fingerprint`/`plan_namespace`，也不会重跑 `_validate_plan` —— 这两者都需要原始 source。
+
 ## Replay 采样参数
 
 Anthropic Replay 元数据 `_agentinfer_replay_sampling` 中的 `seed`、`min_tokens` 和 `ignore_eos`
