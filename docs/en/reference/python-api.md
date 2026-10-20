@@ -106,6 +106,20 @@ execution errors propagate after
 failure artifacts are recorded. The synchronous entry uses `asyncio.run` and cannot run in a thread with an active
 event loop.
 
+`agentinfer.agentbench.replay.planner.ReplayPlan.load`
+
+```python
+@classmethod
+def load(cls, path: str | Path) -> ReplayPlan: ...
+```
+
+loads a written `replay-plan.json` and reconstructs the plan. Raises `ValueError` for malformed
+structure (bad type/enum/non-negative field, missing required key, dangling reference, cycle,
+duplicate session), `json.JSONDecodeError` for malformed JSON, and `OSError` for unreadable files.
+`ReplayPlan.from_dict(value)` is the in-memory step (parse only, no validation);
+`validate_loaded_plan(plan)` is the cross-field step. Loading does not re-derive
+`workload_fingerprint`/`plan_namespace` or re-run `_validate_plan` -- those need the original source.
+
 ## Replay sampling parameters
 
 Anthropic Replay metadata `_agentinfer_replay_sampling` carries `seed`, `min_tokens`, and `ignore_eos`
