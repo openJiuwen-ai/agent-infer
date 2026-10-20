@@ -34,6 +34,7 @@ _CONTEXT_FREE_PROMPT_KINDS = frozenset({"lead_title", "lead_name"})
 _CONTEXT_MODES = frozenset({"none", "independent", "append", "trim", "reset"})
 _ACTOR_ROLES = frozenset({"lead", "subagent", "unknown"})
 _NODE_TYPES = frozenset({"request", "timing_dependency"})
+_INTERVAL_MODES = frozenset({"trace", "lognormal"})
 _PROMPT_KINDS = frozenset({"lead_title", "lead_name", "lead_main", "subagent_first", "continuation", "none"})
 _RESPONSE_VALIDATIONS = frozenset({"exact_tokens"})
 _PLAN_KINDS = frozenset({"structural"})
@@ -116,6 +117,13 @@ class ReplayPlanNode:
         execution-neutral defaults; nothing downstream reads them for a loaded
         plan, and :func:`_validate_plan` is not re-run on load (it needs the
         original source).
+
+        One presence exception, documented for the reviewer asking "why does
+        this key not raise?": ``to_dict`` writes ``effective_output_tokens`` when
+        ``planned_output_tokens == 0`` and ``response_validation`` is set;
+        ``from_dict`` accepts it (it round-trips losslessly and ``to_dict``
+        regenerates it) but deliberately ignores it -- ``planned_output_tokens``
+        is the authoritative output target.
         """
 
         if not isinstance(value, dict):
@@ -125,7 +133,7 @@ class ReplayPlanNode:
             raise ValueError(f"node node_type must be one of {sorted(_NODE_TYPES)}")
         runtime_request_id = _node_str(value, "runtime_request_id")
         source_key = _node_str(value, "source_key")
-        send_after = _node_optional_str(value, "send_after")
+        send_after = _node_required_key_optional_str(value, "send_after")
         effective_interval = _node_nonneg_finite(value, "effective_interval_seconds")
 
         if node_type == "timing_dependency":
@@ -152,8 +160,8 @@ class ReplayPlanNode:
 
         prompt_ref = value.get("prompt_ref")
         context_after = _node_optional_str(value, "context_after")
-        planned_input_tokens = _node_optional_nonneg_int(value, "planned_input_tokens")
-        planned_output_tokens = _node_optional_nonneg_int(value, "planned_output_tokens")
+        planned_input_tokens = _node_required_nonneg_int(value, "planned_input_tokens")
+        planned_output_tokens = _node_required_nonneg_int(value, "planned_output_tokens")
         backend_sampling_seed = _node_optional_nonneg_int(value, "backend_sampling_seed")
         source_prefix_tokens = _node_optional_nonneg_int(value, "source_prefix_tokens")
         source_output_tokens = _node_optional_nonneg_int(value, "source_output_tokens")
@@ -313,7 +321,7 @@ class ReplayPlan:
             source_bundle_sha256=_opt_str_field(value, "source_bundle_sha256"),
             source_sessions=_nonneg_int_field(value, "source_sessions"),
             replayable_source_sessions=_nonneg_int_field(value, "replayable_source_sessions"),
-            sample_seed=_nonneg_int_field(value, "sample_seed"),
+            sample_seed=_int_field(value, "sample_seed"),
             plan_namespace=_str_field(value, "plan_namespace"),
             workload_fingerprint=_str_field(value, "workload_fingerprint"),
             prompt_calibration=dict(prompt_calibration),
@@ -322,7 +330,7 @@ class ReplayPlan:
         )
 
     @classmethod
-    def load(cls, path: Path) -> ReplayPlan:
+    def load(cls, path: str | Path) -> ReplayPlan:
         """Load and structurally validate a plan from a ``replay-plan.json`` file.
 
         This is the convenience entry for resuming from disk; it reads the
@@ -331,7 +339,7 @@ class ReplayPlan:
         and Prompt calibration are still established by the runner, not here.
         """
 
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
         plan = cls.from_dict(data)
         validate_loaded_plan(plan)
         return plan
@@ -486,24 +494,35 @@ def _task_plan(
 
 
 def _validate_acyclic(nodes: Iterable[ReplayPlanNode]) -> None:
+    """Check that the full wait-for graph (``send_after`` + ``context_after``) is acyclic.
+
+    A cycle through either reference type deadlocks the executor: the node
+    waits on its predecessor's completion while that predecessor (directly
+    or transitively) waits on it. ``context_after`` self-references are the
+    simplest instance -- the node would wait on its own completion.
+    """
+
     by_key = {node.source_key: node for node in nodes}
+    edges = {
+        key: tuple(dep for dep in (node.send_after, node.context_after) if dep is not None)
+        for key, node in by_key.items()
+    }
     visiting: set[str] = set()
     visited: set[str] = set()
 
-    def visit(key: str) -> None:
+    def visit(key: str, path: tuple[str, ...]) -> None:
         if key in visited:
             return
         if key in visiting:
-            raise ValueError(f"send_after cycle detected at {key}")
+            raise ValueError(f"dependency cycle detected: {' -> '.join((*path, key))}")
         visiting.add(key)
-        predecessor = by_key[key].send_after
-        if predecessor is not None:
-            visit(predecessor)
+        for predecessor in edges[key]:
+            visit(predecessor, (*path, key))
         visiting.remove(key)
         visited.add(key)
 
     for key in by_key:
-        visit(key)
+        visit(key, ())
 
 
 def _validate_task(
@@ -602,6 +621,22 @@ def _node_optional_nonneg_int(node: dict[str, object], field: str) -> int | None
     return value
 
 
+def _node_required_nonneg_int(node: dict[str, object], field: str) -> int:
+    value = _node_optional_nonneg_int(node, field)
+    if value is None:
+        raise ValueError(f"node {field} is required and must be a non-negative integer")
+    return value
+
+
+def _node_required_key_optional_str(node: dict[str, object], field: str) -> str | None:
+    if field not in node:
+        raise ValueError(f"node {field} key must be present (use null for no reference)")
+    value = node[field]
+    if value is not None and not isinstance(value, str):
+        raise ValueError(f"node {field} must be a string or null")
+    return value
+
+
 def _str_field(plan: dict[str, object], field: str) -> str:
     value = plan.get(field)
     if not isinstance(value, str) or not value:
@@ -623,12 +658,54 @@ def _nonneg_int_field(plan: dict[str, object], field: str) -> int:
     return value
 
 
+def _int_field(plan: dict[str, object], field: str) -> int:
+    value = plan.get(field)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"plan {field} must be an integer")
+    return value
+
+
+def _opt_finite_field(plan: dict[str, object], field: str) -> float | None:
+    value = plan.get(field)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"plan interval_model {field} must be a finite number or null")
+    return float(value)
+
+
+def _opt_positive_field(plan: dict[str, object], field: str) -> float | None:
+    value = _opt_finite_field(plan, field)
+    if value is not None and value <= 0:
+        raise ValueError(f"plan interval_model {field} must be positive when present")
+    return value
+
+
+def _opt_float_map_field(plan: dict[str, object], field: str) -> dict[str, float] | None:
+    value = plan.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"plan interval_model {field} must be an object or null")
+    checked: dict[str, float] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not key:
+            raise ValueError(f"plan interval_model {field} keys must be non-empty strings")
+        if isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(item):
+            raise ValueError(f"plan interval_model {field}.{key} must be a finite number")
+        checked[key] = float(item)
+    return checked
+
+
 def _interval_model_from_dict(value: object) -> IntervalModel:
     """Reconstruct an :class:`IntervalModel` from ``IntervalModel.to_dict()``.
 
     ``IntervalModel.to_dict`` is ``asdict(self)``; any field not declared on the
     dataclass (or a mistyped value) is rejected so a drifted artifact cannot
-    load silently.
+    load silently. Every field is validated: ``mode`` is checked against the
+    interval modes the config layer accepts, and the remaining fields are
+    type-checked with the same rules ``IntervalModel`` construction would
+    enforce if the dataclass were not frozen.
     """
 
     if not isinstance(value, dict):
@@ -638,17 +715,17 @@ def _interval_model_from_dict(value: object) -> IntervalModel:
         if key not in known:
             raise ValueError(f"interval_model has unknown field {key!r}")
     return IntervalModel(
-        mode=_str_field(value, "mode"),
+        mode=_node_enum(value, "mode", _INTERVAL_MODES),
         fit_version=_str_field(value, "fit_version"),
-        mu=value.get("mu"),
-        sigma=value.get("sigma"),
-        anchors=value.get("anchors"),
-        anchor_predictions=value.get("anchor_predictions"),
-        anchor_residual_ratios=value.get("anchor_residual_ratios"),
-        log_space_rmse=value.get("log_space_rmse"),
-        mean_predicted=value.get("mean_predicted"),
-        u_clamp=value.get("u_clamp"),
-        cdf_version=value.get("cdf_version"),
+        mu=_opt_finite_field(value, "mu"),
+        sigma=_opt_positive_field(value, "sigma"),
+        anchors=_opt_float_map_field(value, "anchors"),
+        anchor_predictions=_opt_float_map_field(value, "anchor_predictions"),
+        anchor_residual_ratios=_opt_float_map_field(value, "anchor_residual_ratios"),
+        log_space_rmse=_opt_finite_field(value, "log_space_rmse"),
+        mean_predicted=_opt_finite_field(value, "mean_predicted"),
+        u_clamp=_opt_finite_field(value, "u_clamp"),
+        cdf_version=_opt_str_field(value, "cdf_version"),
     )
 
 
@@ -677,6 +754,8 @@ def validate_loaded_plan(plan: ReplayPlan) -> None:
         raise ValueError("plan plan_namespace must be a non-empty string")
     if not isinstance(plan.prompt_calibration, dict):
         raise ValueError("plan prompt_calibration must be an object")
+    if not plan.tasks:
+        raise ValueError("plan must have at least one task")
 
     runtime_sessions: set[str] = set()
     for task in plan.tasks:
@@ -700,6 +779,13 @@ def validate_loaded_plan(plan: ReplayPlan) -> None:
                 isinstance(node.planned_input_tokens, int) and node.planned_input_tokens > 0
             ):
                 raise ValueError(f"request {node.source_key} has no positive input target")
+            if node.node_type == "request":
+                if node.context_mode in {"independent", "reset"} and node.context_after is not None:
+                    raise ValueError(f"{node.context_mode} context must not reference context_after in {task.task_id}")
+                if node.context_mode in {"append", "trim"} and node.context_after is None:
+                    raise ValueError(f"{node.context_mode} context requires context_after in {task.task_id}")
+        if not nodes:
+            raise ValueError(f"task {task.task_id} must have at least one request node")
         _validate_acyclic(nodes)
 
 
