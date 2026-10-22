@@ -18,6 +18,7 @@ from agentinfer.scheduling.identity import AgentIdentity, encode_agent_identity
 from ..request_proxy.observers import _normalize_usage
 from ..request_proxy.request_trace import RequestFact, RequestTraceWriter
 from .config import ReplayBenchConfig
+from .observation import ReplayObserver, emit
 from .planner import ReplayPlan, ReplayPlanNode, ReplayTaskPlan
 from .prompt import SyntheticPrompt
 
@@ -36,7 +37,17 @@ class TransportResult:
 
 
 class ReplayTransport:
-    def __init__(self, config: ReplayBenchConfig, run_id: str, writer: RequestTraceWriter | None) -> None:
+    """Send planned requests and validate complete responses before releasing context."""
+
+    def __init__(
+        self,
+        config: ReplayBenchConfig,
+        run_id: str,
+        writer: RequestTraceWriter | None,
+        *,
+        observer: ReplayObserver | None = None,
+    ) -> None:
+        self.observer = observer
         self.config = config
         self.run_id = run_id
         self.writer = writer
@@ -136,11 +147,13 @@ class ReplayTransport:
         saw_token_ids = False
         saw_done = False
         try:
+            body = self._body(task, node, prompt)
+            emit(self.observer, None, "http_dispatch", task, node)
             async with self.client.stream(
                 "POST",
                 f"{self.upstream}{'/v1/completions' if prompt.token_ids is not None else self.config.backend.endpoint}",
                 headers=self._headers(task, node),
-                json=self._body(task, node, prompt),
+                json=body,
             ) as response:
                 status_code = response.status_code
                 if response.is_error:

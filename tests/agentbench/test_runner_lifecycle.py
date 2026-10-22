@@ -366,7 +366,7 @@ def test_run_timeout_covers_setup_and_still_finalizes(tmp_path: Path, monkeypatc
     config = _run_config(tmp_path)
     config.experiment.run_timeout_seconds = 1
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(asyncio.TimeoutError):
         asyncio.run(run_benchmark(config))
 
     assert _manifest(tmp_path)["status"] == "failed"
@@ -389,7 +389,7 @@ def test_run_timeout_includes_cancelled_task_in_summary(tmp_path: Path, monkeypa
     config = _run_config(tmp_path)
     config.experiment.run_timeout_seconds = 1
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(asyncio.TimeoutError):
         asyncio.run(runner.run_benchmark(config))
 
     summary = json.loads((tmp_path / "run" / "summary.json").read_text(encoding="utf-8"))

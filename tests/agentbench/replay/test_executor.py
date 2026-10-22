@@ -139,6 +139,73 @@ def test_interrupted_task_releases_private_preparation_before_releasing_its_slot
     asyncio.run(asyncio.wait_for(exercise(), 5))
 
 
+@pytest.mark.parametrize("cancel", [False, True])
+def test_failed_context_then_interruption_leaves_no_dependency_tasks(cancel) -> None:
+    """A failed context must not leave a waiter on a different, interrupted predecessor."""
+
+    async def exercise():
+        config = ReplayBenchConfig.model_validate(
+            {"experiment": {"task_num": 1, "task_timeout_seconds": 1}, "replay": {}}
+        )
+        task = SimpleNamespace(
+            task_id="task",
+            runtime_session_id="session",
+            requests=(
+                _node("slow", "lead_main"),
+                _node("failed", "lead_title"),
+                _node("dependent", "continuation", send_after="slow", context_after="failed"),
+            ),
+        )
+        dependency_finished = asyncio.Event()
+        sent, released = [], []
+
+        class Prompts:
+            async def build(self, *args):
+                return SyntheticPrompt("", (), ())
+
+            async def release_task(self, task):
+                released.append(task.runtime_session_id)
+
+        class Transport:
+            async def send(self, task, node, prompt):
+                sent.append(node.source_key)
+                if node.source_key == "slow":
+                    await asyncio.Event().wait()
+                return TransportResult(False, "", time.monotonic(), 500, "injected failure")
+
+        class Executor(ReplayExecutor):
+            async def _execute_node(self, task, node, *args):
+                await super()._execute_node(task, node, *args)
+                if node.source_key == "dependent":
+                    dependency_finished.set()
+
+        before = asyncio.all_tasks()
+        running = asyncio.create_task(
+            Executor(config, SimpleNamespace(tasks=(task,)), Prompts(), Transport()).execute()
+        )
+        try:
+            await dependency_finished.wait()
+            if cancel:
+                running.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await running
+            else:
+                result = (await running)[0]
+                assert result.status == "failed" and "TimeoutError" in result.error
+                statuses = {node.source_key: node.status for node in result.nodes}
+                assert statuses["dependent"] == "skipped_dependency_failed"
+            assert set(sent) == {"slow", "failed"}
+            assert released == ["session"]
+            assert not asyncio.all_tasks() - before
+        finally:
+            remaining = asyncio.all_tasks() - before
+            for pending in remaining:
+                pending.cancel()
+            await asyncio.gather(*remaining, return_exceptions=True)
+
+    asyncio.run(asyncio.wait_for(exercise(), 5))
+
+
 @pytest.mark.parametrize("prepare_seconds", [0.005, 0.06])
 def test_preparation_excludes_dependency_wait_and_keeps_original_release(prepare_seconds):
     async def execute():

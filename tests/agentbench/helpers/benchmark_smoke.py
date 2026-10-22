@@ -12,7 +12,6 @@ from pathlib import Path
 
 import httpx
 import uvicorn
-from fastapi import FastAPI, Request, Response
 
 from agentinfer.agentbench.agents.contracts import AgentRunOutcome, AgentRunRequest, AgentRunResult, TerminationReason
 from agentinfer.agentbench.benchkit.common import utc_now
@@ -22,6 +21,8 @@ from agentinfer.agentbench.request_proxy.observers import _OpenAISSEUsageObserve
 from agentinfer.agentbench.request_proxy.process import ProcessExit
 from agentinfer.agentbench.request_proxy.server import RequestProxyLaunchConfig
 from agentinfer.scheduling.identity import AgentIdentity, encode_agent_identity
+
+from .mock_server import MockServerProcess
 
 
 @dataclass(frozen=True)
@@ -208,81 +209,8 @@ class FakeAgentRuntime:
         )
 
 
-class FakeModelServer:
-    """Serve the minimum backend contract on a loopback dynamic port."""
+class FakeModelServer(MockServerProcess):
+    """Run the original fixed-usage fixture through the shared child service."""
 
-    def __init__(self) -> None:
-        self.requests: list[dict[str, object]] = []
-        self._request_count = 0
-        self._server: uvicorn.Server | None = None
-        self._thread: threading.Thread | None = None
-        self.base_url = ""
-        self.app = FastAPI()
-        self.app.add_api_route("/v1/models", self.models, methods=["GET"])
-        self.app.add_api_route("/v1/chat/completions", self.completions, methods=["POST"])
-        self.app.add_api_route("/metrics", self.metrics, methods=["GET"])
-
-    async def models(self) -> dict[str, object]:
-        return {"object": "list", "data": [{"id": "fake-model"}]}
-
-    async def completions(self, request: Request) -> dict[str, object]:
-        body = await request.json()
-        self.requests.append(body)
-        self._request_count += 1
-        return {
-            "id": "fake-completion",
-            "object": "chat.completion",
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
-            "usage": {
-                "prompt_tokens": 7,
-                "completion_tokens": 2,
-                "total_tokens": 9,
-                "prompt_tokens_details": {"cached_tokens": 3},
-            },
-        }
-
-    async def metrics(self) -> Response:
-        count = self._request_count
-        text = "\n".join(
-            (
-                "process_start_time_seconds 100",
-                f'vllm:prompt_tokens_total{{model_name="fake-model"}} {count * 7}',
-                f'vllm:prompt_tokens_cached_total{{model_name="fake-model"}} {count * 3}',
-                f'vllm:request_success_total{{finished_reason="stop",model_name="fake-model"}} {count}',
-            )
-        )
-        return Response(text, media_type="text/plain")
-
-    def start(self) -> FakeModelServer:
-        import socket
-
-        with socket.socket() as sock:
-            sock.bind(("127.0.0.1", 0))
-            port = int(sock.getsockname()[1])
-        self.base_url = f"http://127.0.0.1:{port}"
-        self._server = uvicorn.Server(
-            uvicorn.Config(self.app, host="127.0.0.1", port=port, log_level="error", access_log=False)
-        )
-        self._thread = threading.Thread(target=self._server.run, name="fake-model-server", daemon=True)
-        self._thread.start()
-        for _ in range(200):
-            if self._server.started:
-                return self
-            if not self._thread.is_alive():
-                break
-            threading.Event().wait(0.01)
-        raise RuntimeError("fake model server did not start")
-
-    def close(self) -> None:
-        if self._server is None or self._thread is None:
-            return
-        self._server.should_exit = True
-        self._thread.join(timeout=5)
-        if self._thread.is_alive():
-            raise RuntimeError("fake model server did not stop")
-
-    def __enter__(self) -> FakeModelServer:
-        return self.start()
-
-    def __exit__(self, *_args: object) -> None:
-        self.close()
+    def __init__(self, root: Path) -> None:
+        super().__init__(root, {"profile": "run_legacy", "model": "fake-model"})

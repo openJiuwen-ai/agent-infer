@@ -206,7 +206,12 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
 
     if run_exception is not None:
         if finalization_errors:
-            run_exception.add_note("Finalization errors: " + "; ".join(finalization_errors))
+            note = "Finalization errors: " + "; ".join(finalization_errors)
+            if hasattr(run_exception, "add_note"):
+                run_exception.add_note(note)
+            else:
+                # Python 3.10 lacks PEP 678; retain diagnostics without masking the original failure.
+                run_exception.__notes__ = [*getattr(run_exception, "__notes__", []), note]
         raise run_exception
     if finalization_errors:
         raise RuntimeError("Benchmark finalization failed: " + "; ".join(finalization_errors))

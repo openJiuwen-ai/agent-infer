@@ -67,3 +67,11 @@ They are not part of default CPU CI (`pytest --ignore=tests/e2e`).
 | Overview | [`tests/e2e/README.md`](e2e/README.md) |
 | Performance (baseline vs AgentInfer) | [`tests/e2e/perf/README.md`](e2e/perf/README.md) |
 | Functional (trace replay, etc.) | [`tests/e2e/function/README.md`](e2e/function/README.md) |
+
+### Run and Replay CPU smoke tests
+
+Run 模式和 Replay 共用独立进程 Mock Server。
+[Replay CI 说明](agentbench/replay/README.md) 包含双轮冷启动矩阵、后端契约、
+依赖与故障测试、执行命令和失败产物说明。
+CPU CI 沿用现有 Python 3.10/3.12 任务，通过 `tests/agentbench` 统一收集单元测试、
+`benchmark_smoke` 和 `replay_smoke`。
