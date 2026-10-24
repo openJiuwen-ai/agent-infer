@@ -64,6 +64,24 @@ class PromptReference:
 
         return {"session_id": self.session_id, "turn_index": self.turn_index}
 
+    @classmethod
+    def from_dict(cls, value: object) -> PromptReference:
+        """Reconstruct a sidecar key from a serialized plan artifact.
+
+        Fail-closed: any malformed key raises so a corrupted plan cannot
+        round-trip into a load that silently points at the wrong turn.
+        """
+
+        if not isinstance(value, dict):
+            raise ValueError("prompt_ref must be an object")
+        session_id = value.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError("prompt_ref.session_id must be a non-empty string")
+        turn_index = value.get("turn_index")
+        if not isinstance(turn_index, int) or isinstance(turn_index, bool) or turn_index < 0:
+            raise ValueError("prompt_ref.turn_index must be a non-negative integer")
+        return cls(session_id=session_id, turn_index=turn_index)
+
 
 @dataclass(frozen=True)
 class UnifiedTraceIR:
