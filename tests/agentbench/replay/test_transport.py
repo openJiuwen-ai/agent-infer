@@ -44,7 +44,12 @@ def test_chat_transport_streams_content_usage_and_plan_identity(tmp_path: Path) 
                     "endpoint": "/v1/chat/completions",
                     "chat_template_kwargs": {"enable_thinking": False, "clear_thinking": True},
                 },
-                "replay": {"trace_path": "source.jsonl"},
+                "replay": {
+                    "trace_path": "source.jsonl",
+                    "workflow_profile_id": "coding_assistant",
+                    "profile_version": "pythia-min-adaptive-v1",
+                    "profile_role_source": "request_purpose",
+                },
             }
         )
         trace = tmp_path / "requests.jsonl"
@@ -70,6 +75,7 @@ def test_chat_transport_streams_content_usage_and_plan_identity(tmp_path: Path) 
             actor_id="lead",
             actor_role="lead",
             prompt_kind="lead_main",
+            source_request_purpose="engineer",
             parent_actor_id=None,
             planned_output_tokens=3,
             planned_input_tokens=12,
@@ -92,8 +98,12 @@ def test_chat_transport_streams_content_usage_and_plan_identity(tmp_path: Path) 
     assert body["seed"] == 7
     assert body["chat_template_kwargs"] == {"enable_thinking": False, "clear_thinking": True}
     assert "tools" not in body
+    identity = json.loads(body["vllm_xargs"]["agentic_context"])
+    assert identity["spawn_reason"] == "engineer"
+    assert identity["workflow_profile_id"] == "coding_assistant"
+    assert identity["profile_version"] == "pythia-min-adaptive-v1"
     assert facts[0].request_id == "request"
-    assert facts[0].request_purpose == "lead_main"
+    assert facts[0].request_purpose == "engineer"
     assert facts[0].input_tokens == 12
     assert facts[0].output_tokens == 3
 

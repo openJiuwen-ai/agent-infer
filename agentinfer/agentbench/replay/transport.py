@@ -252,7 +252,7 @@ class ReplayTransport:
                 cached_tokens=usage.get("cache_read_input_tokens"),
                 upstream=self.upstream,
                 error=error,
-                request_purpose=node.prompt_kind,
+                request_purpose=getattr(node, "source_request_purpose", None) or node.prompt_kind,
             )
         )
         return TransportResult(
@@ -311,6 +311,9 @@ class ReplayTransport:
             parent_program_id=(f"{task.runtime_session_id}:{node.parent_actor_id}" if node.parent_actor_id else None),
             blocks_parent=node.actor_role == "subagent" and self.config.replay.trace_type != "agentX",
             agent_role=node.actor_role,
+            spawn_reason=self._profile_role(node),
+            workflow_profile_id=self.config.replay.workflow_profile_id,
+            profile_version=self.config.replay.profile_version,
             request_id=node.runtime_request_id,
         )
         if prompt.token_ids is not None:
@@ -363,6 +366,18 @@ class ReplayTransport:
             },
         }
         return body
+
+    def _profile_role(self, node: ReplayPlanNode) -> str | None:
+        """Resolve the configured source for Router workflow-profile role matching."""
+
+        source = self.config.replay.profile_role_source
+        if source == "request_purpose":
+            return getattr(node, "source_request_purpose", None)
+        if source == "actor_id":
+            return node.actor_id
+        if source == "agent_role":
+            return node.actor_role
+        return None
 
     def _observe(
         self,
