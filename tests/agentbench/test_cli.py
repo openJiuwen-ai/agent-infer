@@ -246,7 +246,7 @@ def test_replay_cli_selects_raw_token_transport(tmp_path: Path, monkeypatch: pyt
 @pytest.mark.parametrize(
     ("trace_type", "template", "shape", "endpoint"),
     [
-        ("agentinfer", "replay_agentinfer.yaml", "agentinfer_synthetic", "/v1/messages"),
+        ("agentinfer", "replay_agentinfer.yaml", "agentinfer_synthetic", "/v1/chat/completions"),
         (
             "inferact_codex_swebenchpro",
             "replay_inferact.yaml",
