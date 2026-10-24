@@ -1,0 +1,9 @@
+# Per-task runtime artifacts
+workspace/
+
+# Local configuration (copy from config/run_config.example.yaml)
+config/run_config.yaml
+
+# Caches
+__pycache__/
+.ruff_cache/
