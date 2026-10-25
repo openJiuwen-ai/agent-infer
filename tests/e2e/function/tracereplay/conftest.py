@@ -4,7 +4,25 @@
 
 from __future__ import annotations
 
+import argparse
+
 import pytest
+
+
+def _addoption_once(group: pytest.OptionGroup, *args, **kwargs) -> None:
+    """Register a CLI option, tolerating duplicate registration.
+
+    tests/e2e/perf/conftest.py registers the same shared options
+    (--test-config-file / --task-num / --max-concurrency). When both conftests
+    are loaded in one session (e.g. ``pytest tests/e2e``), argparse raises
+    ``ArgumentError`` for the conflicting option string, which aborts the whole
+    collection. The first registration wins; semantics of these shared options
+    are identical across both conftests.
+    """
+    try:
+        group.addoption(*args, **kwargs)
+    except argparse.ArgumentError:
+        pass
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -12,21 +30,24 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "tracereplay_e2e",
         "Trace Replay functional E2E options (inferact, tracelab, agentx)",
     )
-    group.addoption(
+    _addoption_once(
+        group,
         "--test-config-file",
         action="store",
         default=None,
         metavar="PATH",
         help="Replay case JSON under tests/e2e/function/tracereplay/cases/<suite>/",
     )
-    group.addoption(
+    _addoption_once(
+        group,
         "--task-num",
         action="store",
         type=int,
         default=None,
         help="Override benchmark_params task-num",
     )
-    group.addoption(
+    _addoption_once(
+        group,
         "--max-concurrency",
         action="store",
         type=int,
