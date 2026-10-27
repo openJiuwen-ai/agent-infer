@@ -113,7 +113,29 @@ vllm bench serve --agentinfer run \
   --task-num 1 --result-dir results/jiuwenswarm-smoke
 ```
 
-For DSH use `--agent-type dsh --agent-profile single --agent-executable dsh --endpoint /v1/chat/completions`.
+For DSH, install the pinned external runtime with Node 22.22.2:
+
+```bash
+npm install --prefix tests/agentbench/agents/dsh/runtime
+vllm bench serve --agentinfer run \
+  --config agentinfer/agentbench/configs/swebench_vllm.yaml \
+  --agent-type dsh --agent-profile single --endpoint /v1/chat/completions \
+  --agent-executable "$PWD/tests/agentbench/agents/dsh/runtime/node_modules/.bin/dsh" \
+  --task-num 4 --max-concurrency 2 --result-dir results/dsh-single
+```
+
+Edit dataset paths, `backend.base_url`, and the served model in the example first. Uncomment `context_window` and
+`max_tokens` in its DSH configuration section and set them to the actual served model limits.
+DSH live runs require **0.2.1-rc.2** and Node `^22.19.0 || >=24`; other DSH versions fail preflight.
+The adapter uses pi-ai Chat Completions through the Request Proxy, sends the prompt over stdin, and reads v4 durable
+logs. Provider values are written to the task-local native `cordis.patch.yml`; `settings.yaml` is an evidence copy.
+The legacy settings importer is asynchronous and is not used for launch configuration. No HMR stub is mounted.
+Use `--agent-profile plan-subagent` to enforce initial plan mode, read-only child tools, and plan-review approval.
+The adapter rejects a successful plan run with no child session. Only explicit plan-review questions are approved.
+The DSH cleanup budget is 10 seconds;
+its optional patch flush delay is capped at 5 seconds. `backend.api_key_env` is currently rejected for DSH because run
+has no upstream key injection. Runtime versions and the npm lock hash are recorded in `evidence/dsh-runtime.json`.
+
 For Router runs use `swebench_agentinfer.yaml`, with `backend.base_url` pointing to the Router and
 `backend.metrics_url` directly to vLLM. The Router forwards transparently without the old registration/cleanup API.
 

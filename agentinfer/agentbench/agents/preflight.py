@@ -14,8 +14,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from .contracts import AgentPreflightReport
 
-async def check_agent_preflight(agent_type: str, executable: Path) -> None:
+
+async def check_agent_preflight(agent_type: str, executable: Path) -> AgentPreflightReport | None:
     """Run the executable checks owned by one agent runtime.
 
     Raises ``RuntimeError`` when an executable is missing or its help output
@@ -24,7 +26,7 @@ async def check_agent_preflight(agent_type: str, executable: Path) -> None:
 
     from .registry import get_runtime
 
-    await get_runtime(agent_type).preflight(executable)
+    return await get_runtime(agent_type).preflight(executable)
 
 
 async def check_executable_output(

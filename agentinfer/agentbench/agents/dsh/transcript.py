@@ -10,6 +10,8 @@ by the DSH runner.
 """
 
 import json
+import re
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,7 +24,7 @@ JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dic
 RawEvent: TypeAlias = dict[str, JsonValue]
 
 SESSION_ROOT = "sessions"
-SESSION_LOG_NAMES = ("session.jsonl.zstd", "session.jsonl")
+SESSION_LOG_NAMES = ("session.v4.jsonl.zstd", "session.v4.jsonl", "session.jsonl.zstd", "session.jsonl")
 
 _ASSISTANT_MESSAGE_EVENT = "assistant/message"
 _TOOL_CALL_EVENT = "tool/call"
@@ -38,20 +40,6 @@ class NormalizedEvent:
     text_content: str = ""
     tool_name: str = ""
     tool_result_content: str = ""
-
-
-def _decompress_zstd(data: bytes) -> bytes:
-    """Decompress the default zstd-encoded session log, importing the codec lazily.
-
-    DSH session frames are written without a content size, so a streaming
-    reader is required; the one-shot decompress() API rejects such frames.
-    """
-
-    import io
-
-    import zstandard
-
-    return zstandard.ZstdDecompressor().stream_reader(io.BytesIO(data)).read()
 
 
 def _utf16_units(value: str) -> list[int]:
@@ -94,7 +82,20 @@ def find_session_logs(home: Path, workspace: Path | None = None) -> list[Path]:
     root = home / SESSION_ROOT
     if not root.is_dir():
         return []
-    logs = [path for path in root.rglob("*") if path.is_file() and path.name in SESSION_LOG_NAMES]
+    generations: dict[Path, list[Path]] = {}
+    for path in root.rglob("session*.jsonl*"):
+        version = re.fullmatch(r"session\.v(\d+)\.jsonl(?:\.zstd)?", path.name)
+        if version and int(version[1]) != 4:
+            raise ValueError(f"Unsupported DSH session generation: {path}")
+        if path.is_file() and path.name in SESSION_LOG_NAMES:
+            generations.setdefault(path.parent, []).append(path)
+    logs = []
+    for paths in generations.values():
+        current = [path for path in paths if path.name.startswith("session.v4.")]
+        selected = current or paths
+        if len(selected) != 1:
+            raise ValueError(f"Ambiguous DSH session generation: {selected}")
+        logs.extend(selected)
     preferred: str | None = None
     if workspace is not None:
         try:
@@ -109,29 +110,46 @@ def find_session_logs(home: Path, workspace: Path | None = None) -> list[Path]:
     return sorted(logs, key=sort_key)
 
 
-def load_session_log(path: Path) -> list[RawEvent]:
-    """Read valid JSON object events from a session log, decoding zstd when needed."""
+def load_session_log(path: Path, *, allow_partial: bool = False, deadline: float | None = None) -> list[RawEvent]:
+    """Decode complete records; only an interrupted final record may be partial."""
 
-    try:
-        raw = path.read_bytes()
-    except OSError:
-        return []
-    if path.name.endswith(".zstd"):
-        try:
-            raw = _decompress_zstd(raw)
-        except Exception:
-            # A decoding failure degrades to an empty transcript; it never crashes the task.
-            return []
+    import zstandard
+
     events: list[RawEvent] = []
-    for line in raw.decode("utf-8", errors="replace").splitlines():
-        if not line.strip():
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(event, dict):
-            events.append(cast(RawEvent, event))
+    pending = b""
+    decoder = zstandard.ZstdDecompressor().decompressobj() if path.name.endswith(".zstd") else None
+    frame_complete = True
+    with path.open("rb") as handle:
+        while chunk := handle.read(64 * 1024):
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError("DSH log collection exceeded cleanup budget")
+            if decoder is not None:
+                decoded = bytearray()
+                while chunk:
+                    decoded.extend(decoder.decompress(chunk))
+                    frame_complete = decoder.eof
+                    chunk = decoder.unused_data
+                    if frame_complete:
+                        decoder = zstandard.ZstdDecompressor().decompressobj()
+                chunk = bytes(decoded)
+            pending += chunk
+            lines = pending.split(b"\n")
+            pending = lines.pop()
+            for line in lines:
+                if not line.strip():
+                    continue
+                event = json.loads(line)
+                if not isinstance(event, dict):
+                    raise ValueError(f"DSH log record is not an object: {path}")
+                events.append(cast(RawEvent, event))
+    if not frame_complete and not allow_partial:
+        raise ValueError(f"Truncated DSH zstd frame: {path}")
+    if pending.strip():
+        if not allow_partial:
+            raise ValueError(f"Incomplete DSH log record: {path}")
+    if path.name.startswith("session.v4."):
+        if not events or events[0].get("type") != "session" or events[0].get("version") != 4:
+            raise ValueError(f"Invalid DSH v4 session header: {path}")
     return events
 
 

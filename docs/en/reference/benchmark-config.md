@@ -69,12 +69,14 @@ request_proxy:
 | --- | --- | --- |
 | `type` | `claude` | `claude`, `jiuwenswarm`, or `dsh`. |
 | `profile` | `single` | Claude/DSH: `single` or `plan-subagent`; JiuwenSwarm: `code.normal`. |
-| `executable` | `claude` | Claude Code command name or path. |
+| `executable` | `claude` | Agent CLI command name or path. |
 | `tmux_startup_seconds` | `2.0` | tmux session startup wait; must be `>= 0`. |
 | `terminal_capture_interval_seconds` | `30` | Terminal evidence capture interval; must be `>= 1`. |
+| `context_window` | `262144` | DSH pi-ai model context capacity; match the actual backend. YAML only. |
+| `max_tokens` | `8192` | DSH pi-ai output capacity; match the actual backend. YAML only. |
 
-The `plan-subagent` profile uses `bypassPermissions`. Enable it only as a non-root user or with an approved Claude Code
-permission setup.
+The Claude `plan-subagent` profile uses `bypassPermissions`. Enable it only as a non-root user
+or with an approved Claude Code permission setup.
 
 ## `backend`
 
@@ -82,7 +84,7 @@ permission setup.
 | --- | --- | --- |
 | `type` | `vllm` | The only currently supported backend type. |
 | `base_url` | `http://127.0.0.1:8000` | vLLM API base URL. |
-| `model` | `Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8` | Model name sent in Claude Code requests. |
+| `model` | `Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8` | Served model name sent in requests. |
 | `endpoint` | `/v1/messages` | Claude uses `/v1/messages`; JiuwenSwarm/DSH use `/v1/chat/completions`. |
 | `api_key_env` | `null` | Optional API-key environment variable name; never put the secret value in YAML. |
 

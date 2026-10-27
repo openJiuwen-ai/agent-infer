@@ -82,3 +82,12 @@ BenchKit 将每次运行写入一个全新的结果目录。原始请求事实�
 
 Replay 额外写出 `replay-source-analysis.json`、`replay-plan.json` 和 `replay-execution.json`；失败时写出
 `replay-error.json`。这些文件记录规划、执行和审计事实，不代表任务正确性。详见[回放指南](../how-to/run-trace-replay.md)。
+
+DSH 0.2 额外保存 `evidence/dsh-runtime.json`（版本、能力、安装锁哈希），以及任务级的
+`dsh-effective-config.yaml`、`dsh-lineage.json`、`dsh-run-status.json` 和 `dsh-processes.jsonl`。
+`dsh-sessions/raw/index.json` 建立原始与解码日志的索引；`transcript.jsonl` 按 stdout 的主会话 ID 精确选择。
+`dsh-launch-command.json` 不包含经 stdin 发送的 prompt。超时、取消时尽力保留日志和补丁；外层 cancelled
+结果的 `has_patch` 仍可能为 false，实际导出状态以 `dsh-run-status.json` 为准。身份校验不会改写 `requests.jsonl`。
+
+流式请求的 SDK 在收到 OpenAI `[DONE]` 或 Anthropic `message_stop` 后关闭 HTTP 连接，记录为成功；
+结束标记之前的取消仍记录为错误。
