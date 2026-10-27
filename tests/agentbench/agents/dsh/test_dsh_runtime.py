@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from agentinfer.agentbench.agents.dsh.runtime import DshRuntime, _probe_sandbox
+from agentinfer.agentbench.agents.dsh.runtime import DshRuntime, _probe_sandbox, _runtime_report
 
 
 def test_dsh_preflight_requires_zstandard(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -32,8 +32,8 @@ def test_dsh_preflight_functionally_probes_native_sandbox(monkeypatch: pytest.Mo
 
     asyncio.run(DshRuntime().preflight(Path("dsh")))
 
-    check.assert_awaited_once_with("dsh", ["--version"], label="Agent")
-    probe.assert_awaited_once_with(_probe_sandbox, "dsh")
+    check.assert_awaited_once_with("dsh", ["--help"], label="Agent", expected=("--profile", "--patch", "--dump-config"))
+    probe.assert_awaited_once_with(_runtime_report, "dsh")
 
 
 def test_sandbox_probe_uses_installed_dsh_package(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -43,7 +43,7 @@ def test_sandbox_probe_uses_installed_dsh_package(monkeypatch: pytest.MonkeyPatc
 
     def run(command: list[str], **kwargs) -> subprocess.CompletedProcess:
         calls.append((command, kwargs))
-        return subprocess.CompletedProcess(command, 0, b"", b"")
+        return subprocess.CompletedProcess(command, 0, b'{"sandbox":"full"}', b"")
 
     monkeypatch.setattr("agentinfer.agentbench.agents.dsh.runtime.shutil.which", lambda _value: str(executable))
     monkeypatch.setattr("agentinfer.agentbench.agents.dsh.runtime.subprocess.run", run)
@@ -52,7 +52,7 @@ def test_sandbox_probe_uses_installed_dsh_package(monkeypatch: pytest.MonkeyPatc
 
     command, kwargs = calls[0]
     assert command == ["node", "--input-type=module", "-", str(executable.resolve())]
-    assert b"LocalSandboxProvider" in kwargs["input"]
+    assert b"await ctx.sandbox.confine" in kwargs["input"]
     assert b"workspace-write" in kwargs["input"]
     assert kwargs["timeout"] == 20
 
@@ -68,3 +68,36 @@ def test_sandbox_probe_rejects_failed_backend(monkeypatch: pytest.MonkeyPatch, t
 
     with pytest.raises(RuntimeError, match="sandbox unavailable"):
         _probe_sandbox("dsh")
+
+
+@pytest.mark.parametrize("version", ["0.2.0-rc.2", "0.2.1-rc.3", "not-a-version"])
+def test_preflight_rejects_unsupported_version_before_loading_plugins(monkeypatch, tmp_path, version):
+    executable = tmp_path / "dsh"
+    executable.touch()
+    monkeypatch.setattr("agentinfer.agentbench.agents.dsh.runtime.shutil.which", lambda _: str(executable))
+    monkeypatch.setattr(
+        "agentinfer.agentbench.agents.dsh.runtime.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, version, ""),
+    )
+    with pytest.raises(RuntimeError, match="expected=0.2.1-rc.2"):
+        _runtime_report(str(executable))
+
+
+def test_dsh_authenticated_backend_is_rejected_and_manifest_finalized(tmp_path):
+    import json
+
+    from agentinfer.agentbench.benchkit.config import AgentBenchConfig
+    from agentinfer.agentbench.benchkit.runner import run_benchmark
+
+    config = AgentBenchConfig.model_validate(
+        {
+            "experiment": {"result_dir": str(tmp_path / "failed-run")},
+            "agent": {"type": "dsh", "profile": "single"},
+            "backend": {"endpoint": "/v1/chat/completions", "api_key_env": "TEST_SECRET_NAME"},
+        }
+    )
+    with pytest.raises(RuntimeError, match="does not yet support backend.api_key_env"):
+        asyncio.run(run_benchmark(config))
+    manifest = json.loads((tmp_path / "failed-run" / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert "dsh_runtime" in json.dumps(manifest)

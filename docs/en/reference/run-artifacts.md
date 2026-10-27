@@ -87,3 +87,13 @@ execution evidence.
 Replay additionally writes `replay-source-analysis.json`, `replay-plan.json`, and `replay-execution.json`, or
 `replay-error.json` on failure. These describe planning, execution, and audit facts, not task correctness. See
 [Trace Replay](../how-to/run-trace-replay.md).
+
+DSH 0.2 also records `evidence/dsh-runtime.json` (versions, capabilities, installation lock hash) and task-local
+`dsh-effective-config.yaml`, `dsh-lineage.json`, `dsh-run-status.json`, and `dsh-processes.jsonl`.
+`dsh-sessions/raw/index.json` links unchanged raw logs to decoded sessions; `transcript.jsonl` is selected by the
+stdout root identity. `dsh-launch-command.json` excludes the stdin prompt. Timeout and cancellation retain available
+logs and patches; a cancelled outer result may still have `has_patch=false`, so inspect `dsh-run-status.json`.
+Lineage validation never rewrites `requests.jsonl`.
+
+For streaming request facts, an SDK closing HTTP after OpenAI `[DONE]` or Anthropic `message_stop` is recorded as
+success. Cancellation before the terminal protocol event remains an error.

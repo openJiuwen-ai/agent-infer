@@ -72,6 +72,8 @@ request_proxy:
 | `executable` | `claude` | Claude Code 命令名或路径。 |
 | `tmux_startup_seconds` | `2.0` | tmux 会话启动等待时间，必须 `>= 0`。 |
 | `terminal_capture_interval_seconds` | `30` | 终端证据采集间隔，必须 `>= 1`。 |
+| `context_window` | `262144` | DSH pi-ai 模型上下文容量；须与实际后端一致，仅支持 YAML 配置。 |
+| `max_tokens` | `8192` | DSH pi-ai 输出容量；须与实际后端一致，仅支持 YAML 配置。 |
 
 `plan-subagent` 使用 `bypassPermissions`。仅应在非 root 用户或经过批准的 Claude Code 权限环境中启用。
 

@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-from agentinfer.agentbench.agents.dsh.hmr_stub import AGENTBENCH_HMR_STUB
 from agentinfer.agentbench.agents.dsh.instance import DshInstance
 
 
@@ -44,12 +43,13 @@ def test_bootstrap_writes_isolated_home_and_settings(tmp_path: Path) -> None:
     assert "forcePlanMode: false" in patch
     assert "autoApprove: false" in patch
     assert instance.settings_path.is_file()
-    settings = yaml.safe_load(instance.settings_path.read_text(encoding="utf-8"))
-    assert settings["agent-default-model"] == {"provider": "deepseek-official", "model": "spike-model"}
-    route = settings["llm-deepseek"]
-    assert route["apiKeyEnv"] == "DEEPSEEK_API_KEY"
+    settings = yaml.safe_load(instance.artifact_settings_path.read_text(encoding="utf-8"))
+    assert settings["agent-default-model"] == {"provider": "agentbench-vllm", "model": "spike-model"}
+    route = settings["llm-pi-ai"]["providers"]["agentbench-vllm"]
+    assert route["apiKeyEnv"] == "AGENTBENCH_DSH_API_KEY"
     assert route["baseURL"] == "http://127.0.0.1:18180/v1"
-    assert route["thinking"] == "disabled"
+    assert route["reasoning"] == "off"
+    assert route["api"] == "openai-completions"
     assert route["retryPolicy"] == {"mode": "normal", "maxRetries": 0}
     assert [model["id"] for model in route["models"]] == ["spike-model"]
 
@@ -63,9 +63,9 @@ def test_bootstrap_writes_settings_snapshot(tmp_path: Path) -> None:
     )
     instance.bootstrap()
 
-    assert (tmp_path / "artifacts" / "settings.yaml").read_text(encoding="utf-8") == instance.settings_path.read_text(
-        encoding="utf-8"
-    )
+    assert yaml.safe_load(instance.settings_path.read_text()) == [
+        {"id": name, "config": config} for name, config in instance.settings.items()
+    ]
     snapshot = json.loads(instance.snapshot_path.read_text(encoding="utf-8"))
     assert snapshot["settings"] == instance.settings
     assert snapshot["environment"]["AGENTBENCH_ROOT_SESSION_ID"] == "root-session-abc"
@@ -85,16 +85,9 @@ def test_bootstrap_writes_profile_policy_and_records_it_in_snapshot(tmp_path: Pa
     patch = instance.policy_patch_path.read_text(encoding="utf-8")
     assert patch.startswith("- id: session-title-llm\n  disabled: true\n" + policy_patch)
     assert "forcePlanMode: false" in patch
-    assert instance.hmr_stub_path.is_file()
-    assert instance.hmr_stub_path.read_text(encoding="utf-8") == AGENTBENCH_HMR_STUB
-    hmr_stub_name = str(instance.hmr_stub_path).replace("\\", "/")
-    assert "    - id: agentbench-hmr-stub\n" in patch
-    assert f"      name: {hmr_stub_name}\n" in patch
-    assert patch.index("agentbench-hmr-stub") < patch.index("agentbench-bridge")
+    assert "agentbench-hmr-stub" not in patch
     snapshot = json.loads(instance.snapshot_path.read_text(encoding="utf-8"))
-    assert "agentbench-hmr-stub" in snapshot["policy_patch"]
     assert "agentbench-bridge" in snapshot["policy_patch"]
-    assert f"name: {hmr_stub_name}" in snapshot["policy_patch"]
 
 
 def test_bridge_mounts_lineage_for_every_profile(tmp_path: Path) -> None:
@@ -113,7 +106,7 @@ def test_bridge_mounts_lineage_for_every_profile(tmp_path: Path) -> None:
         assert "AsyncLocalStorage" in source
         assert "llm/stream" in source
         assert "agentic_context" in source
-        assert "q.options" in source
+        assert "plan-review" in source
         patch = instance.policy_patch_path.read_text(encoding="utf-8")
         bridge_name = str(instance.bridge_path).replace("\\", "/")
         assert f"name: {bridge_name}" in patch
@@ -153,8 +146,9 @@ globalThis.fetch = async (request) => {
   sent.push(JSON.parse(await request.text()))
   return new Response('{}', { status: 200 })
 }
-const dispose = apply(ctx)
-const created = handlers.get('agent/created')
+const dispose = apply(ctx, { apiBaseURL: 'http://proxy' })
+const onCreated = handlers.get('agent/created')
+const created = ({agent}) => onCreated({agent: {ctx: {tools: {restrict: () => {}}, systemPrompt: {section: () => {}}}, ...agent}})
 created({ agent: { session: { header: { id: 'root-dsh', delegationDepth: 0 } } } })
 created({ agent: { session: { header: { id: 'child-dsh', parentSession: 'root-dsh', delegationDepth: 1 } } } })
 const stream = handlers.get('llm/stream')
@@ -238,9 +232,9 @@ const originalFetch = async (request) => {
   return new Response(JSON.stringify(payload), { status: 200 })
 }
 globalThis.fetch = originalFetch
-const firstDispose = apply(ctx)
+const firstDispose = apply(ctx, { apiBaseURL: 'http://proxy' })
 const firstFetch = globalThis.fetch
-const secondDispose = apply(ctx)
+const secondDispose = apply(ctx, { apiBaseURL: 'http://proxy' })
 const secondFetch = globalThis.fetch
 const created = handlers.find(([event]) => event === 'agent/created')[1]
 created({ agent: { session: { header: { id: 'root-dsh', delegationDepth: 0 } } } })
@@ -297,8 +291,8 @@ def test_environment_isolates_home_and_forces_autonomy(tmp_path: Path, monkeypat
 
     assert env["DSH_HOME"] == str(tmp_path / "artifacts" / "dsh-home")
     assert env["DSH_PERMISSION_MODE"] == "workspace-write"
-    assert env["DEEPSEEK_API_KEY"] == "agentbench"
-    assert env["DEEPSEEK_BASE_URL"] == "http://127.0.0.1:18180/v1"
+    assert env["AGENTBENCH_DSH_API_KEY"] == "agentbench"
+    assert "DEEPSEEK_BASE_URL" not in env
     assert env["AGENTBENCH_ROOT_SESSION_ID"] == "root-session"
 
 
@@ -343,7 +337,7 @@ const base = {
 runScenario('no-user-questions', base, () => undefined)
 services.set('userQuestions', { registerProvider: () => undefined })
 // planMode is missing: forcePlanMode vetoes agent publication at created time.
-const created = () => handlers.get('agent/created')({ agent: { session: { header: { id: 'lead', delegationDepth: 0 } } } })
+const created = () => handlers.get('agent/created')({ agent: { id: 'lead', ctx: { tools: { guard: () => {} } }, session: { header: { id: 'lead', delegationDepth: 0 } } } })
 runScenario('no-plan-mode', base, created)
 services.set('planMode', { set: () => { throw new Error('set boom') } })
 runScenario('set-throws', base, created)
@@ -392,7 +386,7 @@ const ctx = {
   get: () => undefined,
   on: () => () => undefined,
 }
-apply(ctx)
+apply(ctx, { apiBaseURL: 'http://proxy' })
 console.log('ok')
 """,
         encoding="utf-8",

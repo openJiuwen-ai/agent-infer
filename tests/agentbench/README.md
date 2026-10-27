@@ -23,7 +23,7 @@ The Python groups require no running vLLM, Router, Claude Code, JiuwenSwarm,
 tmux, GPU, accelerator, or Internet:
 
 ```bash
-python -m pytest -q -m "not benchmark_smoke" tests/agentbench
+python -m pytest -q -m "not benchmark_smoke and not dsh_runtime" tests/agentbench
 python -m pytest -q tests/agentbench/test_benchmark_smoke.py
 ```
 
@@ -56,3 +56,22 @@ Before a manual run, record the branch/commit, host, virtualenv, ports, configs,
 dataset, artifact directories, explicit tmux names, commands, stop conditions,
 tested agent profiles and concurrency shapes, and all omissions. See the
 [Quickstart](../../docs/en/how-to/run-benchmark.md).
+
+## Pinned DSH runtime tests
+
+The validated setup uses Node 22.22.2; the runtime package manifest pins DSH and key SDK versions.
+Keep the generated lockfile with local test evidence; it does not lock all transitive dependencies in Git.
+The tests use a native Linux sandbox and the production process proxy.
+They cover both profiles, concurrent tasks, actual pi-ai HTTP identity, read-only child dispatch, patch application,
+and cancellation/timeout evidence. The scripted model server issues tool calls; DSH executes all workspace changes.
+
+```bash
+npm install --prefix tests/agentbench/agents/dsh/runtime
+export DSH_TEST_EXECUTABLE="$PWD/tests/agentbench/agents/dsh/runtime/node_modules/.bin/dsh"
+python -m pytest -q -m dsh_runtime tests/agentbench/agents/dsh --timeout=180
+```
+
+The existing CPU CI collects the adapter tests. Real DSH tests skip when DSH is not installed;
+run them locally with the command above after installing the runtime.
+Unit tests construct minimal session events in Python; integration tests validate freshly generated DSH v4 logs.
+Real model service runs remain separate from these deterministic tests.

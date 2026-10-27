@@ -109,7 +109,28 @@ vllm bench serve --agentinfer run \
   --task-num 1 --result-dir results/jiuwenswarm-smoke
 ```
 
-DSH 对应参数为 `--agent-type dsh --agent-profile single --agent-executable dsh --endpoint /v1/chat/completions`。
+DSH 使用固定的外部运行时，先准备 Node 22.22.2，再执行：
+
+```bash
+npm install --prefix tests/agentbench/agents/dsh/runtime
+vllm bench serve --agentinfer run \
+  --config agentinfer/agentbench/configs/swebench_vllm.yaml \
+  --agent-type dsh --agent-profile single --endpoint /v1/chat/completions \
+  --agent-executable "$PWD/tests/agentbench/agents/dsh/runtime/node_modules/.bin/dsh" \
+  --task-num 4 --max-concurrency 2 --result-dir results/dsh-single
+```
+
+先修改示例中的数据集路径、后端地址和实际模型名，取消 DSH 配置段中 `context_window`、`max_tokens` 的注释，
+并按实际模型容量设置。live run 固定支持 DSH **0.2.1-rc.2**，
+Node 要求为 `^22.19.0 || >=24`；其他 DSH 版本在预检时失败。请求通过 pi-ai Chat Completions 进入
+Request Proxy；prompt 经 stdin 发送，完整日志从 v4 持久化文件读取。provider 参数在启动前写入任务 HOME
+的原生 `cordis.patch.yml`，`settings.yaml` 保留为审查产物；不使用异步旧配置迁移，不挂载 HMR stub。
+`--agent-profile plan-subagent` 强制初始计划模式、子 Agent 只读工具和计划审批；未创建子会话的计划运行
+不能通过验收，只有明确的 plan-review 问题会自动批准。
+DSH 收尾预算为 10 秒，其中可选补丁刷新等待
+最多 5 秒。当前 run 未实现上游密钥注入，DSH 配置非空 `backend.api_key_env` 会被明确拒绝。
+`evidence/dsh-runtime.json` 记录运行时、关键依赖版本及 npm lockfile 哈希。
+
 通过 Router 运行时使用 `swebench_agentinfer.yaml`，设置 `backend.base_url` 和直接指向 vLLM 的 `backend.metrics_url`。Router
 仅透明转发，不需要旧注册/清理接口。
 
