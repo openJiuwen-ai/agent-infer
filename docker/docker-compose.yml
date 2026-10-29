@@ -1,0 +1,29 @@
+# CI 服务：镜像按 commit 打 tag；运行时把 Buildkite checkout 自挂载到
+# 自身路径并把 workdir 指过去 → 裸 pytest 跑在 PR 代码上，
+# junit 等产物落在 checkout 里供 artifact_paths 收走。
+services:
+  agentinfer-ci:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: agentinfer-ci:${BUILDKITE_COMMIT:-local}
+    working_dir: ${BUILDKITE_BUILD_CHECKOUT_PATH:-/app}
+    network_mode: host
+    privileged: true
+    shm_size: 64gb
+    cap_add: [SYS_PTRACE]
+    security_opt: [seccomp:unconfined]
+    volumes:
+      - /home:/home
+      - ${BUILDKITE_BUILD_CHECKOUT_PATH:-/app}:${BUILDKITE_BUILD_CHECKOUT_PATH:-/app}
+    environment:
+      HF_ENDPOINT: https://hf-mirror.com
+      HF_HOME: /home/models
+      HF_HUB_CACHE: /home/models/hub
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
