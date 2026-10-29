@@ -11,6 +11,7 @@ services:
     entrypoint: [""]
     working_dir: ${BUILDKITE_BUILD_CHECKOUT_PATH:-/app}
     network_mode: host
+    ipc: host
     privileged: true
     shm_size: 64gb
     cap_add: [SYS_PTRACE]
