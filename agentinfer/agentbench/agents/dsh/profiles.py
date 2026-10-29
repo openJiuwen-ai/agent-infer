@@ -109,6 +109,7 @@ During that planning phase:
 - Your first tool call must be `subagent`; do not use todo_write or inspect files before delegating.
 - Use the `subagent` tool at least once to delegate focused repository exploration.
 - Each subagent is read-only: ask it to inspect code, trace the root cause, or identify tests; do not ask it to edit files.
+- Ask subagents to search first, read at most 200 lines at a time, and return concise findings within the exploration budget.
 - Wait for every subagent report, synthesize the evidence, and finalize the implementation plan before editing.
 - Call `exit_plan_mode` with your completed plan before implementation. If a subagent is still running, end your turn
   to await its completion notice rather than polling with shell commands.

@@ -122,22 +122,23 @@ async def run_dsh(request: AgentRunRequest) -> AgentRunResult:
         )
         result.transcript = str(transcript)
         result.auto_plan_approvals = lineage["auto_plan_approvals"]
-        if return_code == 0 and profile.enforce_plan_mode:
-            children = {item["session_id"] for item in lineage["sessions"] if item["agent_role"] == "subagent"}
-            if not children:
-                raise ValueError("plan-subagent completed without a real subagent")
-            if result.auto_plan_approvals == 0:
-                raise ValueError("plan-subagent completed without an approved plan")
-            if set(lineage["subagent_outcomes"]) != children or any(
-                value != "completed" for value in lineage["subagent_outcomes"].values()
-            ):
-                raise ValueError("plan-subagent exploration failed")
         status["collection"] = "complete" if return_code == 0 else "partial"
         if return_code is not None:
             stderr = _read_tail(request.artifact_dir / "dsh.stderr.log")
             reason = _classify(return_code, stderr, events)
-            if lineage.get("unanswered_question"):
+            if failure := lineage.get("failure"):
+                reason = TerminationReason(failure["reason"])
+                status["failure"] = failure
+            elif lineage.get("unanswered_question"):
                 reason = TerminationReason.CONFIRMATION_HANG
+            elif return_code == 0 and profile.enforce_plan_mode:
+                children = {item["session_id"] for item in lineage["sessions"] if item["agent_role"] == "subagent"}
+                if not children or result.auto_plan_approvals == 0:
+                    reason = TerminationReason.PLAN_NOT_APPROVED
+                elif set(lineage["subagent_outcomes"]) != children or any(
+                    value != "completed" for value in lineage["subagent_outcomes"].values()
+                ):
+                    reason = TerminationReason.SUBAGENT_FAILED
             result.termination_reason = reason
             result.outcome = AgentRunOutcome.COMPLETED if reason is None else AgentRunOutcome.FAILED
     except Exception as exc:
@@ -341,6 +342,8 @@ def _explicit_termination_reason(events: list[dict[str, object]]) -> Termination
             data = event.get("data")
             reason = data.get("reason") if isinstance(data, dict) else None
             kind = reason.get("kind") if isinstance(reason, dict) else reason
+            if kind == "max-tokens":
+                return TerminationReason.MAX_TOKENS
             if kind == "blocked":
                 return TerminationReason.CONFIRMATION_HANG
     return None

@@ -172,3 +172,66 @@ def test_real_dsh_long_prompt_uses_stdin(real_request):
     assert any(message.get("content") == prompt for message in messages)
     command = (request.artifact_dir / "dsh-launch-command.json").read_text()
     assert len(command) < 2048 and "中文" not in command
+
+
+@pytest.mark.parametrize(
+    "scenario,expected",
+    [
+        ("repeat", TerminationReason.SUBAGENT_READ_LOOP),
+        ("plan-recovery", None),
+        ("plan-refusal", TerminationReason.PLAN_NOT_APPROVED),
+        ("lead-loop", TerminationReason.VALIDATION_ERROR_LOOP),
+        ("lead-invalid-args", TerminationReason.VALIDATION_ERROR_LOOP),
+    ],
+)
+def test_real_dsh_enforces_bounded_exploration_and_plan_recovery(real_request, scenario, expected):
+    class ScriptedServer(DshMockServer):
+        skipped_plan = False
+        lead_calls = 0
+
+        def respond(self, body):
+            identity = json.loads(body["vllm_xargs"]["agentic_context"])
+            tool, value = super().respond(body)
+            if (
+                scenario in {"lead-loop", "lead-invalid-args"}
+                and identity["agent_role"] == "lead"
+                and tool is None
+                and self.states.get((identity["task_id"], identity["program_id"]), 0) == 3
+            ):
+                self.lead_calls += 1
+                if self.lead_calls % 2:
+                    return ("exit_plan_mode" if scenario == "lead-loop" else "read"), {}
+                return "write", {"file_path": "completion.txt", "content": "Finished."}
+            if scenario == "repeat" and identity["agent_role"] == "subagent":
+                return "read", {"file_path": "calc.py"}
+            if (
+                scenario in {"plan-recovery", "plan-refusal"}
+                and tool == "exit_plan_mode"
+                and (scenario == "plan-refusal" or not self.skipped_plan)
+            ):
+                self.skipped_plan = True
+                self.states[(identity["task_id"], identity["program_id"])] = 1
+                return None, "The exploration is complete; here is my final analysis."
+            return tool, value
+
+    with ScriptedServer("plan-subagent") as server:
+        request = replace(real_request, api_base_url=server.base_url, profile_name="plan-subagent")
+        result = asyncio.run(run_dsh(request))
+    assert result.termination_reason is expected, (request.artifact_dir / "dsh-run-status.json").read_text()
+    assert (result.outcome is AgentRunOutcome.COMPLETED) == (expected is None)
+    lineage = json.loads((request.artifact_dir / "dsh-lineage.json").read_text())
+    if expected is None:
+        assert result.has_patch
+        assert lineage["auto_plan_approvals"] == 1
+        assert lineage["plan_recoveries"] == 1
+        subprocess.run([sys.executable, "-m", "unittest", "-v"], cwd=request.workspace, check=True, capture_output=True)
+    else:
+        assert lineage["failure"]["reason"] == expected
+        assert lineage["auto_plan_approvals"] == (1 if scenario in {"lead-loop", "lead-invalid-args"} else 0)
+    if scenario in {"lead-loop", "lead-invalid-args"}:
+        assert result.has_patch
+        assert server.lead_calls <= 8
+        subprocess.run([sys.executable, "-m", "unittest", "-v"], cwd=request.workspace, check=True, capture_output=True)
+    if scenario == "repeat":
+        assert sum(row["identity"]["agent_role"] == "subagent" for row in server.requests) <= 5
+    assert (request.artifact_dir / "transcript.jsonl").is_file()

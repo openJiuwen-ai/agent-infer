@@ -57,17 +57,16 @@ dataset, artifact directories, explicit tmux names, commands, stop conditions,
 tested agent profiles and concurrency shapes, and all omissions. See the
 [Quickstart](../../docs/en/how-to/run-benchmark.md).
 
-## Pinned DSH runtime tests
+## DSH runtime tests
 
-The validated setup uses Node 22.22.2; the runtime package manifest pins DSH and key SDK versions.
-Keep the generated lockfile with local test evidence; it does not lock all transitive dependencies in Git.
+Use an externally installed DSH `0.2.1-rc.2` with Node `^22.19.0 || >=24` on `PATH`.
 The tests use a native Linux sandbox and the production process proxy.
 They cover both profiles, concurrent tasks, actual pi-ai HTTP identity, read-only child dispatch, patch application,
 and cancellation/timeout evidence. The scripted model server issues tool calls; DSH executes all workspace changes.
 
 ```bash
-npm install --prefix tests/agentbench/agents/dsh/runtime
-export DSH_TEST_EXECUTABLE="$PWD/tests/agentbench/agents/dsh/runtime/node_modules/.bin/dsh"
+npm install --global @deepseek-ai/dsh@0.2.1-rc.2
+export DSH_TEST_EXECUTABLE="$(command -v dsh)"
 python -m pytest -q -m dsh_runtime tests/agentbench/agents/dsh --timeout=180
 ```
 

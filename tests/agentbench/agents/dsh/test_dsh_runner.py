@@ -303,3 +303,17 @@ def test_classify_zero_exit_and_completed_turn_complete() -> None:
 )
 def test_classify_confirmation_hang(events: list[dict]) -> None:
     assert _classify(1, b"", events) is TerminationReason.CONFIRMATION_HANG
+
+
+@pytest.mark.parametrize("return_code", [0, 1])
+def test_token_limit_has_an_explicit_termination_reason(return_code):
+    events = [_raw_event("turn/end", {"reason": {"kind": "max-tokens"}})]
+    assert _classify(return_code, b"", events) is TerminationReason.MAX_TOKENS
+
+
+def test_unapproved_plan_cannot_become_completed(request_factory):
+    request = request_factory(profile_name="plan-subagent")
+    result = asyncio.run(run_dsh(request))
+    assert result.outcome is AgentRunOutcome.FAILED
+    assert result.termination_reason is TerminationReason.PLAN_NOT_APPROVED
+    assert result.has_patch
