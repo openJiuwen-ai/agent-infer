@@ -136,6 +136,7 @@ class FakeAgentRuntime:
 
     agent_type = "jiuwenswarm"
     required_endpoint = "/v1/chat/completions"
+    supports_api_key_env = True
     usage_observer_class = _OpenAISSEUsageObserver
 
     def __init__(

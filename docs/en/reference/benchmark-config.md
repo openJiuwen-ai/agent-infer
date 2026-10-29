@@ -94,6 +94,9 @@ or with an approved Claude Code permission setup.
 | `endpoint` | `/v1/messages` | Claude uses `/v1/messages`; JiuwenSwarm/DSH use `/v1/chat/completions`. |
 | `api_key_env` | `null` | Optional API-key environment variable name; never put the secret value in YAML. |
 
+Backend authentication is validated against the selected runtime capability: DSH rejects `backend.api_key_env`;
+Claude Code and JiuwenSwarm continue to support it.
+
 ## `request_proxy`
 
 | Field | Default | Constraint and meaning |

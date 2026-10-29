@@ -172,6 +172,7 @@ class DshRuntime:
 
     agent_type = "dsh"
     required_endpoint = REQUIRED_ENDPOINT
+    supports_api_key_env = False
     usage_observer_class = _OpenAISSEUsageObserver
 
     def get_profile(self, name: str) -> AgentProfile:

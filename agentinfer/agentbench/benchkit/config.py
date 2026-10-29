@@ -124,14 +124,18 @@ class AgentBenchConfig(StrictModel):
 
         from ..agents.registry import get_runtime
 
-        required_endpoint = get_runtime(self.agent.type).required_endpoint
+        runtime = get_runtime(self.agent.type)
+        required_endpoint = runtime.required_endpoint
         if self.backend.endpoint != required_endpoint:
             raise ValueError(
                 f"backend.endpoint {self.backend.endpoint!r} is invalid for "
                 f"agent.type {self.agent.type!r}; expected {required_endpoint!r}"
             )
-        if self.agent.type == "dsh" and self.backend.api_key_env:
-            raise ValueError("DSH run does not yet support backend.api_key_env; use an unauthenticated local backend")
+        if self.backend.api_key_env and not runtime.supports_api_key_env:
+            raise ValueError(
+                f"agent.type {self.agent.type!r} does not yet support backend.api_key_env; "
+                "use an unauthenticated local backend"
+            )
         return self
 
 

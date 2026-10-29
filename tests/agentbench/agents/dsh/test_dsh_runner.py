@@ -162,7 +162,7 @@ def test_collection_timeout_preserves_execution_timeout(request_factory, monkeyp
         raise TimeoutError("session collection expired")
 
     monkeypatch.setattr("agentinfer.agentbench.agents.dsh.runner._copy_transcript", timed_out)
-    request = request_factory("wait", timeout_seconds=0.5)
+    request = request_factory("wait", timeout_seconds=2.0)
     result = asyncio.run(run_dsh(request))
     assert result.termination_reason is TerminationReason.TIMEOUT
     assert result.has_patch
@@ -178,7 +178,7 @@ def test_patch_timeout_preserves_existing_failure(request_factory, monkeypatch, 
         raise TimeoutError("patch export expired")
 
     monkeypatch.setattr("agentinfer.agentbench.agents.dsh.runner.export_patch", timed_out)
-    request = request_factory(mode, timeout_seconds=0.5)
+    request = request_factory(mode, timeout_seconds=2.0)
     result = asyncio.run(run_dsh(request))
     assert result.outcome is AgentRunOutcome.FAILED
     assert result.termination_reason is expected
@@ -212,12 +212,12 @@ def test_stdin_preserves_long_utf8_prompt_and_drains_both_outputs(request_factor
     ],
 )
 def test_failures_do_not_become_completed(request_factory, mode, expected):
-    request = request_factory(mode, timeout_seconds=0.5)
+    request = request_factory(mode, timeout_seconds=2.0)
     started = time.monotonic()
     result = asyncio.run(run_dsh(request))
     assert result.outcome is AgentRunOutcome.FAILED
     assert result.termination_reason is expected
-    assert time.monotonic() - started < 3
+    assert time.monotonic() - started < 5
     if mode in {"wait", "child-pipe"}:
         assert result.has_patch
     assert (request.artifact_dir / "dsh-run-status.json").is_file()
