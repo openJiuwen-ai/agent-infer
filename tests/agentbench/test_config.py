@@ -242,3 +242,28 @@ def test_sample_yaml_loads(
     assert config.backend.metrics_url == metrics_url
     assert config.agent.type == agent_type
     assert config.backend.endpoint == endpoint
+
+
+@pytest.mark.parametrize(
+    "agent_type,profile,endpoint",
+    [
+        ("claude", "single", "/v1/messages"),
+        ("jiuwenswarm", "code.normal", "/v1/chat/completions"),
+    ],
+)
+def test_authenticated_backend_is_allowed_by_runtime(agent_type, profile, endpoint):
+    config = AgentBenchConfig.model_validate(
+        {
+            "agent": {"type": agent_type, "profile": profile},
+            "backend": {"endpoint": endpoint, "api_key_env": "TEST_SECRET_NAME"},
+        }
+    )
+    assert config.backend.api_key_env == "TEST_SECRET_NAME"
+
+
+def test_authentication_validation_uses_runtime_capability(monkeypatch):
+    from agentinfer.agentbench.agents.registry import get_runtime
+
+    monkeypatch.setattr(get_runtime("claude"), "supports_api_key_env", False)
+    with pytest.raises(ValidationError, match="does not yet support backend.api_key_env"):
+        AgentBenchConfig.model_validate({"backend": {"api_key_env": "TEST_SECRET_NAME"}})

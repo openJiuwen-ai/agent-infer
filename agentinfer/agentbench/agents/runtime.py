@@ -39,6 +39,7 @@ class AgentRuntime(Protocol):
 
     agent_type: str
     required_endpoint: str
+    supports_api_key_env: bool
     usage_observer_class: type
 
     def get_profile(self, name: str) -> AgentProfile: ...

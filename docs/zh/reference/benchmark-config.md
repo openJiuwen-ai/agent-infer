@@ -91,6 +91,8 @@ Claude 的 `plan-subagent` 使用 `bypassPermissions`。仅应在非 root 用户
 | `endpoint` | `/v1/messages` | Claude 使用 `/v1/messages`；JiuwenSwarm/DSH 使用 `/v1/chat/completions`。 |
 | `api_key_env` | `null` | 可选的 API Key 环境变量名；配置中不得写入密钥值。 |
 
+后端认证配置根据所选运行时声明的能力校验：DSH 不接受 `backend.api_key_env`，Claude Code 和 JiuwenSwarm 保持支持。
+
 ## `request_proxy`
 
 | 字段 | 默认值 | 约束和含义 |
