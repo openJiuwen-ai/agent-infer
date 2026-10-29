@@ -113,28 +113,69 @@ vllm bench serve --agentinfer run \
   --task-num 1 --result-dir results/jiuwenswarm-smoke
 ```
 
-For DSH, install the pinned external runtime with Node 22.22.2:
+DSH live runs require **0.2.1-rc.2** and Node `^22.19.0 || >=24`.
+Put a supported Node on `PATH` first; activating a Python virtual environment does not switch Node.
+DSH and runtime preflight look up `node` through `PATH` even when `--agent-executable` is an absolute path.
+Install the pinned external runtime and check versions from the repository root:
 
 ```bash
+node --version
 npm install --prefix tests/agentbench/agents/dsh/runtime
-vllm bench serve --agentinfer run \
-  --config agentinfer/agentbench/configs/swebench_vllm.yaml \
-  --agent-type dsh --agent-profile single --endpoint /v1/chat/completions \
-  --agent-executable "$PWD/tests/agentbench/agents/dsh/runtime/node_modules/.bin/dsh" \
-  --task-num 4 --max-concurrency 2 --result-dir results/dsh-single
+DSH_EXECUTABLE="$PWD/tests/agentbench/agents/dsh/runtime/node_modules/.bin/dsh"
+"$DSH_EXECUTABLE" --version
 ```
 
-Edit dataset paths, `backend.base_url`, and the served model in the example first. Uncomment `context_window` and
-`max_tokens` in its DSH configuration section and set them to the actual served model limits.
-DSH live runs require **0.2.1-rc.2** and Node `^22.19.0 || >=24`; other DSH versions fail preflight.
-The adapter uses pi-ai Chat Completions through the Request Proxy, sends the prompt over stdin, and reads v4 durable
-logs. Provider values are written to the task-local native `cordis.patch.yml`; `settings.yaml` is an evidence copy.
-The legacy settings importer is asynchronous and is not used for launch configuration. No HMR stub is mounted.
-Use `--agent-profile plan-subagent` to enforce initial plan mode, read-only child tools, and plan-review approval.
-The adapter rejects a successful plan run with no child session. Only explicit plan-review questions are approved.
-The DSH cleanup budget is 10 seconds;
-its optional patch flush delay is capped at 5 seconds. `backend.api_key_env` is currently rejected for DSH because run
-has no upstream key injection. Runtime versions and the npm lock hash are recorded in `evidence/dsh-runtime.json`.
+Prepare the SWE-bench data and vLLM service described above, then set dataset paths, backend address, and model name
+in `swebench_vllm.yaml`. Merge these fields into that YAML, keeping `agent:` as an uncommented top-level section:
+
+```yaml
+agent:
+  type: dsh
+  profile: plan-subagent
+  context_window: 262144
+  max_tokens: 8192
+backend:
+  endpoint: /v1/chat/completions
+```
+
+Adjust the example context and output capacities to the actual backend. Check `max_model_len` from `/v1/models`
+for the context limit. Declaring a smaller `context_window` restricts the client's available output budget even when
+the model service supports a larger context. See [Benchmark Configuration](../reference/benchmark-config.md).
+
+This example runs two tasks at task concurrency one; subagents may explore in parallel within a task:
+
+```bash
+RESULT_DIR="results/dsh-plan-subagent-$(date +%Y%m%d-%H%M%S)"
+vllm bench serve --agentinfer run \
+  --config agentinfer/agentbench/configs/swebench_vllm.yaml \
+  --base-url http://127.0.0.1:8000 \
+  --agent-type dsh --agent-profile plan-subagent --endpoint /v1/chat/completions \
+  --agent-executable "$DSH_EXECUTABLE" \
+  --task-num 2 --max-concurrency 1 --result-dir "$RESULT_DIR"
+```
+
+BenchKit creates the result directory; it must not already exist. For a global installation, replace
+`--agent-executable` with the actual DSH path. Use `--agent-profile single` for a single agent.
+The `plan-subagent` profile enforces initial plan mode, read-only child tools, and plan-review approval.
+The lead must wait for every child to complete successfully before submitting a plan for approval.
+Only explicit plan-review questions are approved automatically.
+
+DSH uses pi-ai Chat Completions through the Request Proxy and receives the prompt on stdin.
+Runtime versions and the npm lockfile hash are recorded in `evidence/dsh-runtime.json`.
+DSH runs currently reject a nonempty `backend.api_key_env`.
+
+The default DSH cleanup budget is 10 seconds. Configure it through YAML's `experiment.cleanup_timeout_seconds`.
+For example, increase it for large logs or slow storage:
+
+```yaml
+experiment:
+  cleanup_timeout_seconds: 60.0
+```
+
+Log collection, patch flush waiting, and patch export share this budget. Flush waiting is limited to the smaller of
+`patch_flush_seconds` and half the budget. An exhausted budget is reported as `cleanup_timeout`; existing execution
+timeout or cancellation reasons are preserved. Cleanup details are recorded in
+`tasks/<instance_id>/dsh-run-status.json`; successful completion still requires validated session evidence.
 
 For Router runs use `swebench_agentinfer.yaml`, with `backend.base_url` pointing to the Router and
 `backend.metrics_url` directly to vLLM. The Router forwards transparently without the old registration/cleanup API.
