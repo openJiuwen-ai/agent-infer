@@ -81,23 +81,3 @@ def test_preflight_rejects_unsupported_version_before_loading_plugins(monkeypatc
     )
     with pytest.raises(RuntimeError, match="expected=0.2.1-rc.2"):
         _runtime_report(str(executable))
-
-
-def test_dsh_authenticated_backend_is_rejected_and_manifest_finalized(tmp_path):
-    import json
-
-    from agentinfer.agentbench.benchkit.config import AgentBenchConfig
-    from agentinfer.agentbench.benchkit.runner import run_benchmark
-
-    config = AgentBenchConfig.model_validate(
-        {
-            "experiment": {"result_dir": str(tmp_path / "failed-run")},
-            "agent": {"type": "dsh", "profile": "single"},
-            "backend": {"endpoint": "/v1/chat/completions", "api_key_env": "TEST_SECRET_NAME"},
-        }
-    )
-    with pytest.raises(RuntimeError, match="does not yet support backend.api_key_env"):
-        asyncio.run(run_benchmark(config))
-    manifest = json.loads((tmp_path / "failed-run" / "manifest.json").read_text())
-    assert manifest["status"] == "failed"
-    assert "dsh_runtime" in json.dumps(manifest)

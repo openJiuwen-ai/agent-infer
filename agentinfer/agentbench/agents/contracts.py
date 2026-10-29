@@ -28,6 +28,7 @@ class TerminationReason(str, Enum):
     AGENT_STARTUP_FAILED = "agent_startup_failed"
     AGENT_STARTUP_TIMEOUT = "agent_startup_timeout"
     TIMEOUT = "timeout"
+    CLEANUP_TIMEOUT = "cleanup_timeout"
     PLAN_EXIT_LOOP = "plan_exit_loop"
     VALIDATION_ERROR_LOOP = "validation_error_loop"
     CONFIRMATION_HANG = "confirmation_hang"
@@ -69,6 +70,7 @@ class AgentRunRequest:
     terminal_capture_interval_seconds: int
     context_window: int = 262144
     max_tokens: int = 8192
+    cleanup_timeout_seconds: float = 10.0
 
 
 @dataclass

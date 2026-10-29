@@ -23,6 +23,7 @@ class ExperimentConfig(StrictModel):
     task_timeout_seconds: int = Field(3600, ge=1, json_schema_extra={"cli": {"flag": "--timeout"}})
     run_timeout_seconds: int | None = Field(None, ge=1)
     patch_flush_seconds: int = Field(15, ge=0)
+    cleanup_timeout_seconds: float = Field(10.0, gt=0, allow_inf_nan=False)
     prompt_delivery_timeout_seconds: int = Field(30, ge=1)
 
 
@@ -119,7 +120,7 @@ class AgentBenchConfig(StrictModel):
 
     @model_validator(mode="after")
     def validate_agent_endpoint(self) -> "AgentBenchConfig":
-        """Require the model protocol used by the selected runtime."""
+        """Validate the selected runtime's backend protocol and authentication."""
 
         from ..agents.registry import get_runtime
 
@@ -129,6 +130,8 @@ class AgentBenchConfig(StrictModel):
                 f"backend.endpoint {self.backend.endpoint!r} is invalid for "
                 f"agent.type {self.agent.type!r}; expected {required_endpoint!r}"
             )
+        if self.agent.type == "dsh" and self.backend.api_key_env:
+            raise ValueError("DSH run does not yet support backend.api_key_env; use an unauthenticated local backend")
         return self
 
 

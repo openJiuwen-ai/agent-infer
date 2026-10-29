@@ -76,6 +76,25 @@ def test_dsh_profile_and_openai_endpoint() -> None:
     assert config.backend.endpoint == "/v1/chat/completions"
 
 
+def test_dsh_authenticated_backend_is_rejected_before_execution(tmp_path: Path) -> None:
+    output = tmp_path / "run"
+    with pytest.raises(ValidationError, match="does not yet support backend.api_key_env"):
+        AgentBenchConfig.model_validate(
+            {
+                "experiment": {"result_dir": output},
+                "agent": {"type": "dsh"},
+                "backend": {"endpoint": "/v1/chat/completions", "api_key_env": "TEST_SECRET_NAME"},
+            }
+        )
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("budget", [0, -1, float("inf"), float("nan")])
+def test_cleanup_budget_must_be_positive_and_finite(budget: float) -> None:
+    with pytest.raises(ValidationError, match="cleanup_timeout_seconds"):
+        AgentBenchConfig.model_validate({"experiment": {"cleanup_timeout_seconds": budget}})
+
+
 @pytest.mark.parametrize(
     ("agent_type", "profile"),
     [
