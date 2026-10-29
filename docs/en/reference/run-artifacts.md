@@ -115,3 +115,6 @@ raw session logs and any generated patch.
 | `plan_not_approved` | The plan protocol was not fulfilled, including after one recovery reminder. |
 | `validation_error_loop` | Four equivalent argument-validation or inactive-plan exit errors within eight tool results. |
 | `max_tokens` | The model or DSH turn reported length truncation. |
+
+Session collection reads all sessions in the task-local `DSH_HOME` and validates session IDs and parent links;
+directory names and log modification times do not select the lead session.

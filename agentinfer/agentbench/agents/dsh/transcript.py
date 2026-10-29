@@ -42,42 +42,8 @@ class NormalizedEvent:
     tool_result_content: str = ""
 
 
-def _utf16_units(value: str) -> list[int]:
-    """Return JavaScript-compatible UTF-16 code units, preserving surrogates."""
-
-    encoded = value.encode("utf-16-le", "surrogatepass")
-    return [encoded[offset] | (encoded[offset + 1] << 8) for offset in range(0, len(encoded), 2)]
-
-
-def project_key(cwd: str) -> str:
-    """Match DSH's readable, bounded project-directory naming scheme."""
-
-    if not cwd:
-        raise ValueError("cannot encode an empty project path")
-    result: list[str] = []
-    separator_run = False
-    for code in _utf16_units(cwd):
-        character = chr(code)
-        if character in "/\\:":
-            if not separator_run:
-                result.append("-")
-            separator_run = True
-        elif character != "~" and (character.isascii() and (character.isalnum() or character in "._-")):
-            result.append(character)
-            separator_run = False
-        else:
-            result.append(f"~{code:04X}")
-            separator_run = False
-    slug = "".join(result).lstrip("-") or "root"
-    return f"--{slug[:251]}--"
-
-
-def find_session_logs(home: Path, workspace: Path | None = None) -> list[Path]:
-    """Return every session log under one DSH home, newest first.
-
-    When a workspace is supplied, logs under that workspace's project key sort
-    first, so shared homes cannot leak another task's sessions into this one.
-    """
+def find_session_logs(home: Path) -> list[Path]:
+    """Return every session log under one task-local DSH home."""
 
     root = home / SESSION_ROOT
     if not root.is_dir():
@@ -96,18 +62,7 @@ def find_session_logs(home: Path, workspace: Path | None = None) -> list[Path]:
         if len(selected) != 1:
             raise ValueError(f"Ambiguous DSH session generation: {selected}")
         logs.extend(selected)
-    preferred: str | None = None
-    if workspace is not None:
-        try:
-            preferred = project_key(str(workspace.resolve()))
-        except ValueError:
-            preferred = None
-
-    def sort_key(path: Path) -> tuple[int, int]:
-        in_preferred = 1 if preferred is not None and path.parent.parent.name == preferred else 0
-        return (-in_preferred, -path.stat().st_mtime_ns)
-
-    return sorted(logs, key=sort_key)
+    return sorted(logs)
 
 
 def load_session_log(path: Path, *, allow_partial: bool = False, deadline: float | None = None) -> list[RawEvent]:

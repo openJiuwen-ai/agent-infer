@@ -114,7 +114,6 @@ async def run_dsh(request: AgentRunRequest) -> AgentRunResult:
         transcript, events, lineage = _copy_transcript(
             instance.home_dir,
             request.artifact_dir,
-            request.workspace,
             root_id=root_id,
             task_id=request.session_id,
             allow_partial=return_code is None or return_code != 0,
@@ -374,14 +373,13 @@ def _write_events(path: Path, events: list[dict[str, object]], deadline: float) 
 def _copy_transcript(
     home: Path,
     artifact_dir: Path,
-    workspace: Path | None = None,
     *,
     root_id: str,
     task_id: str,
     allow_partial: bool = False,
     deadline: float,
 ) -> tuple[Path, list[dict[str, object]], dict[str, object]]:
-    logs = find_session_logs(home, workspace)
+    logs = find_session_logs(home)
     if not logs:
         raise ValueError("DSH produced no durable root session log")
     sessions_dir = artifact_dir / "dsh-sessions"

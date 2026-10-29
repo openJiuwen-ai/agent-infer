@@ -24,7 +24,8 @@ def test_dsh_preflight_requires_zstandard(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_dsh_preflight_functionally_probes_native_sandbox(monkeypatch: pytest.MonkeyPatch) -> None:
-    check = AsyncMock()
+    path = Path("/resolved/dsh")
+    check = AsyncMock(return_value=path)
     probe = AsyncMock()
     monkeypatch.setattr("agentinfer.agentbench.agents.dsh.runtime._require_zstandard", lambda: None)
     monkeypatch.setattr("agentinfer.agentbench.agents.dsh.runtime.check_executable_output", check)
@@ -33,7 +34,7 @@ def test_dsh_preflight_functionally_probes_native_sandbox(monkeypatch: pytest.Mo
     asyncio.run(DshRuntime().preflight(Path("dsh")))
 
     check.assert_awaited_once_with("dsh", ["--help"], label="Agent", expected=("--profile", "--patch", "--dump-config"))
-    probe.assert_awaited_once_with(_runtime_report, "dsh")
+    probe.assert_awaited_once_with(_runtime_report, path)
 
 
 def test_sandbox_probe_uses_installed_dsh_package(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -45,10 +46,9 @@ def test_sandbox_probe_uses_installed_dsh_package(monkeypatch: pytest.MonkeyPatc
         calls.append((command, kwargs))
         return subprocess.CompletedProcess(command, 0, b'{"sandbox":"full"}', b"")
 
-    monkeypatch.setattr("agentinfer.agentbench.agents.dsh.runtime.shutil.which", lambda _value: str(executable))
     monkeypatch.setattr("agentinfer.agentbench.agents.dsh.runtime.subprocess.run", run)
 
-    _probe_sandbox("dsh")
+    _probe_sandbox(executable.resolve())
 
     command, kwargs = calls[0]
     assert command == ["node", "--input-type=module", "-", str(executable.resolve())]
@@ -60,24 +60,22 @@ def test_sandbox_probe_uses_installed_dsh_package(monkeypatch: pytest.MonkeyPatc
 def test_sandbox_probe_rejects_failed_backend(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     executable = tmp_path / "dsh"
     executable.write_text("", encoding="utf-8")
-    monkeypatch.setattr("agentinfer.agentbench.agents.dsh.runtime.shutil.which", lambda _value: str(executable))
     monkeypatch.setattr(
         "agentinfer.agentbench.agents.dsh.runtime.subprocess.run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 1, b"", b"sandbox unavailable"),
     )
 
     with pytest.raises(RuntimeError, match="sandbox unavailable"):
-        _probe_sandbox("dsh")
+        _probe_sandbox(executable.resolve())
 
 
 @pytest.mark.parametrize("version", ["0.2.0-rc.2", "0.2.1-rc.3", "not-a-version"])
 def test_preflight_rejects_unsupported_version_before_loading_plugins(monkeypatch, tmp_path, version):
     executable = tmp_path / "dsh"
     executable.touch()
-    monkeypatch.setattr("agentinfer.agentbench.agents.dsh.runtime.shutil.which", lambda _: str(executable))
     monkeypatch.setattr(
         "agentinfer.agentbench.agents.dsh.runtime.subprocess.run",
         lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, version, ""),
     )
     with pytest.raises(RuntimeError, match="expected=0.2.1-rc.2"):
-        _runtime_report(str(executable))
+        _runtime_report(executable.resolve())

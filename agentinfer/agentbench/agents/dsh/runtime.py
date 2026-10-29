@@ -9,7 +9,6 @@ import importlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -68,14 +67,11 @@ try {
 """
 
 
-def _probe_sandbox(executable: str) -> dict[str, object]:
-    resolved = shutil.which(executable)
-    if resolved is None:
-        raise RuntimeError(f"Agent executable is not available: {executable}")
+def _probe_sandbox(executable: Path) -> dict[str, object]:
     with tempfile.TemporaryDirectory() as workspace:
         try:
             result = subprocess.run(
-                ["node", "--input-type=module", "-", str(Path(resolved).resolve())],
+                ["node", "--input-type=module", "-", str(executable)],
                 input=_SANDBOX_PROBE.encode(),
                 cwd=workspace,
                 capture_output=True,
@@ -112,11 +108,7 @@ console.log(JSON.stringify({ node: process.versions.node, packages }));
 """
 
 
-def _runtime_report(executable: str) -> AgentPreflightReport:
-    resolved = shutil.which(executable)
-    if resolved is None:
-        raise RuntimeError(f"DSH executable is not available: {executable}")
-    path = Path(resolved).resolve()
+def _runtime_report(path: Path) -> AgentPreflightReport:
     version = subprocess.run([str(path), "--version"], capture_output=True, text=True, timeout=20, check=True)
     actual = re.search(r"\b\d+\.\d+\.\d+(?:-[\w.]+)?", version.stdout + version.stderr)
     if actual is None or actual.group() != DSH_VERSION:
@@ -145,7 +137,7 @@ def _runtime_report(executable: str) -> AgentPreflightReport:
     lock = next(
         (parent / "package-lock.json" for parent in path.parents if (parent / "package-lock.json").is_file()), None
     )
-    capabilities = _probe_sandbox(str(path))
+    capabilities = _probe_sandbox(path)
     with tempfile.TemporaryDirectory() as workspace:
         environment = {key: value for key, value in os.environ.items() if not key.startswith(("DSH_", "DEEPSEEK_"))}
         environment["DSH_HOME"] = str(Path(workspace) / "home")
@@ -188,11 +180,11 @@ class DshRuntime:
     async def preflight(self, executable: Path) -> AgentPreflightReport:
         _require_zstandard()
         command = str(executable)
-        await check_executable_output(
+        path = await check_executable_output(
             command, ["--help"], label="Agent", expected=("--profile", "--patch", "--dump-config")
         )
         try:
-            return await asyncio.to_thread(_runtime_report, command)
+            return await asyncio.to_thread(_runtime_report, path)
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(
                 f"DSH capability preflight failed: expected={DSH_VERSION}, path={command}\n{exc.stderr}"
