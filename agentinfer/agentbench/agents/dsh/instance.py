@@ -138,8 +138,7 @@ class DshInstance:
             "    - id: agentbench-bridge\n"
             f"      name: {bridge_name}\n"
             "      config:\n"
-            f"        forcePlanMode: {str(self.enforce_plan_mode).lower()}\n"
-            f"        autoApprove: {str(self.enforce_plan_mode).lower()}\n"
+            f"        enforcePlanMode: {str(self.enforce_plan_mode).lower()}\n"
             f"        apiBaseURL: {json.dumps(self.api_base_url)}\n"
             f"        lineagePath: {json.dumps(str(self.artifact_dir / 'dsh-lineage.json'))}\n"
         )

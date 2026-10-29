@@ -108,3 +108,5 @@ DSH 0.2 额外保存 `evidence/dsh-runtime.json`（版本、能力、安装锁�
 | `plan_not_approved` | 计划协议未完成，包括一次恢复提醒后仍未获批。 |
 | `validation_error_loop` | 最近 8 次工具结果中，同类参数错误或计划模式关闭后的退出调用错误达到 4 次。 |
 | `max_tokens` | 模型或 DSH 回合报告长度截断。 |
+
+会话收集遍历任务独立 `DSH_HOME` 中的全部会话，以 session ID 和父子关系校验身份；目录名称和日志修改时间不参与主会话选择。

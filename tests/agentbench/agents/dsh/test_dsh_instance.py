@@ -40,8 +40,7 @@ def test_bootstrap_writes_isolated_home_and_settings(tmp_path: Path) -> None:
     assert instance.home_dir == tmp_path / "artifacts" / "dsh-home"
     patch = instance.policy_patch_path.read_text(encoding="utf-8")
     assert patch.startswith("- id: session-title-llm\n  disabled: true\n")
-    assert "forcePlanMode: false" in patch
-    assert "autoApprove: false" in patch
+    assert "enforcePlanMode: false" in patch
     assert instance.provider_patch_path.is_file()
     settings = yaml.safe_load(instance.artifact_settings_path.read_text(encoding="utf-8"))
     assert settings["agent-default-model"] == {"provider": "agentbench-vllm", "model": "spike-model"}
@@ -84,7 +83,7 @@ def test_bootstrap_writes_profile_policy_and_records_it_in_snapshot(tmp_path: Pa
 
     patch = instance.policy_patch_path.read_text(encoding="utf-8")
     assert patch.startswith("- id: session-title-llm\n  disabled: true\n" + policy_patch)
-    assert "forcePlanMode: false" in patch
+    assert "enforcePlanMode: false" in patch
     assert "agentbench-hmr-stub" not in patch
     snapshot = json.loads(instance.snapshot_path.read_text(encoding="utf-8"))
     assert "agentbench-bridge" in snapshot["policy_patch"]
@@ -110,8 +109,7 @@ def test_bridge_mounts_lineage_for_every_profile(tmp_path: Path) -> None:
         patch = instance.policy_patch_path.read_text(encoding="utf-8")
         bridge_name = str(instance.bridge_path).replace("\\", "/")
         assert f"name: {bridge_name}" in patch
-        assert f"forcePlanMode: {str(enforce_plan_mode).lower()}" in patch
-        assert f"autoApprove: {str(enforce_plan_mode).lower()}" in patch
+        assert f"enforcePlanMode: {str(enforce_plan_mode).lower()}" in patch
 
 
 def test_bridge_injects_concurrent_session_lineage(tmp_path: Path, node_executable: str) -> None:
@@ -320,7 +318,7 @@ const services = new Map()
 const handlers = new Map()
 function runScenario(name, ctx, created) {
   try {
-    const dispose = apply(ctx, { forcePlanMode: true, autoApprove: true })
+    const dispose = apply(ctx, { enforcePlanMode: true })
     created()
     dispose()
     outcomes.push([name, 'ok'])
@@ -333,10 +331,10 @@ const base = {
   get: (name) => services.get(name),
   on: (_event, handler) => { handlers.set(_event, handler); return () => handlers.delete(_event) },
 }
-// userQuestions is missing: autoApprove fails at plugin apply time.
+// userQuestions is missing: enforcePlanMode fails at plugin apply time.
 runScenario('no-user-questions', base, () => undefined)
 services.set('userQuestions', { registerProvider: () => undefined })
-// planMode is missing: forcePlanMode vetoes agent publication at created time.
+// planMode is missing: enforcePlanMode vetoes agent publication at created time.
 const created = () => handlers.get('agent/created')({ agent: { id: 'lead', ctx: { tools: { guard: () => {} } }, session: { header: { id: 'lead', delegationDepth: 0 } } } })
 runScenario('no-plan-mode', base, created)
 services.set('planMode', { set: () => { throw new Error('set boom') } })
@@ -442,7 +440,7 @@ const ctx = {
   get: name => name === 'planMode' ? planMode : {},
   on: (name, handler) => { handlers.set(name, handler); return () => handlers.delete(name) },
 }
-const dispose = apply(ctx, { forcePlanMode: true, autoApprove: true, lineagePath: process.argv[4] })
+const dispose = apply(ctx, { enforcePlanMode: true, lineagePath: process.argv[4] })
 function agent(id, parentSession) {
   const a = {
     id, session: { header: { id, parentSession, delegationDepth: parentSession ? 1 : 0 } },

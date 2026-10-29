@@ -71,7 +71,7 @@ function encodeRequest(request, lineage) {
 }
 
 export function apply(ctx, config = {}) {
-  const { forcePlanMode = false, autoApprove = false } = config
+  const { enforcePlanMode = false } = config
   const rootSessionId = process.env.AGENTBENCH_ROOT_SESSION_ID
   const lineages = new Map()
   const subagentOutcomes = new Map()
@@ -139,7 +139,7 @@ export function apply(ctx, config = {}) {
         text: `You are a read-only Explore subagent. Search first, read focused ranges with limit <= 200, then report concise evidence to the lead. Do not implement fixes or delegate further. You have at most ${SUBAGENT_STEP_LIMIT} steps; finish with your findings.`,
       })
     }
-    if (!forcePlanMode || lineage?.agent_role !== 'lead') return
+    if (!enforcePlanMode || lineage?.agent_role !== 'lead') return
     // Fail closed: a synchronous throw here vetoes agent publication, so the
     // run exits nonzero instead of degrading to prompt-only planning.
     const planMode = ctx.get('planMode')
@@ -194,7 +194,7 @@ export function apply(ctx, config = {}) {
   })
 
   const disposeStopping = ctx.on('agent/turn-stopping', ({ agent }) => {
-    if (!forcePlanMode || lineages.get(agent.id)?.agent_role !== 'lead') return
+    if (!enforcePlanMode || lineages.get(agent.id)?.agent_role !== 'lead') return
     if (failure) throw new Error(failure.message)
     if (!ctx.get('planMode').get(agent).active) return
     const children = [...lineages.values()].filter(row => row.parent_program_id === agent.id)
@@ -234,7 +234,7 @@ export function apply(ctx, config = {}) {
     }
   })
 
-  if (autoApprove) {
+  if (enforcePlanMode) {
     // Fail closed with the same veto: without an answerer, exit_plan_mode
     // would hang the headless run instead of completing the plan review.
     const userQuestions = ctx.get('userQuestions')
@@ -244,7 +244,7 @@ export function apply(ctx, config = {}) {
   }
   const disposeQuestions = ctx.on('user-questions/request', async (request) => ({
         answers: request.questions.map((q) => {
-          if (autoApprove && q.intent?.kind === 'plan-review') {
+          if (enforcePlanMode && q.intent?.kind === 'plan-review') {
             autoPlanApprovals++
             persistLineage()
             return { id: q.id, selected: [q.intent.approve] }

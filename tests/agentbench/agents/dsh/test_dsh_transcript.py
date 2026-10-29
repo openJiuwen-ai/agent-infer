@@ -4,7 +4,6 @@
 """Verify DSH session-log decoding and normalization."""
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -15,7 +14,6 @@ from agentinfer.agentbench.agents.dsh.transcript import (
     find_session_logs,
     is_turn_complete,
     load_session_log,
-    project_key,
     session_is_root,
 )
 
@@ -60,45 +58,16 @@ def _write_log(path: Path, events: list[dict]) -> None:
     path.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
 
 
-def test_project_key_matches_observed_dsh_layout() -> None:
-    assert project_key("/Users/hsliu/code/AgentInfer") == "--Users-hsliu-code-AgentInfer--"
-    assert project_key("/a/b") == "--a-b--"
-    with pytest.raises(ValueError, match="empty"):
-        project_key("")
+def test_find_session_logs_collects_all_sessions(tmp_path: Path) -> None:
+    logs = [
+        tmp_path / "sessions" / "project-a" / "child" / "session.jsonl",
+        tmp_path / "sessions" / "project-b" / "root" / "session.v4.jsonl",
+    ]
+    for path in logs:
+        path.parent.mkdir(parents=True)
+        path.write_text("{}\n", encoding="utf-8")
 
-
-def test_find_session_logs_prefers_workspace_project_key(tmp_path: Path) -> None:
-    workspace = tmp_path / "w"
-    other = tmp_path / "o"
-    workspace.mkdir()
-    other.mkdir()
-    own_dir = tmp_path / "sessions" / project_key(str(workspace.resolve())) / "session-own"
-    other_dir = tmp_path / "sessions" / project_key(str(other.resolve())) / "session-other"
-    own_dir.mkdir(parents=True)
-    other_dir.mkdir(parents=True)
-    (own_dir / "session.jsonl").write_text("{}\n", encoding="utf-8")
-    (other_dir / "session.jsonl").write_text("{}\n", encoding="utf-8")
-    os.utime(other_dir / "session.jsonl", (3, 3))
-    os.utime(own_dir / "session.jsonl", (1, 1))
-
-    logs = find_session_logs(tmp_path, workspace)
-
-    assert logs[0].parent.parent.name == project_key(str(workspace.resolve()))
-
-
-def test_find_session_logs_orders_newest_first(tmp_path: Path) -> None:
-    older = tmp_path / "sessions" / "project" / "session-old" / "session.jsonl.zstd"
-    newer = tmp_path / "sessions" / "project" / "session-new" / "session.jsonl"
-    older.parent.mkdir(parents=True)
-    newer.parent.mkdir(parents=True)
-    older.write_bytes(b"old")
-    newer.write_bytes(b"new")
-    os.utime(older, (1, 1))
-    os.utime(newer, (2, 2))
-
-    logs = find_session_logs(tmp_path)
-
-    assert [path.name for path in logs] == ["session.jsonl", "session.jsonl.zstd"]
+    assert find_session_logs(tmp_path) == sorted(logs)
 
 
 def test_load_session_log_rejects_malformed_lines(tmp_path: Path) -> None:
