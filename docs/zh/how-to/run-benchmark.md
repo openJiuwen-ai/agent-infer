@@ -179,3 +179,71 @@ experiment:
 执行 `python -m pytest tests/agentbench/test_benchmark_smoke.py -q`，无需模型服务即可验证
 生产 CLI、配置、工作区、分派、请求代理及结果汇总。测试使用本地运行时和 loopback 后端，
 不提供真实模型质量或性能结论。调度对比脚本使用目标仓库现有 controller factory 支持的字段。
+
+## DSH 并发运行记录（2026-10-29）
+
+本节记录 `test-dsh-20261029-102951` 的最终结果，作为执行链路的观测实例。
+运行时间为 2026-10-29 10:29:52 至 11:30:06（Asia/Shanghai）。
+使用 SWE-bench Verified 的 16 个 Astropy 实例，任务并发为 8，单任务超时为 3600 秒，未另设整次运行超时。
+代理为 DSH `0.2.1-rc.2` 的 `plan-subagent`，Node `24.22.1`，Python `3.12.13`；
+模型为 `Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8`，上下文配置为 `262144`，输出上限为 `8192` tokens。
+
+### 结果摘要
+
+| 指标 | 本次结果 |
+| --- | --- |
+| 任务执行完成 / 失败 | 14 / 2；执行完成率 87.5% |
+| 导出补丁 | 14 个任务 |
+| 整次运行耗时 | 3614.25 秒，约 60 分 14 秒 |
+| 单任务耗时 | 平均 739.97 秒；P50 538.78 秒 |
+| 模型请求 | 1,972 次；成功 1,971 次，失败 1 次 |
+| 请求耗时（Request Proxy） | 平均 8.333 秒；P50 3.897 秒；P95 34.876 秒 |
+| TTFT（Request Proxy） | 平均 1.201 秒；P50 0.844 秒；P95 2.887 秒 |
+| 输入 / 输出 tokens | 122,046,278 / 295,020 |
+| 已完成请求的缓存命中 tokens | 119,865,936 |
+| 前缀缓存查询 token 命中率 | 98.22%，按 vLLM 起止计数器差值计算 |
+| 运行收尾 | 正常完成；1,972 条请求事实全部写入，无待写入记录或收尾异常 |
+
+`manifest.status=completed` 表示整批流程已收尾；各任务状态以 `task_index.json` 为准。
+本轮没有正确性评测产物，`correctness.available=false`，因此 87.5% 仅为代理执行完成率。
+补丁正确性仍需在匹配的 SWE-bench 实例环境中评测。
+
+### 两个失败任务
+
+| 实例 | 最终分类 | 原因与证据 |
+| --- | --- | --- |
+| `astropy__astropy-13033` | `timeout` | 一个只读子代理持续重复读取同一文件，导致 DSH 无法结束；最终触发 3600 秒单任务超时，无补丁。 |
+| `astropy__astropy-13579` | `harness_error` | 4 个子代理均正常结束，但主代理未完成计划审批即退出，触发 `plan-subagent completed without an approved plan` 校验，无补丁。 |
+
+`13033` 的异常子代理为 `55c296a1-ec3f-492f-b021-4ccbc0fe892d`。
+其持久化日志记录了 939 次 `read`，末尾仍在交替读取 `astropy/timeseries/core.py` 的相同两段内容。
+该子代理关联 953 次模型请求，其中 952 次成功，最后一次在超时收尾时被取消，记录为 `request cancelled`。
+该失败请求的 HTTP 状态虽然为 200，但流式响应未完整结束，仍按失败请求统计。
+长尾任务显著影响整批耗时和聚合指标，不能据本轮数据推断正常工作负载的并发扩展收益。
+
+### 参数与证据范围
+
+同参数重跑时，先按前文准备受支持的 Node、DSH、数据集和后端，并将 YAML 中的上下文设为实际模型容量。
+使用新结果目录，例如：
+
+```bash
+vllm bench serve --agentinfer run \
+  --config agentinfer/agentbench/configs/swebench_vllm.yaml \
+  --base-url http://127.0.0.1:8000 \
+  --agent-executable "$DSH_EXECUTABLE" \
+  --task-num 16 --max-concurrency 8 --timeout 3600 \
+  --result-dir "results/dsh-16-c8-$(date +%Y%m%d-%H%M%S)"
+```
+
+此命令用于重现参数，不表示上述循环问题已修复。本节未重新执行任务，也未对两份失败结果做成功回填。
+收尾时采集的工作区快照为 `b74bd42b221804f3ba6b5fabe7fb6b559665250e`，`dirty=true`；
+该证据未保存本地修改差异，不能据此证明某个干净提交已完整通过本轮验收。
+
+原始产物位于本机结果目录 `/home/yangjianjuan/AgentInfer/test-dsh-20261029-102951`，未纳入代码仓库。
+以下路径均相对于该结果目录；跨机器评审需另行提供原始产物：
+
+- `manifest.json`、`summary.json`、`task_index.json`：运行配置、汇总指标和 16 个任务的最终状态。
+- `requests.jsonl`、`evidence/vllm_metrics_start.prom`、`evidence/vllm_metrics_end.prom`：请求事实与计数器差值来源。
+- `evidence/dsh-runtime.json`、`evidence/source_control.json`：运行时预检和工作区快照。
+- `tasks/<instance_id>/` 下的 `result.json`、`dsh-run-status.json`、`dsh-lineage.json`：逐任务状态与计划审批记录。
+- `tasks/astropy__astropy-13033/dsh-sessions/session-55c296a1-ec3f-492f-b021-4ccbc0fe892d.jsonl`：循环子代理日志。
