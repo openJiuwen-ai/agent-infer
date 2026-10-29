@@ -42,7 +42,7 @@ def test_bootstrap_writes_isolated_home_and_settings(tmp_path: Path) -> None:
     assert patch.startswith("- id: session-title-llm\n  disabled: true\n")
     assert "forcePlanMode: false" in patch
     assert "autoApprove: false" in patch
-    assert instance.settings_path.is_file()
+    assert instance.provider_patch_path.is_file()
     settings = yaml.safe_load(instance.artifact_settings_path.read_text(encoding="utf-8"))
     assert settings["agent-default-model"] == {"provider": "agentbench-vllm", "model": "spike-model"}
     route = settings["llm-pi-ai"]["providers"]["agentbench-vllm"]
@@ -63,7 +63,7 @@ def test_bootstrap_writes_settings_snapshot(tmp_path: Path) -> None:
     )
     instance.bootstrap()
 
-    assert yaml.safe_load(instance.settings_path.read_text()) == [
+    assert yaml.safe_load(instance.provider_patch_path.read_text()) == [
         {"id": name, "config": config} for name, config in instance.settings.items()
     ]
     snapshot = json.loads(instance.snapshot_path.read_text(encoding="utf-8"))

@@ -27,8 +27,6 @@ from .transcript import (
     session_is_root,
 )
 
-CLEANUP_SECONDS = 10.0
-
 
 class _ProfileInitializationTimeout(Exception):
     """Raised when model-free DSH profile initialization exceeds the task deadline."""
@@ -107,7 +105,7 @@ async def run_dsh(request: AgentRunRequest) -> AgentRunResult:
         (request.artifact_dir / "dsh-runner-error.log").write_text(traceback.format_exc())
 
     cleanup_started = time.monotonic()
-    cleanup_deadline = cleanup_started + CLEANUP_SECONDS
+    cleanup_deadline = cleanup_started + request.cleanup_timeout_seconds
     owner = WorkspaceProcessOwner(cleanup_deadline)
     try:
         # Read/copy regular log files synchronously in bounded chunks. No detached
@@ -146,11 +144,13 @@ async def run_dsh(request: AgentRunRequest) -> AgentRunResult:
         status["collection"] = f"failed: {type(exc).__name__}: {exc}"
         if return_code is not None:
             result.outcome = AgentRunOutcome.FAILED
-            result.termination_reason = TerminationReason.HARNESS_ERROR
+            result.termination_reason = (
+                TerminationReason.CLEANUP_TIMEOUT if isinstance(exc, TimeoutError) else TerminationReason.HARNESS_ERROR
+            )
     try:
         # DSH already awaits child turns and durable writes before exiting.
         # Keep an optional flush delay within half the cleanup budget.
-        flush_seconds = min(request.patch_flush_seconds, CLEANUP_SECONDS / 2)
+        flush_seconds = min(request.patch_flush_seconds, request.cleanup_timeout_seconds / 2)
         status["patch_flush_seconds"] = flush_seconds
         if flush_seconds:
             await asyncio.wait_for(asyncio.sleep(flush_seconds), _remaining(cleanup_deadline))
@@ -166,13 +166,15 @@ async def run_dsh(request: AgentRunRequest) -> AgentRunResult:
         status["patch"] = f"failed: {type(exc).__name__}: {exc}"
         if result.outcome is AgentRunOutcome.COMPLETED:
             result.outcome = AgentRunOutcome.FAILED
-            result.termination_reason = TerminationReason.HARNESS_ERROR
+            result.termination_reason = (
+                TerminationReason.CLEANUP_TIMEOUT if isinstance(exc, TimeoutError) else TerminationReason.HARNESS_ERROR
+            )
     finally:
         owner.terminate_all()
     status.update(
         exit_code=return_code,
         cleanup_seconds=time.monotonic() - cleanup_started,
-        cleanup_budget_seconds=CLEANUP_SECONDS,
+        cleanup_budget_seconds=request.cleanup_timeout_seconds,
         termination_reason=result.termination_reason,
     )
     (request.artifact_dir / "dsh-run-status.json").write_text(json.dumps(status, indent=2) + "\n")

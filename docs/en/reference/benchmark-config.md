@@ -13,6 +13,7 @@ experiment:
   task_timeout_seconds: 3600
   run_timeout_seconds: null
   patch_flush_seconds: 15
+  cleanup_timeout_seconds: 10.0
   prompt_delivery_timeout_seconds: 30
 
 dataset:
@@ -52,7 +53,12 @@ request_proxy:
 | `task_timeout_seconds` | `3600` | Per-task timeout; must be `>= 1`; CLI flag is `--timeout`. |
 | `run_timeout_seconds` | `null` | Whole-run timeout; an integer must be `>= 1`, and `null` adds no run timeout. |
 | `patch_flush_seconds` | `15` | Periodic patch flush interval; must be `>= 0`. |
+| `cleanup_timeout_seconds` | `10.0` | DSH post-exit cleanup budget for log collection, flush wait, and patch export; finite and `> 0`. YAML only. |
 | `prompt_delivery_timeout_seconds` | `30` | Timeout while waiting for prompt delivery; must be `>= 1`. |
+
+DSH records an exhausted cleanup budget as `cleanup_timeout` and preserves existing timeout/cancellation reasons.
+Cleanup details remain in `dsh-run-status.json`. Increase the budget for large session logs or slow storage;
+successful completion still requires validated session evidence.
 
 ## `dataset`
 

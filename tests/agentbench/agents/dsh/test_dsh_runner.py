@@ -134,6 +134,58 @@ def test_runner_completes_and_exports_patch(request_factory):
     )
 
 
+@pytest.mark.parametrize("budget,expected", [(0.01, TerminationReason.CLEANUP_TIMEOUT), (2.0, None)])
+def test_slow_collection_uses_configured_cleanup_budget(request_factory, monkeypatch, budget, expected):
+    from agentinfer.agentbench.agents.dsh import runner
+
+    collect = runner._copy_transcript
+
+    def slow_collection(*args, **kwargs):
+        time.sleep(0.04)
+        return collect(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "_copy_transcript", slow_collection)
+    request = request_factory(cleanup_timeout_seconds=budget)
+    result = asyncio.run(run_dsh(request))
+    status = json.loads((request.artifact_dir / "dsh-run-status.json").read_text())
+    assert result.termination_reason is expected
+    assert status["cleanup_budget_seconds"] == budget
+    assert (result.outcome is AgentRunOutcome.COMPLETED) == (expected is None)
+    if expected is None:
+        assert result.has_patch
+    else:
+        assert "TimeoutError" in status["collection"]
+
+
+def test_collection_timeout_preserves_execution_timeout(request_factory, monkeypatch):
+    def timed_out(*args, **kwargs):
+        raise TimeoutError("session collection expired")
+
+    monkeypatch.setattr("agentinfer.agentbench.agents.dsh.runner._copy_transcript", timed_out)
+    request = request_factory("wait", timeout_seconds=0.5)
+    result = asyncio.run(run_dsh(request))
+    assert result.termination_reason is TerminationReason.TIMEOUT
+    assert result.has_patch
+    status = json.loads((request.artifact_dir / "dsh-run-status.json").read_text())
+    assert "session collection expired" in status["collection"]
+
+
+@pytest.mark.parametrize(
+    "mode,expected", [("complete", TerminationReason.CLEANUP_TIMEOUT), ("wait", TerminationReason.TIMEOUT)]
+)
+def test_patch_timeout_preserves_existing_failure(request_factory, monkeypatch, mode, expected):
+    def timed_out(*args, **kwargs):
+        raise TimeoutError("patch export expired")
+
+    monkeypatch.setattr("agentinfer.agentbench.agents.dsh.runner.export_patch", timed_out)
+    request = request_factory(mode, timeout_seconds=0.5)
+    result = asyncio.run(run_dsh(request))
+    assert result.outcome is AgentRunOutcome.FAILED
+    assert result.termination_reason is expected
+    status = json.loads((request.artifact_dir / "dsh-run-status.json").read_text())
+    assert "patch export expired" in status["patch"]
+
+
 def test_stdin_preserves_long_utf8_prompt_and_drains_both_outputs(request_factory):
     task = Task("instance", "owner/repo", "abc", '中文 "quoted"\n' * 200000 + "\n")
     request = request_factory("large-output", task=task)

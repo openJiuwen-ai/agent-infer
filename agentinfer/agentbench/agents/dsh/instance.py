@@ -106,7 +106,7 @@ class DshInstance:
         self.home_dir = artifact_dir / HOME_DIR_NAME
         # 0.2.1-rc.2 imports legacy settings.yaml asynchronously after boot.
         # The native home layer must already contain the provider at startup.
-        self.settings_path = self.home_dir / "cordis.patch.yml"
+        self.provider_patch_path = self.home_dir / "cordis.patch.yml"
         self.policy_patch_path = self.home_dir / POLICY_PATCH_FILENAME
         self.bridge_path = self.home_dir / BRIDGE_FILENAME
         self.artifact_settings_path = artifact_dir / SETTINGS_FILENAME
@@ -119,7 +119,7 @@ class DshInstance:
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
         self.home_dir.mkdir(parents=True, exist_ok=True)
         serialized = yaml.safe_dump(self.settings, allow_unicode=True, sort_keys=False)
-        self.settings_path.write_text(
+        self.provider_patch_path.write_text(
             yaml.safe_dump(
                 [{"id": name, "config": config} for name, config in self.settings.items()],
                 allow_unicode=True,

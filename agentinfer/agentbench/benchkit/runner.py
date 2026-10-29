@@ -72,13 +72,12 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
         try:
             report = await check_preflight(config)
         except Exception as exc:
-            if config.agent.type == "dsh":
-                captures.append(EvidenceCapture("dsh_runtime", None, False, str(exc), {}))
+            captures.append(EvidenceCapture(f"{config.agent.type}_runtime", None, False, str(exc), {}))
             raise
         if report is not None:
-            path = output_dir / "evidence" / "dsh-runtime.json"
+            path = output_dir / "evidence" / f"{report.runtime}-runtime.json"
             atomic_write_json(path, asdict(report))
-            captures.append(EvidenceCapture("dsh_runtime", path, True, None, asdict(report)))
+            captures.append(EvidenceCapture(f"{report.runtime}_runtime", path, True, None, asdict(report)))
         preflight_succeeded = True
         tasks = tuple(load_tasks(config.dataset.index_path, config.dataset.selection_path, config.experiment.task_num))
         context = RunContext(config, output_dir, output_dir / "requests.jsonl", tasks)
@@ -314,6 +313,7 @@ async def _run_single_task(
                 config.agent.terminal_capture_interval_seconds,
                 context_window=config.agent.context_window,
                 max_tokens=config.agent.max_tokens,
+                cleanup_timeout_seconds=config.experiment.cleanup_timeout_seconds,
             )
         )
     except asyncio.CancelledError as exc:
@@ -423,8 +423,6 @@ def _trace_capture(path: Path, close_result) -> EvidenceCapture:
 
 
 async def check_preflight(config: AgentBenchConfig) -> AgentPreflightReport | None:
-    if config.agent.type == "dsh" and config.backend.api_key_env:
-        raise RuntimeError("DSH run does not yet support backend.api_key_env; use an unauthenticated local backend")
     report = await check_agent_preflight(config.agent.type, config.agent.executable)
     async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
         response = await client.get(f"{config.backend.base_url.rstrip('/')}/v1/models")

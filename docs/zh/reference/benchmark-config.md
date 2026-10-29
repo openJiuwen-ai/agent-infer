@@ -13,6 +13,7 @@ experiment:
   task_timeout_seconds: 3600
   run_timeout_seconds: null
   patch_flush_seconds: 15
+  cleanup_timeout_seconds: 10.0
   prompt_delivery_timeout_seconds: 30
 
 dataset:
@@ -52,7 +53,10 @@ request_proxy:
 | `task_timeout_seconds` | `3600` | 单任务超时，必须 `>= 1`；CLI 参数为 `--timeout`。 |
 | `run_timeout_seconds` | `null` | 整次运行超时；整数必须 `>= 1`，`null` 表示不另设总超时。 |
 | `patch_flush_seconds` | `15` | 周期性写出补丁的间隔，必须 `>= 0`。 |
+| `cleanup_timeout_seconds` | `10.0` | DSH 退出后日志收集、写入等待及补丁导出的总预算，必须为有限正数，仅支持 YAML 配置。 |
 | `prompt_delivery_timeout_seconds` | `30` | 等待提示词送达 Agent 的超时，必须 `>= 1`。 |
+
+DSH 将清理预算耗尽记录为 `cleanup_timeout`，保留已有的任务超时或取消原因，并将清理详情写入 `dsh-run-status.json`。日志较大或存储较慢时可增大预算；任务成功仍要求会话证据通过校验。
 
 ## `dataset`
 
@@ -69,13 +73,13 @@ request_proxy:
 | --- | --- | --- |
 | `type` | `claude` | `claude`、`jiuwenswarm` 或 `dsh`。 |
 | `profile` | `single` | Claude/DSH：`single` 或 `plan-subagent`；JiuwenSwarm：`code.normal`。 |
-| `executable` | `claude` | Claude Code 命令名或路径。 |
+| `executable` | `claude` | Agent CLI 命令名或路径。 |
 | `tmux_startup_seconds` | `2.0` | tmux 会话启动等待时间，必须 `>= 0`。 |
 | `terminal_capture_interval_seconds` | `30` | 终端证据采集间隔，必须 `>= 1`。 |
 | `context_window` | `262144` | DSH pi-ai 模型上下文容量；须与实际后端一致，仅支持 YAML 配置。 |
 | `max_tokens` | `8192` | DSH pi-ai 输出容量；须与实际后端一致，仅支持 YAML 配置。 |
 
-`plan-subagent` 使用 `bypassPermissions`。仅应在非 root 用户或经过批准的 Claude Code 权限环境中启用。
+Claude 的 `plan-subagent` 使用 `bypassPermissions`。仅应在非 root 用户或经过批准的 Claude Code 权限环境中启用。
 
 ## `backend`
 
@@ -83,7 +87,7 @@ request_proxy:
 | --- | --- | --- |
 | `type` | `vllm` | 当前唯一支持的后端类型。 |
 | `base_url` | `http://127.0.0.1:8000` | vLLM API 基础 URL。 |
-| `model` | `Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8` | Claude Code 请求中发送的模型名。 |
+| `model` | `Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8` | 请求中发送的服务模型名。 |
 | `endpoint` | `/v1/messages` | Claude 使用 `/v1/messages`；JiuwenSwarm/DSH 使用 `/v1/chat/completions`。 |
 | `api_key_env` | `null` | 可选的 API Key 环境变量名；配置中不得写入密钥值。 |
 
