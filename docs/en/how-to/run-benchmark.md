@@ -116,12 +116,12 @@ vllm bench serve --agentinfer run \
 DSH live runs require **0.2.1-rc.2** and Node `^22.19.0 || >=24`.
 Put a supported Node on `PATH` first; activating a Python virtual environment does not switch Node.
 DSH and runtime preflight look up `node` through `PATH` even when `--agent-executable` is an absolute path.
-Install the pinned external runtime and check versions from the repository root:
+Install the required DSH version in the external environment and check versions:
 
 ```bash
 node --version
-npm install --prefix tests/agentbench/agents/dsh/runtime
-DSH_EXECUTABLE="$PWD/tests/agentbench/agents/dsh/runtime/node_modules/.bin/dsh"
+npm install --global @deepseek-ai/dsh@0.2.1-rc.2
+DSH_EXECUTABLE="$(command -v dsh)"
 "$DSH_EXECUTABLE" --version
 ```
 
@@ -159,6 +159,19 @@ BenchKit creates the result directory; it must not already exist. For a global i
 The `plan-subagent` profile enforces initial plan mode, read-only child tools, and plan-review approval.
 The lead must wait for every child to complete successfully before submitting a plan for approval.
 Only explicit plan-review questions are approved automatically.
+
+The lead may execute at most 200 steps (`agent_step_limit`); Explore subagents may execute at most 100 steps.
+A fourth identical read within the last eight tool calls
+(same file, offset, and limit) stops the task. These limits produce `subagent_step_limit` and `subagent_read_loop`;
+other unsuccessful child endings produce `subagent_failed`.
+If the lead tries to finish in plan mode after all children have completed, it receives one recovery reminder
+to submit its plan. Finishing again without approval produces `plan_not_approved`. The reminder does not exit
+plan mode or approve the plan. Model length truncation is reported as `max_tokens`.
+For both roles, four equivalent argument-validation errors or inactive-plan exit errors from the same tool
+within the last eight tool results produce `validation_error_loop`. Successful calls age old errors out of the window.
+Calling `exit_plan_mode` after plan mode closes returns guidance to continue implementation or reply with the final
+result; it is not a task-completion tool.
+These controls run on DSH lifecycle events; the overall task timeout still applies.
 
 DSH uses pi-ai Chat Completions through the Request Proxy and receives the prompt on stdin.
 Runtime versions and the npm lockfile hash are recorded in `evidence/dsh-runtime.json`.

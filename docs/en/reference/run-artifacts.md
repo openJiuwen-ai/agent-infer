@@ -97,3 +97,21 @@ Lineage validation never rewrites `requests.jsonl`.
 
 For streaming request facts, an SDK closing HTTP after OpenAI `[DONE]` or Anthropic `message_stop` is recorded as
 success. Cancellation before the terminal protocol event remains an error.
+
+### DSH execution-control evidence
+
+`dsh-lineage.json` records at most one plan recovery reminder in `plan_recoveries`.
+When a guard stops execution, `failure` contains its `reason`, `session_id`, and `message`.
+`dsh-run-status.json` retains the same diagnostic; `result.json.termination_reason` records the final classification.
+Execution timeouts and external cancellation keep their own final classification. Existing cleanup still collects
+raw session logs and any generated patch.
+
+| Classification | Meaning |
+| --- | --- |
+| `agent_step_limit` | The lead exceeded its 200-step execution budget. |
+| `subagent_step_limit` | A child exceeded its 100-step exploration budget. |
+| `subagent_read_loop` | The fourth identical read in the last eight tool calls. |
+| `subagent_failed` | A child ended with a reason other than `completed`. |
+| `plan_not_approved` | The plan protocol was not fulfilled, including after one recovery reminder. |
+| `validation_error_loop` | Four equivalent argument-validation or inactive-plan exit errors within eight tool results. |
+| `max_tokens` | The model or DSH turn reported length truncation. |

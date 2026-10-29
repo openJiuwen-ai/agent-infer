@@ -112,12 +112,12 @@ vllm bench serve --agentinfer run \
 DSH live run 固定支持 **0.2.1-rc.2**，Node 要求为 `^22.19.0 || >=24`。
 先将受支持的 Node 加入 `PATH`；激活 Python 虚拟环境不会自动切换 Node。
 即使 `--agent-executable` 使用绝对路径，DSH 和运行时预检仍会通过 `PATH` 查找 `node`。
-在仓库根目录安装固定的外部运行时，并检查版本：
+在外部环境安装指定版本的 DSH，并检查版本：
 
 ```bash
 node --version
-npm install --prefix tests/agentbench/agents/dsh/runtime
-DSH_EXECUTABLE="$PWD/tests/agentbench/agents/dsh/runtime/node_modules/.bin/dsh"
+npm install --global @deepseek-ai/dsh@0.2.1-rc.2
+DSH_EXECUTABLE="$(command -v dsh)"
 "$DSH_EXECUTABLE" --version
 ```
 
@@ -153,6 +153,15 @@ vllm bench serve --agentinfer run \
 结果目录必须尚不存在，由 BenchKit 创建。使用全局安装时，将 `--agent-executable` 改为实际 DSH 路径。
 使用 `--agent-profile single` 可运行单 Agent 模式。`plan-subagent` 强制初始计划模式、子 Agent 只读工具和
 计划审批；主 Agent 必须等待所有子 Agent 正常完成，再提交计划并获得审批。只有明确的 plan-review 问题会自动批准。
+
+主 Agent 最多执行 200 个步骤（`agent_step_limit`），探索子 Agent 最多执行 100 个步骤；最近 8 次工具调用中，第 4 次读取相同文件、offset 和 limit 时会终止任务，
+并分别记录为 `subagent_step_limit` 或 `subagent_read_loop`。其他子 Agent 异常结束记录为 `subagent_failed`。
+主 Agent 在子 Agent 全部完成后仍停留在计划模式并尝试结束时，会收到一次提交计划的恢复提醒；
+再次结束仍未获批则记录为 `plan_not_approved`。提醒不会自动退出计划模式，原有审批要求继续生效。
+主、子 Agent 最近 8 次工具结果中，同一工具的同类参数错误或计划模式已关闭后的退出调用错误达到 4 次，
+会记录为 `validation_error_loop` 并终止。有效调用会将旧错误逐步移出窗口。
+计划模式关闭后调用 `exit_plan_mode` 会得到继续实施或直接回复最终结果的提示，不能用于标记任务完成。
+模型长度截断明确记录为 `max_tokens`。这些规则使用 DSH 生命周期事件执行，不改变整次任务超时。
 
 DSH 通过 pi-ai Chat Completions 请求 Request Proxy，prompt 经 stdin 发送，运行时版本和 npm lockfile 哈希
 记录在 `evidence/dsh-runtime.json`。当前 DSH run 不支持非空的 `backend.api_key_env`。

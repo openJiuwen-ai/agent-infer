@@ -148,7 +148,7 @@ globalThis.fetch = async (request) => {
 }
 const dispose = apply(ctx, { apiBaseURL: 'http://proxy' })
 const onCreated = handlers.get('agent/created')
-const created = ({agent}) => onCreated({agent: {ctx: {tools: {restrict: () => {}}, systemPrompt: {section: () => {}}}, ...agent}})
+const created = ({agent}) => onCreated({agent: {ctx: {tools: {restrict: () => {}, guard: () => {}}, systemPrompt: {section: () => {}}}, ...agent}})
 created({ agent: { session: { header: { id: 'root-dsh', delegationDepth: 0 } } } })
 created({ agent: { session: { header: { id: 'child-dsh', parentSession: 'root-dsh', delegationDepth: 1 } } } })
 const stream = handlers.get('llm/stream')
@@ -401,3 +401,137 @@ console.log('ok')
     )
 
     assert result.stdout.strip() == "ok"
+
+
+@pytest.mark.parametrize(
+    "scenario,expected",
+    [
+        ("progress", None),
+        ("repeat", "subagent_read_loop"),
+        ("steps", "subagent_step_limit"),
+        ("lead-steps", "agent_step_limit"),
+        ("validation-loop", "validation_error_loop"),
+        ("inactive-plan", "validation_error_loop"),
+        ("validation-recovery", None),
+        ("child-failure", "subagent_failed"),
+        ("plan-refusal", "plan_not_approved"),
+    ],
+)
+def test_bridge_bounds_exploration_and_plan_recovery(tmp_path, node_executable, scenario, expected):
+    instance = DshInstance(
+        artifact_dir=tmp_path / "artifacts",
+        api_base_url="http://proxy",
+        model="model",
+        session_id="task",
+        enforce_plan_mode=True,
+    )
+    instance.bootstrap()
+    harness = tmp_path / "guards.mjs"
+    harness.write_text(
+        """\
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+const { apply } = await import(process.argv[2])
+const scenario = process.argv[3]
+const handlers = new Map()
+const guards = new Map()
+const modes = new Map()
+const reminders = []
+const planMode = { set: (agent, active) => modes.set(agent.id, active), get: agent => ({ active: modes.get(agent.id) }) }
+const ctx = {
+  get: name => name === 'planMode' ? planMode : {},
+  on: (name, handler) => { handlers.set(name, handler); return () => handlers.delete(name) },
+}
+const dispose = apply(ctx, { forcePlanMode: true, autoApprove: true, lineagePath: process.argv[4] })
+function agent(id, parentSession) {
+  const a = {
+    id, session: { header: { id, parentSession, delegationDepth: parentSession ? 1 : 0 } },
+    ctx: { tools: { restrict: () => {}, guard: guard => guards.set(id, guard) }, systemPrompt: { section: () => {} } },
+    inject: message => reminders.push(message),
+  }
+  handlers.get('agent/created')({ agent: a })
+  return a
+}
+const root = agent('root')
+const child = agent('child', 'root')
+const pre = agent => handlers.get('agent/pre-step')({ agent }, async () => ({ kind: 'enter', messages: [] }))
+const stop = () => handlers.get('agent/turn-stopping')({ agent: root })
+const read = offset => guards.get('child')({ name: 'read', arguments: { file_path: 'calc.py', offset, limit: 20 } })
+const toolResult = (name, error, code = 'INVALID_ARGS') => handlers.get('tools/result')({ agent: root, name }, error
+  ? { isError: true, error: { message: error, info: { code } } }
+  : { isError: false })
+let caught
+try {
+  if (scenario === 'validation-recovery') {
+    for (let i = 0; i < 3; i++) toolResult('exit_plan_mode', 'missing plan')
+    for (let i = 0; i < 8; i++) toolResult('write')
+    toolResult('exit_plan_mode', 'missing plan')
+    await pre(root)
+  }
+  if (scenario === 'lead-steps') {
+    for (let i = 0; i < 200; i++) await pre(root)
+    await pre(root)
+  } else if (scenario === 'validation-loop' || scenario === 'inactive-plan') {
+    if (scenario === 'inactive-plan') modes.set('root', false)
+    for (let i = 0; i < 4; i++) {
+      const message = scenario === 'inactive-plan'
+        ? guards.get('root')({ name: 'exit_plan_mode' }) : 'missing plan'
+      assert.equal(typeof message, 'string')
+      toolResult('exit_plan_mode', message, scenario === 'inactive-plan' ? 'DENIED' : 'INVALID_ARGS')
+      toolResult('write')
+    }
+    await pre(root)
+  } else if (scenario === 'steps') {
+    for (let i = 0; i < 100; i++) await pre(child)
+    await pre(child)
+  } else if (scenario === 'repeat') {
+    for (let i = 0; i < 8; i++) {
+      await pre(child)
+      if (read(i % 2)) break
+    }
+    await pre(root)
+  } else if (scenario === 'child-failure') {
+    handlers.get('subagent/end')({ id: 'child', stopReason: 'max-tokens' })
+    await pre(root)
+  } else {
+    for (let i = 0; i < 10; i++) { await pre(child); assert.equal(read(i), undefined) }
+    stop()
+    assert.equal(reminders.length, 0, 'pending exploration must not be treated as complete')
+    assert.match(guards.get('root')({ name: 'exit_plan_mode' }), /Wait for the Explore/)
+    handlers.get('subagent/end')({ id: 'child', stopReason: 'completed' })
+    stop()
+    assert.equal(reminders.length, 1)
+    assert.match(reminders[0].content[0].text, /exit_plan_mode/)
+    assert.equal(modes.get('root'), true, 'a reminder must not approve the plan')
+    if (scenario === 'plan-refusal') stop()
+    else {
+      assert.equal(guards.get('root')({ name: 'exit_plan_mode' }), undefined)
+      await handlers.get('user-questions/request')({ questions: [{ id: 'plan', intent: { kind: 'plan-review', approve: 'yes' } }] })
+      modes.set('root', false)
+      stop()
+    }
+  }
+} catch (error) { caught = error.message }
+const result = JSON.parse(readFileSync(process.argv[4], 'utf8'))
+assert.equal(Boolean(caught), !['progress', 'validation-recovery'].includes(scenario))
+dispose()
+assert.equal(handlers.size, 0)
+console.log(JSON.stringify(result))
+"""
+    )
+    result = subprocess.run(
+        [node_executable, str(harness), instance.bridge_path.as_uri(), scenario, str(tmp_path / "lineage.json")],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=os.environ | {"AGENTBENCH_ROOT_SESSION_ID": "task"},
+    )
+    lineage = json.loads(result.stdout)
+    if expected is None:
+        assert "failure" not in lineage
+        assert lineage["auto_plan_approvals"] == 1
+    else:
+        assert lineage["failure"]["reason"] == expected
+        assert lineage["auto_plan_approvals"] == 0
+    if scenario in {"progress", "plan-refusal"}:
+        assert lineage["plan_recoveries"] == 1
