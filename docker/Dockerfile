@@ -21,3 +21,7 @@ RUN pip install --no-cache-dir \
       -i https://mirrors.aliyun.com/pypi/simple/ \
       --trusted-host mirrors.aliyun.com \
       -e . --no-deps
+
+# CI 镜像用于跑 pytest，覆盖基础镜像的 `vllm serve` ENTRYPOINT
+ENTRYPOINT []
+CMD ["/bin/bash"]

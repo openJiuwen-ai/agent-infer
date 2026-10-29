@@ -7,6 +7,8 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     image: agentinfer-ci:${BUILDKITE_COMMIT:-local}
+    # 基础镜像 ENTRYPOINT 是 `vllm serve`，必须清掉，否则命令会被当成 vllm 参数
+    entrypoint: [""]
     working_dir: ${BUILDKITE_BUILD_CHECKOUT_PATH:-/app}
     network_mode: host
     privileged: true

@@ -14,6 +14,7 @@ steps:
     steps:
       - label: "e2e · serve-flag"
         commands:
+          - export AGENTINFER_E2E_MODEL=Qwen/Qwen3-0.6B
           - pytest --timeout=600 -v -m gpu_test --junitxml=junit-e2e.xml tests/agentcache/entrypoints/test_serve_flag_e2e.py
         timeout_in_minutes: 25
         artifact_paths: [junit-e2e.xml]
