@@ -4,6 +4,7 @@ steps:
     plugins:
       - docker-compose#v4.9.0:
           config: docker/docker-compose.yml
+          cli-version: 2
           build: agentinfer-ci
     agents:
       queue: L20-2-small
@@ -19,6 +20,7 @@ steps:
         plugins:
           - docker-compose#v4.9.0:
               config: docker/docker-compose.yml
+              cli-version: 2
               run: agentinfer-ci
         agents:
           queue: L20-2-small
