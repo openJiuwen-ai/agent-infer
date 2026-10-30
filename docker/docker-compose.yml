@@ -7,12 +7,9 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     image: agentinfer-ci:${BUILDKITE_COMMIT:-local}
-    # Base image ENTRYPOINT is `vllm serve`; clear it or commands become vllm args.
-    entrypoint: [""]
-    # Match the Buildkite agent UID/GID so checkout files are not left as root
-    # (which breaks the next checkout cleanup). Interpolated from the agent job
-    # environment (step env / agent env), not from in-container environment.
-    user: "${BUILDKITE_AGENT_UID:-999}:${BUILDKITE_AGENT_GID:-999}"
+    # Runs as root, then ci-entrypoint.sh switches to the UID that owns the
+    # checkout (the working directory). Do not set `user:` here.
+    entrypoint: ["/usr/local/bin/ci-entrypoint.sh"]
     working_dir: ${BUILDKITE_BUILD_CHECKOUT_PATH:-/app}
     network_mode: host
     ipc: host
@@ -28,8 +25,6 @@ services:
       HF_HOME: /home/models
       HF_HUB_CACHE: /home/models/hub
       HOME: /tmp/ci-home
-      USER: buildkite-agent
-      LOGNAME: buildkite-agent
     deploy:
       resources:
         reservations:

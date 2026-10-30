@@ -11,9 +11,6 @@
 
 mirror_hardwares:
   l20_1:
-    env:
-      BUILDKITE_AGENT_UID: "999"
-      BUILDKITE_AGENT_GID: "999"
     agents:
       queue: L20-1-small
     plugins:
@@ -27,9 +24,6 @@ mirror_hardwares:
             - PYTEST_ADDOPTS=-o cache_dir=/tmp/pytest-cache
 
   l20_2:
-    env:
-      BUILDKITE_AGENT_UID: "999"
-      BUILDKITE_AGENT_GID: "999"
     agents:
       queue: L20-2-small
     plugins:
