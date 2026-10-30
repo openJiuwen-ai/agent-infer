@@ -14,8 +14,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from .contracts import AgentPreflightReport
 
-async def check_agent_preflight(agent_type: str, executable: Path) -> None:
+
+async def check_agent_preflight(agent_type: str, executable: Path) -> AgentPreflightReport | None:
     """Run the executable checks owned by one agent runtime.
 
     Raises ``RuntimeError`` when an executable is missing or its help output
@@ -24,7 +26,7 @@ async def check_agent_preflight(agent_type: str, executable: Path) -> None:
 
     from .registry import get_runtime
 
-    await get_runtime(agent_type).preflight(executable)
+    return await get_runtime(agent_type).preflight(executable)
 
 
 async def check_executable_output(
@@ -33,11 +35,12 @@ async def check_executable_output(
     *,
     label: str,
     expected: tuple[str, ...] = (),
-) -> None:
+) -> Path:
     """Run one command and assert it exits 0 and prints expected tokens.
 
     ``expected`` is matched against the combined stdout+stderr so a runtime can
     require help-output flags without constraining which stream carries them.
+    Return the resolved executable path for subsequent capability probes.
     """
 
     resolved = shutil.which(executable)
@@ -63,3 +66,5 @@ async def check_executable_output(
         missing = [value for value in expected if value not in output]
         if missing:
             raise RuntimeError(f"{label} executable help check failed: {executable}; missing {', '.join(missing)}")
+
+    return Path(resolved).resolve()

@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-from agentinfer.agentbench.agents.dsh.hmr_stub import AGENTBENCH_HMR_STUB
 from agentinfer.agentbench.agents.dsh.instance import DshInstance
 
 
@@ -41,15 +40,15 @@ def test_bootstrap_writes_isolated_home_and_settings(tmp_path: Path) -> None:
     assert instance.home_dir == tmp_path / "artifacts" / "dsh-home"
     patch = instance.policy_patch_path.read_text(encoding="utf-8")
     assert patch.startswith("- id: session-title-llm\n  disabled: true\n")
-    assert "forcePlanMode: false" in patch
-    assert "autoApprove: false" in patch
-    assert instance.settings_path.is_file()
-    settings = yaml.safe_load(instance.settings_path.read_text(encoding="utf-8"))
-    assert settings["agent-default-model"] == {"provider": "deepseek-official", "model": "spike-model"}
-    route = settings["llm-deepseek"]
-    assert route["apiKeyEnv"] == "DEEPSEEK_API_KEY"
+    assert "enforcePlanMode: false" in patch
+    assert instance.provider_patch_path.is_file()
+    settings = yaml.safe_load(instance.artifact_settings_path.read_text(encoding="utf-8"))
+    assert settings["agent-default-model"] == {"provider": "agentbench-vllm", "model": "spike-model"}
+    route = settings["llm-pi-ai"]["providers"]["agentbench-vllm"]
+    assert route["apiKeyEnv"] == "AGENTBENCH_DSH_API_KEY"
     assert route["baseURL"] == "http://127.0.0.1:18180/v1"
-    assert route["thinking"] == "disabled"
+    assert route["reasoning"] == "off"
+    assert route["api"] == "openai-completions"
     assert route["retryPolicy"] == {"mode": "normal", "maxRetries": 0}
     assert [model["id"] for model in route["models"]] == ["spike-model"]
 
@@ -63,9 +62,9 @@ def test_bootstrap_writes_settings_snapshot(tmp_path: Path) -> None:
     )
     instance.bootstrap()
 
-    assert (tmp_path / "artifacts" / "settings.yaml").read_text(encoding="utf-8") == instance.settings_path.read_text(
-        encoding="utf-8"
-    )
+    assert yaml.safe_load(instance.provider_patch_path.read_text()) == [
+        {"id": name, "config": config} for name, config in instance.settings.items()
+    ]
     snapshot = json.loads(instance.snapshot_path.read_text(encoding="utf-8"))
     assert snapshot["settings"] == instance.settings
     assert snapshot["environment"]["AGENTBENCH_ROOT_SESSION_ID"] == "root-session-abc"
@@ -84,17 +83,10 @@ def test_bootstrap_writes_profile_policy_and_records_it_in_snapshot(tmp_path: Pa
 
     patch = instance.policy_patch_path.read_text(encoding="utf-8")
     assert patch.startswith("- id: session-title-llm\n  disabled: true\n" + policy_patch)
-    assert "forcePlanMode: false" in patch
-    assert instance.hmr_stub_path.is_file()
-    assert instance.hmr_stub_path.read_text(encoding="utf-8") == AGENTBENCH_HMR_STUB
-    hmr_stub_name = str(instance.hmr_stub_path).replace("\\", "/")
-    assert "    - id: agentbench-hmr-stub\n" in patch
-    assert f"      name: {hmr_stub_name}\n" in patch
-    assert patch.index("agentbench-hmr-stub") < patch.index("agentbench-bridge")
+    assert "enforcePlanMode: false" in patch
+    assert "agentbench-hmr-stub" not in patch
     snapshot = json.loads(instance.snapshot_path.read_text(encoding="utf-8"))
-    assert "agentbench-hmr-stub" in snapshot["policy_patch"]
     assert "agentbench-bridge" in snapshot["policy_patch"]
-    assert f"name: {hmr_stub_name}" in snapshot["policy_patch"]
 
 
 def test_bridge_mounts_lineage_for_every_profile(tmp_path: Path) -> None:
@@ -113,12 +105,11 @@ def test_bridge_mounts_lineage_for_every_profile(tmp_path: Path) -> None:
         assert "AsyncLocalStorage" in source
         assert "llm/stream" in source
         assert "agentic_context" in source
-        assert "q.options" in source
+        assert "plan-review" in source
         patch = instance.policy_patch_path.read_text(encoding="utf-8")
         bridge_name = str(instance.bridge_path).replace("\\", "/")
         assert f"name: {bridge_name}" in patch
-        assert f"forcePlanMode: {str(enforce_plan_mode).lower()}" in patch
-        assert f"autoApprove: {str(enforce_plan_mode).lower()}" in patch
+        assert f"enforcePlanMode: {str(enforce_plan_mode).lower()}" in patch
 
 
 def test_bridge_injects_concurrent_session_lineage(tmp_path: Path, node_executable: str) -> None:
@@ -153,8 +144,9 @@ globalThis.fetch = async (request) => {
   sent.push(JSON.parse(await request.text()))
   return new Response('{}', { status: 200 })
 }
-const dispose = apply(ctx)
-const created = handlers.get('agent/created')
+const dispose = apply(ctx, { apiBaseURL: 'http://proxy' })
+const onCreated = handlers.get('agent/created')
+const created = ({agent}) => onCreated({agent: {ctx: {tools: {restrict: () => {}, guard: () => {}}, systemPrompt: {section: () => {}}}, ...agent}})
 created({ agent: { session: { header: { id: 'root-dsh', delegationDepth: 0 } } } })
 created({ agent: { session: { header: { id: 'child-dsh', parentSession: 'root-dsh', delegationDepth: 1 } } } })
 const stream = handlers.get('llm/stream')
@@ -238,9 +230,9 @@ const originalFetch = async (request) => {
   return new Response(JSON.stringify(payload), { status: 200 })
 }
 globalThis.fetch = originalFetch
-const firstDispose = apply(ctx)
+const firstDispose = apply(ctx, { apiBaseURL: 'http://proxy' })
 const firstFetch = globalThis.fetch
-const secondDispose = apply(ctx)
+const secondDispose = apply(ctx, { apiBaseURL: 'http://proxy' })
 const secondFetch = globalThis.fetch
 const created = handlers.find(([event]) => event === 'agent/created')[1]
 created({ agent: { session: { header: { id: 'root-dsh', delegationDepth: 0 } } } })
@@ -297,8 +289,8 @@ def test_environment_isolates_home_and_forces_autonomy(tmp_path: Path, monkeypat
 
     assert env["DSH_HOME"] == str(tmp_path / "artifacts" / "dsh-home")
     assert env["DSH_PERMISSION_MODE"] == "workspace-write"
-    assert env["DEEPSEEK_API_KEY"] == "agentbench"
-    assert env["DEEPSEEK_BASE_URL"] == "http://127.0.0.1:18180/v1"
+    assert env["AGENTBENCH_DSH_API_KEY"] == "agentbench"
+    assert "DEEPSEEK_BASE_URL" not in env
     assert env["AGENTBENCH_ROOT_SESSION_ID"] == "root-session"
 
 
@@ -326,7 +318,7 @@ const services = new Map()
 const handlers = new Map()
 function runScenario(name, ctx, created) {
   try {
-    const dispose = apply(ctx, { forcePlanMode: true, autoApprove: true })
+    const dispose = apply(ctx, { enforcePlanMode: true })
     created()
     dispose()
     outcomes.push([name, 'ok'])
@@ -339,11 +331,11 @@ const base = {
   get: (name) => services.get(name),
   on: (_event, handler) => { handlers.set(_event, handler); return () => handlers.delete(_event) },
 }
-// userQuestions is missing: autoApprove fails at plugin apply time.
+// userQuestions is missing: enforcePlanMode fails at plugin apply time.
 runScenario('no-user-questions', base, () => undefined)
 services.set('userQuestions', { registerProvider: () => undefined })
-// planMode is missing: forcePlanMode vetoes agent publication at created time.
-const created = () => handlers.get('agent/created')({ agent: { session: { header: { id: 'lead', delegationDepth: 0 } } } })
+// planMode is missing: enforcePlanMode vetoes agent publication at created time.
+const created = () => handlers.get('agent/created')({ agent: { id: 'lead', ctx: { tools: { guard: () => {} } }, session: { header: { id: 'lead', delegationDepth: 0 } } } })
 runScenario('no-plan-mode', base, created)
 services.set('planMode', { set: () => { throw new Error('set boom') } })
 runScenario('set-throws', base, created)
@@ -392,7 +384,7 @@ const ctx = {
   get: () => undefined,
   on: () => () => undefined,
 }
-apply(ctx)
+apply(ctx, { apiBaseURL: 'http://proxy' })
 console.log('ok')
 """,
         encoding="utf-8",
@@ -407,3 +399,137 @@ console.log('ok')
     )
 
     assert result.stdout.strip() == "ok"
+
+
+@pytest.mark.parametrize(
+    "scenario,expected",
+    [
+        ("progress", None),
+        ("repeat", "subagent_read_loop"),
+        ("steps", "subagent_step_limit"),
+        ("lead-steps", "agent_step_limit"),
+        ("validation-loop", "validation_error_loop"),
+        ("inactive-plan", "validation_error_loop"),
+        ("validation-recovery", None),
+        ("child-failure", "subagent_failed"),
+        ("plan-refusal", "plan_not_approved"),
+    ],
+)
+def test_bridge_bounds_exploration_and_plan_recovery(tmp_path, node_executable, scenario, expected):
+    instance = DshInstance(
+        artifact_dir=tmp_path / "artifacts",
+        api_base_url="http://proxy",
+        model="model",
+        session_id="task",
+        enforce_plan_mode=True,
+    )
+    instance.bootstrap()
+    harness = tmp_path / "guards.mjs"
+    harness.write_text(
+        """\
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+const { apply } = await import(process.argv[2])
+const scenario = process.argv[3]
+const handlers = new Map()
+const guards = new Map()
+const modes = new Map()
+const reminders = []
+const planMode = { set: (agent, active) => modes.set(agent.id, active), get: agent => ({ active: modes.get(agent.id) }) }
+const ctx = {
+  get: name => name === 'planMode' ? planMode : {},
+  on: (name, handler) => { handlers.set(name, handler); return () => handlers.delete(name) },
+}
+const dispose = apply(ctx, { enforcePlanMode: true, lineagePath: process.argv[4] })
+function agent(id, parentSession) {
+  const a = {
+    id, session: { header: { id, parentSession, delegationDepth: parentSession ? 1 : 0 } },
+    ctx: { tools: { restrict: () => {}, guard: guard => guards.set(id, guard) }, systemPrompt: { section: () => {} } },
+    inject: message => reminders.push(message),
+  }
+  handlers.get('agent/created')({ agent: a })
+  return a
+}
+const root = agent('root')
+const child = agent('child', 'root')
+const pre = agent => handlers.get('agent/pre-step')({ agent }, async () => ({ kind: 'enter', messages: [] }))
+const stop = () => handlers.get('agent/turn-stopping')({ agent: root })
+const read = offset => guards.get('child')({ name: 'read', arguments: { file_path: 'calc.py', offset, limit: 20 } })
+const toolResult = (name, error, code = 'INVALID_ARGS') => handlers.get('tools/result')({ agent: root, name }, error
+  ? { isError: true, error: { message: error, info: { code } } }
+  : { isError: false })
+let caught
+try {
+  if (scenario === 'validation-recovery') {
+    for (let i = 0; i < 3; i++) toolResult('exit_plan_mode', 'missing plan')
+    for (let i = 0; i < 8; i++) toolResult('write')
+    toolResult('exit_plan_mode', 'missing plan')
+    await pre(root)
+  }
+  if (scenario === 'lead-steps') {
+    for (let i = 0; i < 200; i++) await pre(root)
+    await pre(root)
+  } else if (scenario === 'validation-loop' || scenario === 'inactive-plan') {
+    if (scenario === 'inactive-plan') modes.set('root', false)
+    for (let i = 0; i < 4; i++) {
+      const message = scenario === 'inactive-plan'
+        ? guards.get('root')({ name: 'exit_plan_mode' }) : 'missing plan'
+      assert.equal(typeof message, 'string')
+      toolResult('exit_plan_mode', message, scenario === 'inactive-plan' ? 'DENIED' : 'INVALID_ARGS')
+      toolResult('write')
+    }
+    await pre(root)
+  } else if (scenario === 'steps') {
+    for (let i = 0; i < 100; i++) await pre(child)
+    await pre(child)
+  } else if (scenario === 'repeat') {
+    for (let i = 0; i < 8; i++) {
+      await pre(child)
+      if (read(i % 2)) break
+    }
+    await pre(root)
+  } else if (scenario === 'child-failure') {
+    handlers.get('subagent/end')({ id: 'child', stopReason: 'max-tokens' })
+    await pre(root)
+  } else {
+    for (let i = 0; i < 10; i++) { await pre(child); assert.equal(read(i), undefined) }
+    stop()
+    assert.equal(reminders.length, 0, 'pending exploration must not be treated as complete')
+    assert.match(guards.get('root')({ name: 'exit_plan_mode' }), /Wait for the Explore/)
+    handlers.get('subagent/end')({ id: 'child', stopReason: 'completed' })
+    stop()
+    assert.equal(reminders.length, 1)
+    assert.match(reminders[0].content[0].text, /exit_plan_mode/)
+    assert.equal(modes.get('root'), true, 'a reminder must not approve the plan')
+    if (scenario === 'plan-refusal') stop()
+    else {
+      assert.equal(guards.get('root')({ name: 'exit_plan_mode' }), undefined)
+      await handlers.get('user-questions/request')({ questions: [{ id: 'plan', intent: { kind: 'plan-review', approve: 'yes' } }] })
+      modes.set('root', false)
+      stop()
+    }
+  }
+} catch (error) { caught = error.message }
+const result = JSON.parse(readFileSync(process.argv[4], 'utf8'))
+assert.equal(Boolean(caught), !['progress', 'validation-recovery'].includes(scenario))
+dispose()
+assert.equal(handlers.size, 0)
+console.log(JSON.stringify(result))
+"""
+    )
+    result = subprocess.run(
+        [node_executable, str(harness), instance.bridge_path.as_uri(), scenario, str(tmp_path / "lineage.json")],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=os.environ | {"AGENTBENCH_ROOT_SESSION_ID": "task"},
+    )
+    lineage = json.loads(result.stdout)
+    if expected is None:
+        assert "failure" not in lineage
+        assert lineage["auto_plan_approvals"] == 1
+    else:
+        assert lineage["failure"]["reason"] == expected
+        assert lineage["auto_plan_approvals"] == 0
+    if scenario in {"progress", "plan-refusal"}:
+        assert lineage["plan_recoveries"] == 1

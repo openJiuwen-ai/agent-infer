@@ -9,6 +9,11 @@ vllm bench serve --agentinfer
 
 Other `vllm` commands are delegated unchanged to the upstream vLLM CLI.
 
+For post-run correctness, use `evaluate --result-path RUN_DIR --config YAML`
+and `compare-correctness --baseline JSON --candidate JSON [--max-regressions N]`.
+See [Evaluate SWE-bench](../how-to/evaluate-swebench.md) for configuration,
+artifacts and exit codes.
+
 ## `prepare`
 
 Prepare benchmark dataset inputs.

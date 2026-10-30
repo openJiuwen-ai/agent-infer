@@ -5,6 +5,7 @@
 
 import argparse
 import asyncio
+import json
 import logging
 import sys
 import types
@@ -251,6 +252,16 @@ def _parser() -> argparse.ArgumentParser:
     compare.add_argument("--candidate", type=Path, nargs="+", required=True)
     compare.add_argument("--confidence", type=float, default=0.95)
     compare.add_argument("--json", action="store_true")
+
+    evaluate = commands.add_parser("evaluate", help="Evaluate completed SWE-bench tasks using the official harness")
+    evaluate.add_argument("--result-path", type=Path, required=True)
+    evaluate.add_argument("--config", type=Path, required=True)
+    evaluate.add_argument("--output-dir", type=Path)
+
+    correctness = commands.add_parser("compare-correctness", help="Compare finalized SWE-bench correctness results")
+    correctness.add_argument("--baseline", type=Path, required=True)
+    correctness.add_argument("--candidate", type=Path, required=True)
+    correctness.add_argument("--max-regressions", type=int, default=0)
     return parser
 
 
@@ -260,6 +271,8 @@ def main(argv: list[str] | None = None, *, cli_metadata: dict[str, object] | Non
     _configure_logging()
     parser = _parser()
     args = parser.parse_args(argv)
+    if args.command in {"evaluate", "compare-correctness"}:
+        return _correctness(args, parser)
     if args.command == "replay" and args.config is None:
         missing = [flag for dest, flag in _REPLAY_REQUIRED_WITHOUT_CONFIG if getattr(args, dest) is None]
         if missing:
@@ -283,6 +296,33 @@ def main(argv: list[str] | None = None, *, cli_metadata: dict[str, object] | Non
     else:
         _prepare(args)
     return 0
+
+
+def _correctness(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    from pydantic import ValidationError
+
+    from .evaluation.compare import compare_correctness
+    from .evaluation.config import load_evaluation_config
+    from .evaluation.runner import evaluate
+
+    try:
+        if args.command == "evaluate":
+            try:
+                config = load_evaluation_config(args.config)
+            except (ValidationError, OSError, ValueError) as exc:
+                parser.error(str(exc))
+            output, code = evaluate(args.result_path, config, args.output_dir)
+            logger.info("Correctness results: %s", output / "correctness.json")
+            sys.stdout.write((output / "correctness.json").read_text(encoding="utf-8") + "\n")
+            return code
+        if args.max_regressions < 0:
+            parser.error("--max-regressions must be nonnegative")
+        report = compare_correctness(args.baseline, args.candidate, args.max_regressions)
+        sys.stdout.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+        return {"passed": 0, "failed": 1, "insufficient_evidence": 2}[report["status"]]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        logger.error("Correctness operation failed: %s", exc)
+        return 1
 
 
 async def _run(args: argparse.Namespace, cli_metadata: dict[str, object]) -> None:

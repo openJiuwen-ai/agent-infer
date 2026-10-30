@@ -350,8 +350,13 @@ def test_preflight_failure_skips_remote_finalizers(tmp_path: Path, monkeypatch: 
     monkeypatch.setattr(runner, "check_preflight", fail)
     monkeypatch.setattr(runner, "capture_vllm_metrics", forbidden)
 
+    config = _run_config(tmp_path)
     with pytest.raises(RuntimeError, match="preflight failed"):
-        asyncio.run(runner.run_benchmark(_run_config(tmp_path)))
+        asyncio.run(runner.run_benchmark(config))
+    manifest = json.loads((config.experiment.result_dir / "manifest.json").read_text())
+    capture = next(item for item in manifest["evidence"] if item["source"] == "claude_runtime")
+    assert capture["reason"] == "preflight failed"
+    assert not capture["available"]
 
 
 def test_run_timeout_covers_setup_and_still_finalizes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

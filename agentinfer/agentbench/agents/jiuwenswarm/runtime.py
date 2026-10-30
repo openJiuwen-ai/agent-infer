@@ -19,6 +19,7 @@ class JiuwenSwarmRuntime:
 
     agent_type = "jiuwenswarm"
     required_endpoint = REQUIRED_ENDPOINT
+    supports_api_key_env = True
     usage_observer_class = _OpenAISSEUsageObserver
 
     def get_profile(self, name: str) -> AgentProfile:
