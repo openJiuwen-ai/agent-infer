@@ -82,3 +82,8 @@ BenchKit 将每次运行写入一个全新的结果目录。原始请求事实�
 
 Replay 额外写出 `replay-source-analysis.json`、`replay-plan.json` 和 `replay-execution.json`；失败时写出
 `replay-error.json`。这些文件记录规划、执行和审计事实，不代表任务正确性。详见[回放指南](../how-to/run-trace-replay.md)。
+
+`replay-plan.json` 同时也是可加载的产物：`ReplayPlan.load(path)`（或 `ReplayPlan.from_dict` 加
+`validate_loaded_plan`）能重建并结构化校验已写出的计划，因此它可作为自包含输入用于检视，或在后续的 runner
+路径中恢复执行而无需重新规划。加载只校验产物本身（引用闭包、`send_after` 无环、目标合法性），不重新派生
+`workload_fingerprint`/`plan_namespace`——二者内嵌构建期 workload 配置。
