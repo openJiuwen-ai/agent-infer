@@ -1,6 +1,6 @@
 FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/vllm/vllm-openai:v0.23.0
 
-# 依赖层放 COPY 之前：内容不变 → 跨 PR 层缓存全命中（vllm-omni 的 deps-cache 思路）
+# Install deps before COPY so unchanged deps hit layer cache across PRs (vllm-omni deps-cache pattern).
 RUN pip install --no-cache-dir \
       -i https://mirrors.aliyun.com/pypi/simple/ \
       --trusted-host mirrors.aliyun.com \
@@ -22,6 +22,6 @@ RUN pip install --no-cache-dir \
       --trusted-host mirrors.aliyun.com \
       -e . --no-deps
 
-# CI 镜像用于跑 pytest，覆盖基础镜像的 `vllm serve` ENTRYPOINT
+# CI image runs pytest; clear the base image `vllm serve` ENTRYPOINT.
 ENTRYPOINT []
 CMD ["/bin/bash"]

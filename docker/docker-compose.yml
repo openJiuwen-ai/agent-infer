@@ -1,14 +1,18 @@
-# CI 服务：镜像按 commit 打 tag；运行时把 Buildkite checkout 自挂载到
-# 自身路径并把 workdir 指过去 → 裸 pytest 跑在 PR 代码上，
-# junit 等产物落在 checkout 里供 artifact_paths 收走。
+# CI service: tag the image by commit; bind-mount the Buildkite checkout onto itself
+# and set workdir there so bare pytest runs against PR code, and artifacts such as
+# junit land in the checkout for artifact_paths to collect.
 services:
   agentinfer-ci:
     build:
       context: ..
       dockerfile: docker/Dockerfile
     image: agentinfer-ci:${BUILDKITE_COMMIT:-local}
-    # 基础镜像 ENTRYPOINT 是 `vllm serve`，必须清掉，否则命令会被当成 vllm 参数
+    # Base image ENTRYPOINT is `vllm serve`; clear it or commands become vllm args.
     entrypoint: [""]
+    # Match the Buildkite agent UID/GID so checkout files are not left as root
+    # (which breaks the next checkout cleanup). Interpolated from the agent job
+    # environment (step env / agent env), not from in-container environment.
+    user: "${BUILDKITE_AGENT_UID:-999}:${BUILDKITE_AGENT_GID:-999}"
     working_dir: ${BUILDKITE_BUILD_CHECKOUT_PATH:-/app}
     network_mode: host
     ipc: host
