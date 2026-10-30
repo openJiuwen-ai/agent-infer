@@ -1,0 +1,36 @@
+# Hardware presets. upload_pipeline.py expands `mirror_hardwares: <name>`
+# into agents / plugins / env, then strips the name before Buildkite sees it.
+#
+# l20_1 and l20_2 share one compose file. Card count is the queue, not a
+# CUDA_VISIBLE_DEVICES value in the repo:
+#   l20_1: one GPU per agent. Run two agents on this queue, each with its own
+#          CUDA_VISIBLE_DEVICES, so two PRs can take one card each.
+#   l20_2: both GPUs. Use a different queue so it does not run on a 1-GPU agent.
+#          Buildkite will not wait for both 1-GPU agents to go idle; do not
+#          point this queue at the same agents as l20_1.
+
+mirror_hardwares:
+  l20_1:
+    agents:
+      queue: L20-1-small
+    plugins:
+      - docker-compose#v4.9.0:
+          config: docker/docker-compose.yml
+          cli-version: 2
+          run: agentinfer-ci
+          environment:
+            - HOME=/tmp/ci-home
+            # Keep pytest cache out of the checkout (root-owned cache breaks agent cleanup).
+            - PYTEST_ADDOPTS=-o cache_dir=/tmp/pytest-cache
+
+  l20_2:
+    agents:
+      queue: L20-2-small
+    plugins:
+      - docker-compose#v4.9.0:
+          config: docker/docker-compose.yml
+          cli-version: 2
+          run: agentinfer-ci
+          environment:
+            - HOME=/tmp/ci-home
+            - PYTEST_ADDOPTS=-o cache_dir=/tmp/pytest-cache

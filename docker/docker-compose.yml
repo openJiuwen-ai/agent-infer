@@ -1,0 +1,34 @@
+# CI service: tag the image by commit; bind-mount the Buildkite checkout onto itself
+# and set workdir there so bare pytest runs against PR code, and artifacts such as
+# junit land in the checkout for artifact_paths to collect.
+services:
+  agentinfer-ci:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: agentinfer-ci:${BUILDKITE_COMMIT:-local}
+    # Runs as root, then ci-entrypoint.sh switches to the UID that owns the
+    # checkout (the working directory). Do not set `user:` here.
+    entrypoint: ["/usr/local/bin/ci-entrypoint.sh"]
+    working_dir: ${BUILDKITE_BUILD_CHECKOUT_PATH:-/app}
+    network_mode: host
+    ipc: host
+    privileged: true
+    shm_size: 64gb
+    cap_add: [SYS_PTRACE]
+    security_opt: [seccomp:unconfined]
+    volumes:
+      - /home:/home
+      - ${BUILDKITE_BUILD_CHECKOUT_PATH:-/app}:${BUILDKITE_BUILD_CHECKOUT_PATH:-/app}
+    environment:
+      HF_ENDPOINT: https://hf-mirror.com
+      HF_HOME: /home/models
+      HF_HUB_CACHE: /home/models/hub
+      HOME: /tmp/ci-home
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

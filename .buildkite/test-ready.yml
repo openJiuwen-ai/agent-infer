@@ -1,0 +1,34 @@
+# Uploaded by .buildkite/pipeline.yml. `mirror_hardwares` is not a Buildkite key;
+# upload_pipeline.py expands it from hardware.yml.
+
+steps:
+  - label: ":docker: Build CI image"
+    key: ci-image
+    mirror_hardwares: l20_1
+    docker_compose_build: agentinfer-ci
+
+  - group: ":card_index_dividers: GPU Tests"
+    depends_on: ci-image
+    steps:
+      - label: "e2e · serve-flag"
+        commands:
+          - AGENTINFER_E2E_MODEL=Qwen/Qwen3-0.6B pytest -sv -m gpu_test tests/agentcache/entrypoints/test_serve_flag_e2e.py
+        timeout_in_minutes: 25
+        mirror_hardwares: l20_1
+
+  - group: ":card_index_dividers: Unit Tests"
+    depends_on: ci-image
+    steps:
+      - label: "ut"
+        commands:
+          - pytest tests -sv --ignore=tests/e2e --ignore=tests/agentcache/core -m "not gpu_test and not e2e_perf"
+        timeout_in_minutes: 20
+        mirror_hardwares: l20_1
+
+  - wait
+  - label: ":broom: Cleanup"
+    mirror_hardwares: l20_1
+    # Host docker prune. Do not wrap this step in the CI container.
+    host_only: true
+    commands:
+      - docker image prune -f
