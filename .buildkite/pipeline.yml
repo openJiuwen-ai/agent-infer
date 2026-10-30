@@ -1,40 +1,7 @@
+# Bootstrap. Buildkite runs this file directly. It expands test-ready.yml
+# (mirror_hardwares names) and uploads the concrete steps onto this build.
 steps:
-  - label: ":docker: Build CI image"
-    key: ci-image
-    plugins:
-      - docker-compose#v4.9.0:
-          config: docker/docker-compose.yml
-          cli-version: 2
-          build: agentinfer-ci
+  - label: ":pipeline: Upload GPU pipeline"
+    command: python3 .buildkite/upload_pipeline.py .buildkite/test-ready.yml
     agents:
-      queue: L20-2-small
-
-  - group: ":card_index_dividers: GPU Tests"
-    depends_on: ci-image
-    steps:
-      - label: "e2e · serve-flag"
-        env:
-          BUILDKITE_AGENT_UID: "999"
-          BUILDKITE_AGENT_GID: "999"
-        commands:
-          - pytest -sv -m gpu_test tests/agentcache/entrypoints/test_serve_flag_e2e.py
-        timeout_in_minutes: 25
-        plugins:
-          - docker-compose#v4.9.0:
-              config: docker/docker-compose.yml
-              cli-version: 2
-              run: agentinfer-ci
-              environment:
-                - AGENTINFER_E2E_MODEL=Qwen/Qwen3-0.6B
-                - HOME=/tmp/ci-home
-                # Keep pytest cache out of the checkout (root-owned cache breaks agent cleanup)
-                - PYTEST_ADDOPTS=-o cache_dir=/tmp/pytest-cache
-        agents:
-          queue: L20-2-small
-
-  - wait: ~
-  - label: ":broom: Cleanup"
-    commands:
-      - docker image prune -f
-    agents:
-      queue: L20-2-small
+      queue: L20-1-small

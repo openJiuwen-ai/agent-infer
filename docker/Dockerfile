@@ -5,7 +5,9 @@ RUN pip install --no-cache-dir \
       -i https://mirrors.aliyun.com/pypi/simple/ \
       --trusted-host mirrors.aliyun.com \
       'huggingface-hub>=1.5.0,<2.0' \
-      datasets matplotlib zstandard pytest pytest-timeout \
+      datasets matplotlib zstandard \
+      pytest pytest-timeout pytest-html pytest-xdist \
+      'setuptools>=68,<85' wheel \
  && pip install --no-cache-dir \
       -i https://mirrors.aliyun.com/pypi/simple/ \
       --trusted-host mirrors.aliyun.com \
