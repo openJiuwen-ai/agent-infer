@@ -27,6 +27,9 @@ services:
       HF_ENDPOINT: https://hf-mirror.com
       HF_HOME: /home/models
       HF_HUB_CACHE: /home/models/hub
+      HOME: /tmp
+      USER: buildkite-agent
+      LOGNAME: buildkite-agent
     deploy:
       resources:
         reservations:

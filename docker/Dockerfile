@@ -13,7 +13,15 @@ RUN pip install --no-cache-dir \
 
 ENV HF_ENDPOINT=https://hf-mirror.com \
     HF_HOME=/home/models \
-    HF_HUB_CACHE=/home/models/hub
+    HF_HUB_CACHE=/home/models/hub \
+    HOME=/tmp \
+    USER=buildkite-agent \
+    LOGNAME=buildkite-agent
+
+# Compose runs as the agent UID. That UID is not in the base image passwd,
+# and libraries such as torch call getpass.getuser() -> getpwuid().
+RUN groupadd -g 999 -o buildkite-agent \
+ && useradd -u 999 -g 999 -o -M -d /tmp -s /bin/bash buildkite-agent
 
 WORKDIR /app
 COPY . .
