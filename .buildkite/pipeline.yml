@@ -4,4 +4,4 @@ steps:
   - label: ":pipeline: Upload GPU pipeline"
     command: python3 .buildkite/upload_pipeline.py .buildkite/test-ready.yml
     agents:
-      queue: L20-1-small
+      queue: L20-2-small
