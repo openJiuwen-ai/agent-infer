@@ -31,7 +31,10 @@ for extra in video render; do
 done
 
 mkdir -p /tmp/ci-home
-chown "$uid:$gid" /tmp/ci-home
+# Image builds run as root with HOME=/tmp/ci-home and leave root-owned
+# subdirectories such as .cache. The process later drops privileges, so the
+# whole tree must be owned by that user or flashinfer cannot create its workspace.
+chown -R "$uid:$gid" /tmp/ci-home
 export HOME=/tmp/ci-home
 export USER="$name"
 export LOGNAME="$name"
