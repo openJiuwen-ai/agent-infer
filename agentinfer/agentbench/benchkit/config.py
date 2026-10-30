@@ -23,6 +23,7 @@ class ExperimentConfig(StrictModel):
     task_timeout_seconds: int = Field(3600, ge=1, json_schema_extra={"cli": {"flag": "--timeout"}})
     run_timeout_seconds: int | None = Field(None, ge=1)
     patch_flush_seconds: int = Field(15, ge=0)
+    cleanup_timeout_seconds: float = Field(10.0, gt=0, allow_inf_nan=False)
     prompt_delivery_timeout_seconds: int = Field(30, ge=1)
 
 
@@ -45,6 +46,8 @@ class AgentConfig(StrictModel):
     )
     tmux_startup_seconds: float = Field(2.0, ge=0)
     terminal_capture_interval_seconds: int = Field(30, ge=1)
+    context_window: int = Field(262144, ge=1)
+    max_tokens: int = Field(8192, ge=1)
 
     @model_validator(mode="after")
     def validate_runtime_profile(self) -> "AgentConfig":
@@ -117,15 +120,21 @@ class AgentBenchConfig(StrictModel):
 
     @model_validator(mode="after")
     def validate_agent_endpoint(self) -> "AgentBenchConfig":
-        """Require the model protocol used by the selected runtime."""
+        """Validate the selected runtime's backend protocol and authentication."""
 
         from ..agents.registry import get_runtime
 
-        required_endpoint = get_runtime(self.agent.type).required_endpoint
+        runtime = get_runtime(self.agent.type)
+        required_endpoint = runtime.required_endpoint
         if self.backend.endpoint != required_endpoint:
             raise ValueError(
                 f"backend.endpoint {self.backend.endpoint!r} is invalid for "
                 f"agent.type {self.agent.type!r}; expected {required_endpoint!r}"
+            )
+        if self.backend.api_key_env and not runtime.supports_api_key_env:
+            raise ValueError(
+                f"agent.type {self.agent.type!r} does not yet support backend.api_key_env; "
+                "use an unauthenticated local backend"
             )
         return self
 

@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -17,8 +18,13 @@ import pytest
 from agentinfer.agentbench.agents.contracts import AgentRunOutcome, AgentRunRequest
 from agentinfer.agentbench.agents.dsh.runner import run_dsh
 from agentinfer.agentbench.benchkit.dataset import Task
+from tests.agentbench.helpers.dsh_mock_server import write_chat_completion_stream
 
-pytestmark = pytest.mark.skipif(os.name != "posix", reason="DSH native Linux sandbox is unavailable")
+pytestmark = [
+    pytest.mark.dsh_runtime,
+    pytest.mark.timeout(180),
+    pytest.mark.skipif(os.name != "posix", reason="DSH native Linux sandbox is unavailable"),
+]
 
 
 class _CanaryServer(ThreadingHTTPServer):
@@ -33,6 +39,12 @@ class _CanaryHandler(BaseHTTPRequestHandler):
         tool_results = [message for message in body.get("messages", []) if message.get("role") == "tool"]
         index = len(tool_results)
         if index < len(self.server.commands):  # type: ignore[attr-defined]
+            command = self.server.commands[index]  # type: ignore[attr-defined]
+            tool_name, arguments = (
+                command
+                if isinstance(command, tuple)
+                else ("bash", {"command": command, "description": f"Run sandbox canary {index}"})
+            )
             delta = {
                 "role": "assistant",
                 "tool_calls": [
@@ -41,13 +53,8 @@ class _CanaryHandler(BaseHTTPRequestHandler):
                         "id": f"call-{index}",
                         "type": "function",
                         "function": {
-                            "name": "bash",
-                            "arguments": json.dumps(
-                                {
-                                    "command": self.server.commands[index],  # type: ignore[attr-defined]
-                                    "description": f"Run sandbox canary {index}",
-                                }
-                            ),
+                            "name": tool_name,
+                            "arguments": json.dumps(arguments),
                         },
                     }
                 ],
@@ -73,21 +80,17 @@ class _CanaryHandler(BaseHTTPRequestHandler):
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
         ]
-        payload = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
-        encoded = payload.encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Content-Length", str(len(encoded)))
-        self.end_headers()
-        self.wfile.write(encoded)
+        write_chat_completion_stream(self, chunks)
 
     def log_message(self, _format: str, *_args: object) -> None:
         return
 
 
 @pytest.mark.cpu_test
-def test_dsh_native_workspace_sandbox_blocks_escape_canaries(tmp_path: Path) -> None:
-    executable = shutil.which("dsh")
+def test_dsh_native_workspace_sandbox_blocks_escape_canaries(persistent_canary_root: Path) -> None:
+    # Landlock can permit /tmp; use persistent sibling paths for this assertion.
+    tmp_path = persistent_canary_root
+    executable = os.environ.get("DSH_TEST_EXECUTABLE") or shutil.which("dsh")
     if executable is None:
         pytest.skip("dsh is not installed")
     config = subprocess.run(
@@ -105,7 +108,7 @@ def test_dsh_native_workspace_sandbox_blocks_escape_canaries(tmp_path: Path) -> 
     artifacts = tmp_path / "artifacts"
     workspace.mkdir()
     external.mkdir()
-    targets = {name: external / f"{name}.txt" for name in ("relative", "absolute", "symlink")}
+    targets = {name: external / f"{name}.txt" for name in ("relative", "absolute", "symlink", "file-tool")}
     for target in targets.values():
         target.write_text("original\n", encoding="utf-8")
     link = workspace / "escape-link.txt"
@@ -124,6 +127,7 @@ def test_dsh_native_workspace_sandbox_blocks_escape_canaries(tmp_path: Path) -> 
         "printf relative-escape > ../external/relative.txt",
         f"printf absolute-escape > {targets['absolute']}",
         f"printf symlink-escape > {link}",
+        ("write", {"file_path": str(targets["file-tool"]), "content": "file-tool-escape"}),
     ]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -154,7 +158,13 @@ def test_dsh_native_workspace_sandbox_blocks_escape_canaries(tmp_path: Path) -> 
     assert (workspace / "workspace-ok.txt").read_text(encoding="utf-8") == "workspace-ok"
     assert all(target.read_text(encoding="utf-8") == "original\n" for target in targets.values())
     assert link.is_symlink()
-    assert len(server.requests) == 5
+    assert len(server.requests) == 6
     assert (artifacts / "dsh-launch-command.json").exists()
     assert (artifacts / "transcript.jsonl").exists()
     assert list((artifacts / "dsh-sessions").glob("session-*.jsonl"))
+
+
+@pytest.fixture
+def persistent_canary_root():
+    with tempfile.TemporaryDirectory(prefix="dsh-canary-", dir=Path.home()) as directory:
+        yield Path(directory)
