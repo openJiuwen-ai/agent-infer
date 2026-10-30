@@ -27,6 +27,8 @@ steps:
               environment:
                 - AGENTINFER_E2E_MODEL=Qwen/Qwen3-0.6B
                 - HOME=/tmp
+                # Keep pytest cache out of the checkout (root-owned cache breaks agent cleanup)
+                - PYTEST_ADDOPTS=-o cache_dir=/tmp/pytest-cache
         agents:
           queue: L20-2-small
 
