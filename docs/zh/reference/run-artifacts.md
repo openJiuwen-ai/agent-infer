@@ -82,3 +82,31 @@ BenchKit 将每次运行写入一个全新的结果目录。原始请求事实�
 
 Replay 额外写出 `replay-source-analysis.json`、`replay-plan.json` 和 `replay-execution.json`；失败时写出
 `replay-error.json`。这些文件记录规划、执行和审计事实，不代表任务正确性。详见[回放指南](../how-to/run-trace-replay.md)。
+
+DSH 0.2 额外保存 `evidence/dsh-runtime.json`（版本、能力、安装锁哈希），以及任务级的
+`dsh-effective-config.yaml`、`dsh-lineage.json`、`dsh-run-status.json` 和 `dsh-processes.jsonl`。
+`dsh-sessions/raw/index.json` 建立原始与解码日志的索引；`transcript.jsonl` 按 stdout 的主会话 ID 精确选择。
+`dsh-launch-command.json` 不包含经 stdin 发送的 prompt。超时、取消时尽力保留日志和补丁；外层 cancelled
+结果的 `has_patch` 仍可能为 false，实际导出状态以 `dsh-run-status.json` 为准。身份校验不会改写 `requests.jsonl`。
+
+流式请求的 SDK 在收到 OpenAI `[DONE]` 或 Anthropic `message_stop` 后关闭 HTTP 连接，记录为成功；
+结束标记之前的取消仍记录为错误。
+
+### DSH 执行控制证据
+
+`dsh-lineage.json` 中的 `plan_recoveries` 记录计划恢复提醒次数，最多为 1。
+触发执行保护时，`failure` 保存 `reason`、`session_id` 和 `message`；
+`dsh-run-status.json` 保留相同诊断，`result.json.termination_reason` 给出最终分类。
+执行超时或外部取消仍保留自身的最终分类，原始会话日志和已生成的补丁继续按现有收尾流程采集。
+
+| 分类 | 含义 |
+| --- | --- |
+| `agent_step_limit` | 主 Agent 超出 200 步执行预算。 |
+| `subagent_step_limit` | 子 Agent 超出 100 步探索预算。 |
+| `subagent_read_loop` | 最近 8 次工具调用中，相同读取出现第 4 次。 |
+| `subagent_failed` | 子 Agent 以非 `completed` 的状态结束。 |
+| `plan_not_approved` | 计划协议未完成，包括一次恢复提醒后仍未获批。 |
+| `validation_error_loop` | 最近 8 次工具结果中，同类参数错误或计划模式关闭后的退出调用错误达到 4 次。 |
+| `max_tokens` | 模型或 DSH 回合报告长度截断。 |
+
+会话收集遍历任务独立 `DSH_HOME` 中的全部会话，以 session ID 和父子关系校验身份；目录名称和日志修改时间不参与主会话选择。

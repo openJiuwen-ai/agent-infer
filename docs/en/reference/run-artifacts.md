@@ -87,3 +87,34 @@ execution evidence.
 Replay additionally writes `replay-source-analysis.json`, `replay-plan.json`, and `replay-execution.json`, or
 `replay-error.json` on failure. These describe planning, execution, and audit facts, not task correctness. See
 [Trace Replay](../how-to/run-trace-replay.md).
+
+DSH 0.2 also records `evidence/dsh-runtime.json` (versions, capabilities, installation lock hash) and task-local
+`dsh-effective-config.yaml`, `dsh-lineage.json`, `dsh-run-status.json`, and `dsh-processes.jsonl`.
+`dsh-sessions/raw/index.json` links unchanged raw logs to decoded sessions; `transcript.jsonl` is selected by the
+stdout root identity. `dsh-launch-command.json` excludes the stdin prompt. Timeout and cancellation retain available
+logs and patches; a cancelled outer result may still have `has_patch=false`, so inspect `dsh-run-status.json`.
+Lineage validation never rewrites `requests.jsonl`.
+
+For streaming request facts, an SDK closing HTTP after OpenAI `[DONE]` or Anthropic `message_stop` is recorded as
+success. Cancellation before the terminal protocol event remains an error.
+
+### DSH execution-control evidence
+
+`dsh-lineage.json` records at most one plan recovery reminder in `plan_recoveries`.
+When a guard stops execution, `failure` contains its `reason`, `session_id`, and `message`.
+`dsh-run-status.json` retains the same diagnostic; `result.json.termination_reason` records the final classification.
+Execution timeouts and external cancellation keep their own final classification. Existing cleanup still collects
+raw session logs and any generated patch.
+
+| Classification | Meaning |
+| --- | --- |
+| `agent_step_limit` | The lead exceeded its 200-step execution budget. |
+| `subagent_step_limit` | A child exceeded its 100-step exploration budget. |
+| `subagent_read_loop` | The fourth identical read in the last eight tool calls. |
+| `subagent_failed` | A child ended with a reason other than `completed`. |
+| `plan_not_approved` | The plan protocol was not fulfilled, including after one recovery reminder. |
+| `validation_error_loop` | Four equivalent argument-validation or inactive-plan exit errors within eight tool results. |
+| `max_tokens` | The model or DSH turn reported length truncation. |
+
+Session collection reads all sessions in the task-local `DSH_HOME` and validates session IDs and parent links;
+directory names and log modification times do not select the lead session.

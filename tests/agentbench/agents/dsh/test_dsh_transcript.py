@@ -4,7 +4,6 @@
 """Verify DSH session-log decoding and normalization."""
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -15,7 +14,6 @@ from agentinfer.agentbench.agents.dsh.transcript import (
     find_session_logs,
     is_turn_complete,
     load_session_log,
-    project_key,
     session_is_root,
 )
 
@@ -46,60 +44,40 @@ def _turn_end(kind: str) -> dict:
     return _event("turn/end", {"reason": {"kind": kind}})
 
 
+def _v4_events() -> list[dict]:
+    return [
+        {"type": "session", "version": 4, "id": "root", "delegationDepth": 0},
+        _assistant("answer"),
+        _tool_call("read", '{"file_path":"calc.py"}'),
+        _tool_result("file contents"),
+        _turn_end("completed"),
+    ]
+
+
 def _write_log(path: Path, events: list[dict]) -> None:
     path.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
 
 
-def test_project_key_matches_observed_dsh_layout() -> None:
-    assert project_key("/Users/hsliu/code/AgentInfer") == "--Users-hsliu-code-AgentInfer--"
-    assert project_key("/a/b") == "--a-b--"
-    with pytest.raises(ValueError, match="empty"):
-        project_key("")
+def test_find_session_logs_collects_all_sessions(tmp_path: Path) -> None:
+    logs = [
+        tmp_path / "sessions" / "project-a" / "child" / "session.jsonl",
+        tmp_path / "sessions" / "project-b" / "root" / "session.v4.jsonl",
+    ]
+    for path in logs:
+        path.parent.mkdir(parents=True)
+        path.write_text("{}\n", encoding="utf-8")
+
+    assert find_session_logs(tmp_path) == sorted(logs)
 
 
-def test_find_session_logs_prefers_workspace_project_key(tmp_path: Path) -> None:
-    workspace = tmp_path / "w"
-    other = tmp_path / "o"
-    workspace.mkdir()
-    other.mkdir()
-    own_dir = tmp_path / "sessions" / project_key(str(workspace.resolve())) / "session-own"
-    other_dir = tmp_path / "sessions" / project_key(str(other.resolve())) / "session-other"
-    own_dir.mkdir(parents=True)
-    other_dir.mkdir(parents=True)
-    (own_dir / "session.jsonl").write_text("{}\n", encoding="utf-8")
-    (other_dir / "session.jsonl").write_text("{}\n", encoding="utf-8")
-    os.utime(other_dir / "session.jsonl", (3, 3))
-    os.utime(own_dir / "session.jsonl", (1, 1))
-
-    logs = find_session_logs(tmp_path, workspace)
-
-    assert logs[0].parent.parent.name == project_key(str(workspace.resolve()))
-
-
-def test_find_session_logs_orders_newest_first(tmp_path: Path) -> None:
-    older = tmp_path / "sessions" / "project" / "session-old" / "session.jsonl.zstd"
-    newer = tmp_path / "sessions" / "project" / "session-new" / "session.jsonl"
-    older.parent.mkdir(parents=True)
-    newer.parent.mkdir(parents=True)
-    older.write_bytes(b"old")
-    newer.write_bytes(b"new")
-    os.utime(older, (1, 1))
-    os.utime(newer, (2, 2))
-
-    logs = find_session_logs(tmp_path)
-
-    assert [path.name for path in logs] == ["session.jsonl", "session.jsonl.zstd"]
-
-
-def test_load_session_log_skips_malformed_lines(tmp_path: Path) -> None:
+def test_load_session_log_rejects_malformed_lines(tmp_path: Path) -> None:
     path = tmp_path / "session.jsonl"
     _write_log(path, [_assistant("hello")])
     with path.open("a", encoding="utf-8") as handle:
         handle.write("this is not json\n")
 
-    events = load_session_log(path)
-
-    assert [event["type"] for event in events] == ["assistant/message"]
+    with pytest.raises(json.JSONDecodeError):
+        load_session_log(path)
 
 
 def test_load_session_log_decodes_zstd(tmp_path: Path) -> None:
@@ -192,3 +170,66 @@ def test_session_is_root_treats_null_parent_session_as_root() -> None:
 
 def test_session_is_root_falls_back_to_root_without_header() -> None:
     assert session_is_root([_assistant("x"), _turn_end("completed")]) is True
+
+
+@pytest.mark.parametrize("is_child", [False, True])
+def test_v4_session_normalization(tmp_path, is_child):
+    events = _v4_events()
+    if is_child:
+        events[0].update(id="child", parentSession="root", origin="subagent", delegationDepth=1)
+    path = tmp_path / "session.v4.jsonl"
+    _write_log(path, events)
+    loaded = load_session_log(path)
+    assert loaded == events
+    normalized = DshTranscriptNormalizer().normalize(loaded)
+    assert any(row.type == "assistant" for row in normalized)
+    assert any(row.type == "tool_call" for row in normalized)
+    assert is_turn_complete(loaded)
+    assert session_is_root(loaded) is (not is_child)
+
+
+def test_current_generation_wins_over_legacy_and_refuses_future(tmp_path):
+    folder = tmp_path / "sessions" / "project" / "root"
+    folder.mkdir(parents=True)
+    (folder / "session.jsonl").write_text("{}\n")
+    current = folder / "session.v4.jsonl"
+    _write_log(current, _v4_events())
+    assert find_session_logs(tmp_path) == [current]
+    (folder / "session.v5.jsonl").write_text("{}\n")
+    with pytest.raises(ValueError, match="Unsupported"):
+        find_session_logs(tmp_path)
+
+
+def test_v4_header_version_must_match_filename(tmp_path):
+    path = tmp_path / "session.v4.jsonl"
+    path.write_text('{"type":"session","version":0,"id":"root"}\n')
+    with pytest.raises(ValueError, match="header"):
+        load_session_log(path)
+
+
+def test_multiframe_zstd_and_interrupted_tail(tmp_path):
+    import zstandard
+
+    expected = _v4_events()
+    rows = [(json.dumps(event) + "\n").encode() for event in expected]
+    compressor = zstandard.ZstdCompressor()
+    path = tmp_path / "session.v4.jsonl.zstd"
+    path.write_bytes(compressor.compress(b"".join(rows[:3])) + compressor.compress(b"".join(rows[3:])))
+    assert load_session_log(path) == expected
+    # A trailing incomplete frame is diagnostic only after forced termination.
+    path.write_bytes(path.read_bytes() + compressor.compress(b'{"incomplete":true}\n')[:-2])
+    with pytest.raises(ValueError, match="Truncated"):
+        load_session_log(path)
+    assert load_session_log(path, allow_partial=True)[: len(expected)] == expected
+
+
+def test_partial_json_tail_is_only_allowed_after_interruption(tmp_path):
+    path = tmp_path / "session.v4.jsonl"
+    _write_log(path, _v4_events())
+    path.write_bytes(path.read_bytes() + b'{"type":')
+    with pytest.raises(ValueError, match="Incomplete"):
+        load_session_log(path)
+    assert is_turn_complete(load_session_log(path, allow_partial=True))
+    path.write_bytes(path.read_bytes() + b"\n{}\n")
+    with pytest.raises(json.JSONDecodeError):
+        load_session_log(path, allow_partial=True)
