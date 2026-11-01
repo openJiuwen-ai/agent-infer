@@ -36,6 +36,30 @@ _ACTOR_ROLES = frozenset({"lead", "subagent", "unknown"})
 _NODE_TYPES = frozenset({"request", "timing_dependency"})
 _INTERVAL_MODES = frozenset({"trace", "lognormal"})
 _PROMPT_KINDS = frozenset({"lead_title", "lead_name", "lead_main", "subagent_first", "continuation", "none"})
+# A timing node never issues a request, so its prompt kind is the neutral one.
+# Narrowing this set means an artifact carrying a request-shaped kind on a
+# timing node is rejected rather than silently reinterpreted.
+_TIMING_PROMPT_KINDS = frozenset({"none"})
+# Fields only a ``request`` node serializes. A timing node never issues a
+# request, so ``to_dict`` omits them and ``from_dict`` rejects them rather than
+# silently dropping whatever an artifact carries. ``prompt_kind`` and the actor
+# identity are carried on timing nodes too and are validated separately.
+_REQUEST_ONLY_NODE_FIELDS = frozenset(
+    {
+        "source_status",
+        "prompt_recipe_key",
+        "prompt_ref",
+        "context_after",
+        "context_mode",
+        "planned_input_tokens",
+        "planned_output_tokens",
+        "source_output_tokens",
+        "backend_sampling_seed",
+        "response_validation",
+        "effective_output_tokens",
+        "source_prefix_tokens",
+    }
+)
 _RESPONSE_VALIDATIONS = frozenset({"exact_tokens"})
 _PLAN_KINDS = frozenset({"structural"})
 _SCHEMA_VERSIONS = frozenset({"1", "2"})
@@ -79,6 +103,18 @@ class ReplayPlanNode:
         }
         if self.node_type == "timing_dependency":
             value["effective_duration_seconds"] = self.effective_duration_seconds
+            # Emitted explicitly so the artifact round-trips losslessly. Omitting
+            # it left a reloaded timing node reporting "none" regardless of the
+            # build-time value, which made any aggregate over nodes diverge
+            # between a run and the plan it wrote.
+            value["prompt_kind"] = self.prompt_kind
+            # Actor identity says which agent the wait belongs to. The executor
+            # never reads it for a timing node (no request is issued), but it is
+            # structural information about the workload, and dropping it made a
+            # reloaded plan unable to answer "whose wait is this?".
+            value["actor_id"] = self.actor_id
+            value["actor_role"] = self.actor_role
+            value["parent_actor_id"] = self.parent_actor_id
             return value
 
         value.update(
@@ -111,12 +147,31 @@ class ReplayPlanNode:
         """Reconstruct a node from a serialized plan artifact.
 
         Mirrors :meth:`to_dict` presence rules exactly: a ``timing_dependency``
-        carries only its clock/duration, while a ``request`` carries the full
-        materialized prompt/actor/context set. Fields the build path populates
-        but ``to_dict`` intentionally omits (``source_status``) are restored to
-        execution-neutral defaults; nothing downstream reads them for a loaded
-        plan, and :func:`_validate_plan` is not re-run on load (it needs the
-        original source).
+        carries its clock/duration plus ``prompt_kind``, while a ``request``
+        carries the full materialized prompt/actor/context set. Fields the build
+        path populates but ``to_dict`` omits are restored to execution-neutral
+        defaults; the executor's send path never reads them for a loaded plan,
+        and :func:`_validate_plan` is not re-run on load (it needs the original
+        source).
+
+        For a ``timing_dependency`` node those omitted fields are
+        ``source_status``, ``prompt_recipe_key``, ``actor_id``, ``actor_role``
+        and ``parent_actor_id``. The builder does set them there (they describe
+        the source row the node was derived from), but a timing node never
+        reaches the transport: the executor sleeps for its duration and
+        completes without issuing a request, and the request-only prompt
+        preparation never runs for it. Restoring them as neutral defaults is
+        therefore observably equivalent at execution time, though a loaded
+        timing node does not compare equal to its build-time original on those
+        five fields.
+
+        ``prompt_kind`` is the one field whose build-time value survives on a
+        timing node, so it is parsed rather than defaulted: an artifact that
+        carries an unexpected kind there is rejected instead of silently
+        rewritten to ``"none"``. A timing node written before the field was
+        carried omits the key entirely; that loads as ``"none"``, which is the
+        only value a timing node can hold, so the default is exact rather than
+        a guess.
 
         One presence exception, documented for the reviewer asking "why does
         this key not raise?": ``to_dict`` writes ``effective_output_tokens`` when
@@ -137,6 +192,7 @@ class ReplayPlanNode:
         effective_interval = _node_nonneg_finite(value, "effective_interval_seconds")
 
         if node_type == "timing_dependency":
+            _reject_request_path_fields(value)
             return cls(
                 runtime_request_id=runtime_request_id,
                 source_key=source_key,
@@ -144,10 +200,10 @@ class ReplayPlanNode:
                 prompt_recipe_key="",
                 prompt_ref=None,
                 node_type=node_type,
-                prompt_kind="none",
-                actor_id="",
-                actor_role="unknown",
-                parent_actor_id=None,
+                prompt_kind=_timing_prompt_kind(value),
+                actor_id=_timing_actor_field(value, "actor_id"),
+                actor_role=_timing_actor_role(value),
+                parent_actor_id=_timing_actor_field(value, "parent_actor_id", nullable=True),
                 send_after=send_after,
                 context_after=None,
                 context_mode="none",
@@ -596,6 +652,57 @@ def _node_enum(node: dict[str, object], field: str, allowed: frozenset[str]) -> 
     if not isinstance(value, str) or value not in allowed:
         raise ValueError(f"node {field} must be one of {sorted(allowed)}")
     return value
+
+
+def _reject_request_path_fields(node: dict[str, object]) -> None:
+    """Reject request-only fields on a ``timing_dependency`` node.
+
+    ``to_dict`` never writes these for a timing node, so a well-formed artifact
+    cannot contain them. A hand-edited or future-artifact plan that does is
+    rejected instead of having the values silently discarded -- discarding them
+    would accept an artifact whose content disagrees with what loads. The set is
+    deliberately request-path only: ``prompt_kind`` is carried and validated
+    separately, and ``effective_duration_seconds`` is the timing node's own.
+    """
+
+    present = sorted(field for field in _REQUEST_ONLY_NODE_FIELDS if field in node)
+    if present:
+        raise ValueError(f"timing_dependency node must not carry request fields: {', '.join(present)}")
+
+
+def _timing_actor_field(node: dict[str, object], field: str, *, nullable: bool = False) -> str | None:
+    """Read a timing node's actor field, defaulting an absent key.
+
+    Artifacts written before actor identity was carried on timing nodes omit the
+    key; they load with the same neutral defaults the previous loader used
+    (``""`` for ``actor_id``, ``None`` for ``parent_actor_id``). Once present the
+    value is validated strictly, so a malformed identity still fails closed.
+    """
+
+    if field not in node:
+        return None if nullable else ""
+    return _node_optional_str(node, field) if nullable else _node_str(node, field)
+
+
+def _timing_actor_role(node: dict[str, object]) -> str:
+    """Read a timing node's ``actor_role``, defaulting an absent key to ``unknown``."""
+
+    if "actor_role" not in node:
+        return "unknown"
+    return _node_enum(node, "actor_role", _ACTOR_ROLES)
+
+
+def _timing_prompt_kind(node: dict[str, object]) -> str:
+    """Read a timing node's ``prompt_kind``, defaulting an absent key to ``none``.
+
+    Artifacts written before the field was carried on timing nodes omit it; a
+    timing node can only hold the neutral kind, so the default is exact rather
+    than a guess. Once present, the value is validated strictly.
+    """
+
+    if "prompt_kind" not in node:
+        return "none"
+    return _node_enum(node, "prompt_kind", _TIMING_PROMPT_KINDS)
 
 
 def _node_finite(node: dict[str, object], field: str) -> float:

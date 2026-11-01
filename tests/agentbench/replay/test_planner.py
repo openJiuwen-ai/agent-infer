@@ -318,6 +318,12 @@ def test_plan_artifact_contains_only_materialized_execution_fields(tmp_path: Pat
         "send_after",
         "effective_interval_seconds",
         "effective_duration_seconds",
+        # carried so a reloaded node reports the same kind and identity the
+        # build wrote
+        "prompt_kind",
+        "actor_id",
+        "actor_role",
+        "parent_actor_id",
     }
     assert "dependency_kind" not in request
     assert "same_agent_gap_seconds" not in request
@@ -601,3 +607,46 @@ def test_writer_start_failure_finalizes_without_creating_clients(
     error = json.loads((result_dir / "replay-error.json").read_text(encoding="utf-8"))
     assert manifest["status"] == "failed"
     assert error["error"] == "writer start failed"
+
+
+def test_timing_nodes_appear_in_serialized_tasks_and_fingerprint(
+    tmp_path: Path,
+) -> None:
+    """Timing nodes are part of the fingerprinted workload surface.
+
+    ``workload_fingerprint`` hashes ``task.to_dict()`` output, so a timing
+    node's serialized shape is part of the plan's identity. This pins that the
+    builder emits timing nodes with the neutral kind and that the fingerprint
+    is reproducible across rebuilds -- the property the loader relies on when
+    it refuses to re-derive the fingerprint.
+    """
+
+    source = tmp_path / "requests.jsonl"
+    _source(source)
+    analysis = analyze_replay_trace(source)
+
+    first = build_replay_plan(_config(source, tmp_path / "a"), analysis)
+    second = build_replay_plan(_config(source, tmp_path / "b"), analysis)
+
+    timing = [node for task in first.tasks for node in task.requests if node.node_type == "timing_dependency"]
+    assert timing, "fixture should contain a timing_dependency node"
+
+    for node in timing:
+        serialized = node.to_dict()
+        assert serialized["prompt_kind"] == "none"
+        restored = ReplayPlanNode.from_dict(serialized)
+        # prompt_kind now survives; the five request-path fields below are
+        # deliberately not serialized (a timing node never reaches the
+        # transport) and reload as neutral defaults.
+        assert restored.prompt_kind == node.prompt_kind
+        assert restored.effective_duration_seconds == node.effective_duration_seconds
+        assert restored.effective_interval_seconds == node.effective_interval_seconds
+        assert restored.actor_id == node.actor_id
+        assert restored.actor_role == node.actor_role
+        assert restored.parent_actor_id == node.parent_actor_id
+        # source-only fields are not carried and reload as neutral defaults
+        for field in ("source_status", "prompt_recipe_key"):
+            assert getattr(restored, field) in {"", None, "unknown"}
+
+    assert first.workload_fingerprint == second.workload_fingerprint
+    assert first.to_dict()["tasks"] == second.to_dict()["tasks"]

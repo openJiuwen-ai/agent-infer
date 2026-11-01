@@ -83,11 +83,23 @@ BenchKit 将每次运行写入一个全新的结果目录。原始请求事实�
 Replay 额外写出 `replay-source-analysis.json`、`replay-plan.json` 和 `replay-execution.json`；失败时写出
 `replay-error.json`。这些文件记录规划、执行和审计事实，不代表任务正确性。详见[回放指南](../how-to/run-trace-replay.md)。
 
-
 `replay-plan.json` 同时也是可加载的产物：`ReplayPlan.load(path)`（或 `ReplayPlan.from_dict` 加
 `validate_loaded_plan`）能重建并结构化校验已写出的计划，因此它可作为自包含输入用于检视，或在后续的 runner
-路径中恢复执行而无需重新规划。加载只校验产物本身（引用闭包、`send_after` 无环、目标合法性），不重新派生
-`workload_fingerprint`/`plan_namespace`——二者内嵌构建期 workload 配置。
+路径中恢复执行而无需重新规划。加载只校验产物本身（引用闭包、覆盖 `send_after` 与 `context_after` 的完整等待图
+无环、目标合法性、`context_mode` 配对），不重新派生 `workload_fingerprint`/`plan_namespace`——二者内嵌构建期
+workload 配置。
+
+节点序列化出的每个字段都能被解析回来，因此 `from_dict(to_dict())` 保持节点不变。`timing_dependency` 节点在其
+请求类字段中携带 `prompt_kind` 以及 actor 身份（`actor_id`、`actor_role`、`parent_actor_id`），使加载后的计划仍能
+说明该等待节点属于哪个 agent；其中 prompt kind 必须是中性的 `none`，若产物在此处填入请求类取值，加载会拒绝而非
+静默改写。timing 节点上出现的其余请求专属字段（`prompt_recipe_key`、`prompt_ref`、`context_after`、`context_mode`、
+各 token 目标等）则会被拒绝：timing 节点不发起请求，没有承载这些字段的位置，接受它们会加载出内容与所得计划不一致
+的产物。`source_status` 与 `prompt_recipe_key` 是规划与校验阶段的输入，不会被携带。由于 `workload_fingerprint` 基于序列化后的任务计算，节点序列化规则变化会改变新建计划的 fingerprint；
+更早版本写出的计划保留其构建时的 fingerprint，加载过程不会重新计算。
+
+[`replay-plan.example.json`](replay-plan.example.json) 是一份最小且结构合法的产物：单会话、两个存在依赖关系的
+请求、以及一个 timing 节点。它可被加载并原样重新序列化，可作为检视工具的起点，也可在测试中篡改单个字段以校验
+fail-closed 约定。
 
 DSH 0.2 额外保存 `evidence/dsh-runtime.json`（版本、能力、安装锁哈希），以及任务级的
 `dsh-effective-config.yaml`、`dsh-lineage.json`、`dsh-run-status.json` 和 `dsh-processes.jsonl`。
