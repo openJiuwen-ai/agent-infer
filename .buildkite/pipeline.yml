@@ -4,4 +4,4 @@ steps:
   - label: ":pipeline: Upload ready pipeline"
     command: python3 .buildkite/upload_pipeline.py .buildkite/test-ready.yml
     agents:
-      queue: cpu_small
+      queue: L20-cpu-small

@@ -38,7 +38,7 @@ mirror_hardwares:
 
   cpu_small:
     agents:
-      queue: cpu-small
+      queue: L20-cpu-small
     plugins:
       - docker-compose#v4.9.0:
           config: docker/docker-compose.yml
