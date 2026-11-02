@@ -48,20 +48,21 @@ def _apply_preset(step: dict, presets: dict) -> None:
 
     env = dict(preset.get("env") or {})
     env.update(step.get("env") or {})
-    # Compose Bake refuses to replace an image tag that is already present
-    # (`image "...": already exists`). The classic builder overwrites the tag.
-    if image_build:
-        env.setdefault("COMPOSE_BAKE", "false")
-    if env:
-        step["env"] = env
-    elif "env" in step and not step["env"]:
-        step.pop("env")
 
     if "agents" not in step:
         step["agents"] = preset["agents"]
 
     if host_only:
+        if env:
+            step["env"] = env
         return
+
+    # Bake plus the containerd image store fails with `image "...": already
+    # exists` when a build replaces a tag. Test steps do not build; this still
+    # covers a plugin build.
+    env.setdefault("COMPOSE_BAKE", "false")
+    env.setdefault("BUILDX_NO_DEFAULT_ATTESTATIONS", "1")
+    step["env"] = env
 
     plugins = copy.deepcopy(preset.get("plugins") or [])
     if image_build:

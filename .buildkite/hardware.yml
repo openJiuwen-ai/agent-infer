@@ -9,6 +9,9 @@
 #          Buildkite will not wait for both 1-GPU agents to go idle; do not
 #          point this queue at the same agents as l20_1.
 #   cpu_small: no GPU reservation. Runs the agentinfer-cpu service.
+#
+# Run steps do not build. skip-pull skips the registry pull, and require-prebuild
+# fails the step unless the build step recorded a local image in build meta-data.
 
 mirror_hardwares:
   l20_1:
@@ -19,6 +22,8 @@ mirror_hardwares:
           config: docker/docker-compose.yml
           cli-version: 2
           run: agentinfer-ci
+          skip-pull: true
+          require-prebuild: true
           environment:
             - HOME=/tmp/ci-home
             # Keep pytest cache out of the checkout (root-owned cache breaks agent cleanup).
@@ -32,6 +37,8 @@ mirror_hardwares:
           config: docker/docker-compose.yml
           cli-version: 2
           run: agentinfer-ci
+          skip-pull: true
+          require-prebuild: true
           environment:
             - HOME=/tmp/ci-home
             - PYTEST_ADDOPTS=-o cache_dir=/tmp/pytest-cache
@@ -44,6 +51,8 @@ mirror_hardwares:
           config: docker/docker-compose.yml
           cli-version: 2
           run: agentinfer-cpu
+          skip-pull: true
+          require-prebuild: true
           environment:
             - HOME=/tmp/ci-home
             - PYTEST_ADDOPTS=-o cache_dir=/tmp/pytest-cache

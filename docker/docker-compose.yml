@@ -1,12 +1,12 @@
-# CI service: tag the image by commit; bind-mount the Buildkite checkout onto itself
-# and set workdir there so bare pytest runs against PR code, and artifacts such as
-# junit land in the checkout for artifact_paths to collect.
+# CI service. GPU and CPU builds run in parallel and must not share a tag:
+# each one deletes its own tag before building. Bind-mount the checkout onto
+# itself and set workdir there so pytest runs against the PR code.
 services:
   agentinfer-ci:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: agentinfer-ci:${BUILDKITE_COMMIT:-local}
+    image: agentinfer-ci:${BUILDKITE_BUILD_ID:-local}-gpu
     # Runs as root, then ci-entrypoint.sh switches to the UID that owns the
     # checkout (the working directory). Do not set `user:` here.
     entrypoint: ["/usr/local/bin/ci-entrypoint.sh"]
@@ -33,10 +33,11 @@ services:
               count: all
               capabilities: [gpu]
 
-  # Same image as agentinfer-ci. !override clears the GPU reservation so this
-  # service can start on a machine with no NVIDIA runtime. An empty mapping
-  # would be merged and the GPU devices would remain.
+  # Same Dockerfile as agentinfer-ci, different tag. !override clears the GPU
+  # reservation so this service can start on a machine with no NVIDIA runtime.
+  # An empty mapping would be merged and the GPU devices would remain.
   agentinfer-cpu:
     extends:
       service: agentinfer-ci
+    image: agentinfer-ci:${BUILDKITE_BUILD_ID:-local}-cpu
     deploy: !override {}

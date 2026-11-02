@@ -2,10 +2,17 @@
 # upload_pipeline.py expands it from hardware.yml.
 
 steps:
+  # The compose plugin reuses an image only when meta-data names it. There is no
+  # registry, so this step builds on the host and records the local tag. Later
+  # steps on this queue must share this machine's Docker daemon.
   - label: ":docker: Build CI image"
     key: ci-image
     mirror_hardwares: l20_1
-    docker_compose_build: agentinfer-ci
+    host_only: true
+    commands:
+      - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu" || true
+      - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose -f docker/docker-compose.yml build --pull agentinfer-ci
+      - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-ci-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu"
 
   - group: ":card_index_dividers: GPU Tests"
     depends_on: ci-image
@@ -16,12 +23,15 @@ steps:
         timeout_in_minutes: 25
         mirror_hardwares: l20_1
 
-  # Image is local to the agent. cpu_small is a different machine from the GPU
-  # build, so it builds the same Dockerfile via agentinfer-cpu.
+  # cpu_small is another machine, so it builds the same Dockerfile itself.
   - label: ":docker: Build CI image (cpu)"
     key: ci-image-cpu
     mirror_hardwares: cpu_small
-    docker_compose_build: agentinfer-cpu
+    host_only: true
+    commands:
+      - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-cpu" || true
+      - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose -f docker/docker-compose.yml build --pull agentinfer-cpu
+      - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-cpu-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-cpu"
 
   - group: ":card_index_dividers: Unit Tests"
     depends_on: ci-image-cpu
@@ -33,9 +43,16 @@ steps:
         mirror_hardwares: cpu_small
 
   - wait
-  - label: ":broom: Cleanup"
+  - label: ":broom: Cleanup GPU agent"
     mirror_hardwares: l20_1
     # Host docker prune. Do not wrap this step in the CI container.
     host_only: true
     commands:
+      - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu" || true
+      - docker image prune -f
+  - label: ":broom: Cleanup CPU agent"
+    mirror_hardwares: cpu_small
+    host_only: true
+    commands:
+      - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-cpu" || true
       - docker image prune -f
