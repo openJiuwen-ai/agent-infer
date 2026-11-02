@@ -82,7 +82,10 @@
           "send_after": null,
           "effective_interval_seconds": 0.25,
           "effective_duration_seconds": 0.25,
-          "prompt_kind": "none"
+          "prompt_kind": "none",
+          "actor_id": "lead",
+          "actor_role": "lead",
+          "parent_actor_id": null
         }
       ]
     }

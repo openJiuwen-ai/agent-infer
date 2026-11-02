@@ -147,31 +147,31 @@ class ReplayPlanNode:
         """Reconstruct a node from a serialized plan artifact.
 
         Mirrors :meth:`to_dict` presence rules exactly: a ``timing_dependency``
-        carries its clock/duration plus ``prompt_kind``, while a ``request``
-        carries the full materialized prompt/actor/context set. Fields the build
-        path populates but ``to_dict`` omits are restored to execution-neutral
-        defaults; the executor's send path never reads them for a loaded plan,
-        and :func:`_validate_plan` is not re-run on load (it needs the original
-        source).
+        carries its clock/duration plus ``prompt_kind`` and actor identity, while
+        a ``request`` carries the full materialized prompt/actor/context set.
+        Fields the build path populates but ``to_dict`` omits are restored to
+        execution-neutral defaults; the executor's send path never reads them for
+        a loaded plan, and :func:`_validate_plan` is not re-run on load (it needs
+        the original source).
 
         For a ``timing_dependency`` node those omitted fields are
-        ``source_status``, ``prompt_recipe_key``, ``actor_id``, ``actor_role``
-        and ``parent_actor_id``. The builder does set them there (they describe
-        the source row the node was derived from), but a timing node never
-        reaches the transport: the executor sleeps for its duration and
-        completes without issuing a request, and the request-only prompt
-        preparation never runs for it. Restoring them as neutral defaults is
-        therefore observably equivalent at execution time, though a loaded
+        ``source_status`` and ``prompt_recipe_key``. The builder does set them
+        there (they describe the source row the node was derived from), but a
+        timing node never reaches the transport: the executor sleeps for its
+        duration and completes without issuing a request, and the request-only
+        prompt preparation never runs for it. Restoring them as neutral defaults
+        is therefore observably equivalent at execution time, though a loaded
         timing node does not compare equal to its build-time original on those
-        five fields.
+        two fields.
 
-        ``prompt_kind`` is the one field whose build-time value survives on a
-        timing node, so it is parsed rather than defaulted: an artifact that
-        carries an unexpected kind there is rejected instead of silently
-        rewritten to ``"none"``. A timing node written before the field was
-        carried omits the key entirely; that loads as ``"none"``, which is the
-        only value a timing node can hold, so the default is exact rather than
-        a guess.
+        ``prompt_kind`` and the actor identity (``actor_id``, ``actor_role``,
+        ``parent_actor_id``) are written by ``to_dict`` and parsed rather than
+        defaulted, so an artifact carrying an unexpected value there is rejected
+        instead of silently rewritten. A timing node written before one of those
+        fields was carried omits the key entirely; that loads as the neutral
+        value the previous loader used (``"none"``, ``""``, ``"unknown"``,
+        ``None``), which is exact for ``prompt_kind`` -- a timing node can only
+        hold ``"none"``.
 
         One presence exception, documented for the reviewer asking "why does
         this key not raise?": ``to_dict`` writes ``effective_output_tokens`` when
@@ -184,7 +184,7 @@ class ReplayPlanNode:
         if not isinstance(value, dict):
             raise ValueError("plan node must be an object")
         node_type = value.get("node_type")
-        if node_type not in _NODE_TYPES:
+        if not isinstance(node_type, str) or node_type not in _NODE_TYPES:
             raise ValueError(f"node node_type must be one of {sorted(_NODE_TYPES)}")
         runtime_request_id = _node_str(value, "runtime_request_id")
         source_key = _node_str(value, "source_key")
@@ -222,7 +222,9 @@ class ReplayPlanNode:
         source_prefix_tokens = _node_optional_nonneg_int(value, "source_prefix_tokens")
         source_output_tokens = _node_optional_nonneg_int(value, "source_output_tokens")
         response_validation = value.get("response_validation")
-        if response_validation is not None and response_validation not in _RESPONSE_VALIDATIONS:
+        if response_validation is not None and (
+            not isinstance(response_validation, str) or response_validation not in _RESPONSE_VALIDATIONS
+        ):
             raise ValueError(f"node response_validation must be one of {sorted(_RESPONSE_VALIDATIONS)}")
 
         return cls(
@@ -352,10 +354,10 @@ class ReplayPlan:
         if not isinstance(value, dict):
             raise ValueError("replay plan must be an object")
         schema_version = value.get("schema_version")
-        if schema_version not in _SCHEMA_VERSIONS:
+        if not isinstance(schema_version, str) or schema_version not in _SCHEMA_VERSIONS:
             raise ValueError(f"plan schema_version must be one of {sorted(_SCHEMA_VERSIONS)}")
         plan_kind = value.get("plan_kind")
-        if plan_kind not in _PLAN_KINDS:
+        if not isinstance(plan_kind, str) or plan_kind not in _PLAN_KINDS:
             raise ValueError(f"plan plan_kind must be one of {sorted(_PLAN_KINDS)}")
         execution_ready = value.get("execution_ready")
         if not isinstance(execution_ready, bool):
@@ -849,6 +851,27 @@ def validate_loaded_plan(plan: ReplayPlan) -> None:
     ``workload_fingerprint``/``plan_namespace`` -- both embed the build-time
     workload config, so they are checked for presence only; build-side stability
     is already covered by the existing planner tests.
+
+    Each node-level rule in :func:`_validate_task` is either mirrored here or
+    listed below as not recoverable from the artifact, so the two validators do
+    not drift apart a check at a time:
+
+    - ``planned_output_tokens >= 1`` is **not** enforced: the bound is
+      ``allow_unknown_context``, a build-time flag the artifact does not carry
+      (TraceLab plans legitimately allow a zero output target).
+    - ``context_after`` must reference a source ``success`` is **not** enforced:
+      ``from_dict`` restores ``source_status="unknown"`` for every node, so the
+      check would be vacuous. Everything about the target that *is* recoverable
+      -- it exists, it is a request node, and it carries the same actor -- is
+      checked.
+    - ``prompt_recipe_key`` must name an existing source key is **not** enforced:
+      under ``allow_hash_snapshot`` (AgentX) the field holds the byte offset of
+      a snapshot inside the bundle, not a source key, and the artifact does not
+      record which prompt shape built it -- the executor picks the reader from
+      the run-time config. A membership check here would reject every AgentX
+      plan, so the rule stays build-time only. The part that *is* mode-neutral
+      -- the key must be non-empty -- is enforced, along with the other
+      identity fields.
     """
 
     if plan.plan_kind not in _PLAN_KINDS:
@@ -865,9 +888,16 @@ def validate_loaded_plan(plan: ReplayPlan) -> None:
         raise ValueError("plan must have at least one task")
 
     runtime_sessions: set[str] = set()
+    task_indexes: set[int] = set()
     for task in plan.tasks:
         if task.task_index < 0:
             raise ValueError(f"task {task.task_id} task_index must be non-negative")
+        # task_id is derived from task_index by the planner and becomes the
+        # result row's instance_id, so two tasks sharing an index are
+        # indistinguishable once executed.
+        if task.task_index in task_indexes:
+            raise ValueError(f"task {task.task_id} task_index {task.task_index} must be unique")
+        task_indexes.add(task.task_index)
         if task.runtime_session_id in runtime_sessions:
             raise ValueError("runtime session ids must be unique")
         runtime_sessions.add(task.runtime_session_id)
@@ -879,7 +909,21 @@ def validate_loaded_plan(plan: ReplayPlan) -> None:
         if len(runtime_ids) != len(set(runtime_ids)):
             raise ValueError(f"duplicate runtime request id in {task.task_id}")
         for node in nodes:
-            for field, reference in (("send_after", node.send_after), ("context_after", node.context_after)):
+            # Identity fields are written non-empty by every planning path and
+            # the executor keys its per-node prompt namespace and result rows on
+            # them; an empty value collapses "<session>:" across every node of
+            # the task, so two requests would share one recipe cache.
+            for field in ("source_key", "runtime_request_id"):
+                if not getattr(node, field):
+                    raise ValueError(f"node {field} must be non-empty in {task.task_id}")
+            if node.node_type == "request":
+                # Same reasoning for the actor: an empty actor_id makes the
+                # same-actor context check below compare "" against "" and pass.
+                for field in ("prompt_recipe_key", "actor_id"):
+                    if not getattr(node, field):
+                        raise ValueError(f"request {node.source_key} {field} must be non-empty in {task.task_id}")
+            references = [("send_after", node.send_after), ("context_after", node.context_after)]
+            for field, reference in references:
                 if reference is not None and reference not in by_key:
                     raise ValueError(f"{field} reference {reference} is missing in {task.task_id}")
             if node.node_type == "request" and not (
@@ -887,10 +931,22 @@ def validate_loaded_plan(plan: ReplayPlan) -> None:
             ):
                 raise ValueError(f"request {node.source_key} has no positive input target")
             if node.node_type == "request":
+                if node.source_prefix_tokens is not None and (
+                    node.source_prefix_tokens < 0 or node.source_prefix_tokens > node.planned_input_tokens
+                ):
+                    raise ValueError(f"request {node.source_key} source_prefix_tokens must fit the input target")
                 if node.context_mode in {"independent", "reset"} and node.context_after is not None:
                     raise ValueError(f"{node.context_mode} context must not reference context_after in {task.task_id}")
                 if node.context_mode in {"append", "trim"} and node.context_after is None:
                     raise ValueError(f"{node.context_mode} context requires context_after in {task.task_id}")
+            if node.context_after is not None:
+                context = by_key[node.context_after]
+                # A timing node carries no prompt exchange, so using one as the
+                # context target would only fail later inside the executor.
+                if context.node_type != "request":
+                    raise ValueError(f"context_after must reference a request node in {task.task_id}")
+                if context.actor_id != node.actor_id:
+                    raise ValueError(f"context_after must reference the same actor in {task.task_id}")
         if not nodes:
             raise ValueError(f"task {task.task_id} must have at least one request node")
         _validate_acyclic(nodes)
