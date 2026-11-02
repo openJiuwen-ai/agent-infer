@@ -6,8 +6,9 @@
 import asyncio
 import time
 import uuid
+from collections import defaultdict
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import TypeVar
 
@@ -16,12 +17,13 @@ from tqdm import tqdm
 
 from ..agents import AgentRunRequest, AgentRunResult, check_agent_preflight, run_agent
 from ..agents.contracts import AgentRunOutcome, TerminationReason
-from ..request_proxy import create_request_proxy_lifecycle, load_request_facts
+from ..request_proxy import RequestFact, create_request_proxy_lifecycle, load_request_facts
 from .artifacts import (
     FinalizationContext,
     RunFinalizer,
     build_run_manifest,
     build_task_result,
+    load_task_results,
 )
 from .collectors.correctness import load_correctness_artifact
 from .collectors.environment import collect_environment
@@ -173,6 +175,7 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
         run_wall_time_seconds = (finished_at - manifest.created_at).total_seconds()
         facts = finalize_sync("request_facts", lambda: load_request_facts(context.trace_path))
         if facts is not None:
+            finalize_sync("task_topologies", lambda: _refresh_task_topologies(output_dir, facts))
             try:
                 analysis_artifacts = write_analysis_artifacts([output_dir], output_dir, plots=False)
             except Exception as exc:
@@ -216,6 +219,18 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
     if finalization_errors:
         raise RuntimeError("Benchmark finalization failed: " + "; ".join(finalization_errors))
     return output_dir
+
+
+def _refresh_task_topologies(output_dir: Path, facts: list[RequestFact]) -> None:
+    by_session: dict[str | None, list[RequestFact]] = defaultdict(list)
+    for fact in facts:
+        by_session[fact.session_id].append(fact)
+    for result in load_task_results(output_dir):
+        topology = derive_session_topology(by_session[result.session_id], result.session_id)
+        atomic_write_json(
+            _task_path(output_dir / "tasks", result.instance_id) / "result.json",
+            replace(result, topology=topology).to_dict(),
+        )
 
 
 async def _run_tasks(
