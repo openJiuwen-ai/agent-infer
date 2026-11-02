@@ -10,14 +10,25 @@ structurally-equivalent plan, and a corrupted artifact raises instead of
 round-tripping silently.
 """
 
+import asyncio
 import json
+import time
 from pathlib import Path
 
+import httpx
 import pytest
 
 from agentinfer.agentbench.replay.analyzer import analyze_replay_trace
 from agentinfer.agentbench.replay.config import ReplayBenchConfig
-from agentinfer.agentbench.replay.planner import ReplayPlan, ReplayPlanNode, validate_loaded_plan
+from agentinfer.agentbench.replay.executor import ReplayExecutor
+from agentinfer.agentbench.replay.planner import (
+    ReplayPlan,
+    ReplayPlanNode,
+    build_replay_plan,
+    validate_loaded_plan,
+)
+from agentinfer.agentbench.replay.prompt import PromptBuilder, TokenizerClient
+from agentinfer.agentbench.replay.transport import TransportResult
 from agentinfer.agentbench.replay.unified_trace_ir import PromptReference
 
 
@@ -160,6 +171,18 @@ def test_prompt_reference_from_dict_roundtrips() -> None:
     assert PromptReference.from_dict(ref.to_dict()) == ref
 
 
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_documented_plan_example_roundtrips(language: str) -> None:
+    # The reference docs claim the examples re-serialize unchanged; keep that
+    # claim true whenever a field is added to to_dict().
+    path = Path(__file__).resolve().parents[3] / "docs" / language / "reference" / "replay-plan.example.json"
+    plan = ReplayPlan.load(path)
+    validate_loaded_plan(plan)
+    assert json.dumps(plan.to_dict(), sort_keys=True) == json.dumps(
+        json.loads(path.read_text(encoding="utf-8")), sort_keys=True
+    )
+
+
 @pytest.mark.parametrize(
     "corrupt",
     [
@@ -251,6 +274,258 @@ def test_validate_loaded_plan_rejects_negative_interval() -> None:
     data["tasks"][0]["requests"][0]["effective_interval_seconds"] = -1
     with pytest.raises(ValueError, match="effective_interval_seconds"):
         ReplayPlan.from_dict(data)
+
+
+@pytest.mark.parametrize(
+    "session_id",
+    [
+        "../../outside",
+        "/absolute",
+        "nested/dir",
+        ".",
+        "..",
+    ],
+)
+def test_prompt_reference_rejects_unsafe_session_id(session_id: str) -> None:
+    with pytest.raises(ValueError, match="one safe path component"):
+        PromptReference.from_dict({"session_id": session_id, "turn_index": 0})
+
+
+def test_plan_from_dict_rejects_prompt_ref_path_traversal() -> None:
+    data = _minimal_plan_dict()
+    # A reference escaping the text root would let TraceTextStore.read() open a
+    # file outside the bundle once the loaded plan is executed.
+    _first_request_node(data)["prompt_ref"] = {"session_id": "../../outside", "turn_index": 0}
+    with pytest.raises(ValueError, match="one safe path component"):
+        ReplayPlan.from_dict(data)
+
+
+def test_validate_loaded_plan_accepts_byte_offset_prompt_recipe_key() -> None:
+    data = _minimal_plan_dict()
+    # AgentX hash-snapshot plans store a byte offset here, not a source key, and
+    # the artifact records no prompt shape; the executor picks the reader from
+    # the run-time config. A load-time membership check would reject every such
+    # plan, so this stays a build-time rule.
+    _first_request_node(data)["prompt_recipe_key"] = "4096"
+    validate_loaded_plan(ReplayPlan.from_dict(data))
+
+
+@pytest.mark.parametrize("field", ["source_key", "runtime_request_id", "prompt_recipe_key", "actor_id"])
+def test_validate_loaded_plan_rejects_empty_request_identity(field: str) -> None:
+    """Identity fields key the executor's prompt namespace and result rows.
+
+    The namespace is ``f"{runtime_session_id}:{prompt_recipe_key}"``, so two
+    requests sharing ``""`` would share one tokenizer cache entry and one
+    calibrated prompt, and an empty ``actor_id`` makes the same-actor context
+    check compare "" against "". Every planning path writes them non-empty, so
+    this only rejects hand-built or corrupted artifacts.
+    """
+
+    data = _minimal_plan_dict()
+    _first_request_node(data)[field] = ""
+    with pytest.raises(ValueError, match=f"{field} must be non-empty"):
+        validate_loaded_plan(ReplayPlan.from_dict(data))
+
+
+@pytest.mark.parametrize("field", ["source_key", "runtime_request_id"])
+def test_validate_loaded_plan_rejects_empty_timing_identity(field: str) -> None:
+    data = _minimal_plan_dict()
+    data["tasks"][0]["requests"].append(_timing_node("gap"))
+    data["tasks"][0]["requests"][-1][field] = ""
+    with pytest.raises(ValueError, match=f"{field} must be non-empty"):
+        validate_loaded_plan(ReplayPlan.from_dict(data))
+
+
+@pytest.mark.parametrize("malformed", [["structural"], {"kind": "structural"}])
+@pytest.mark.parametrize(
+    ("where", "field"),
+    [
+        ("plan", "schema_version"),
+        ("plan", "plan_kind"),
+        ("node", "node_type"),
+        ("node", "response_validation"),
+    ],
+)
+def test_enum_membership_rejects_unhashable_values(where: str, field: str, malformed: object) -> None:
+    """A list or object in an enum field must fail closed as ValueError.
+
+    ``x not in frozenset`` raises TypeError for an unhashable ``x``, and a
+    caller documenting "loading raises ValueError" would not catch it.
+    """
+
+    data = _minimal_plan_dict()
+    target = data if where == "plan" else _first_request_node(data)
+    target[field] = malformed
+    with pytest.raises(ValueError, match=field):
+        ReplayPlan.from_dict(data)
+
+
+def test_validate_loaded_plan_rejects_duplicate_task_index() -> None:
+    data = _minimal_plan_dict()
+    second = json.loads(json.dumps(data["tasks"][0]))
+    second["runtime_session_id"] = "another-session"
+    data["tasks"].append(second)
+    # task_id is derived from task_index and becomes the result instance_id, so
+    # two tasks sharing an index rewrite each other's results.
+    with pytest.raises(ValueError, match="task_index 0 must be unique"):
+        validate_loaded_plan(ReplayPlan.from_dict(data))
+
+
+def test_validate_loaded_plan_rejects_prefix_exceeding_input() -> None:
+    data = _minimal_plan_dict()
+    node = _first_request_node(data)
+    node["planned_input_tokens"] = 1024
+    node["source_prefix_tokens"] = 2048
+    plan = ReplayPlan.from_dict(data)
+    with pytest.raises(ValueError, match="source_prefix_tokens must fit the input target"):
+        validate_loaded_plan(plan)
+
+
+def test_validate_loaded_plan_accepts_prefix_equal_to_input() -> None:
+    data = _minimal_plan_dict()
+    node = _first_request_node(data)
+    node["planned_input_tokens"] = 1024
+    node["source_prefix_tokens"] = 1024
+    validate_loaded_plan(ReplayPlan.from_dict(data))
+
+
+def test_validate_loaded_plan_rejects_context_targeting_timing_node() -> None:
+    data = _minimal_plan_dict()
+    requests = data["tasks"][0]["requests"]
+    requests.append(_timing_node("s1-gap"))
+    node = _first_request_node(data)
+    node["context_mode"] = "append"
+    node["context_after"] = "s1-gap"
+    plan = ReplayPlan.from_dict(data)
+    # A timing node carries no prompt exchange, so this only fails later in the
+    # executor; reject it while loading instead.
+    with pytest.raises(ValueError, match="context_after must reference a request node"):
+        validate_loaded_plan(plan)
+
+
+def test_validate_loaded_plan_rejects_context_targeting_other_actor() -> None:
+    data = _minimal_plan_dict()
+    requests = data["tasks"][0]["requests"]
+    requests.append(_request_node("k2", actor_id="other"))
+    node = requests[0]
+    node["context_mode"] = "append"
+    node["context_after"] = "k2"
+    plan = ReplayPlan.from_dict(data)
+    with pytest.raises(ValueError, match="context_after must reference the same actor"):
+        validate_loaded_plan(plan)
+
+
+def test_validate_loaded_plan_accepts_same_actor_append_context() -> None:
+    data = _minimal_plan_dict()
+    requests = data["tasks"][0]["requests"]
+    requests.append(_request_node("k2"))
+    node = requests[0]
+    node["context_mode"] = "append"
+    node["context_after"] = "k2"
+    validate_loaded_plan(ReplayPlan.from_dict(data))
+
+
+def _request_node(key: str, *, actor_id: str = "lead") -> dict:
+    return {
+        "runtime_request_id": f"rid-{key}",
+        "source_key": key,
+        "node_type": "request",
+        "send_after": None,
+        "effective_interval_seconds": 0.0,
+        "prompt_recipe_key": key,
+        "prompt_kind": "lead_main",
+        "actor_id": actor_id,
+        "actor_role": "lead",
+        "parent_actor_id": None,
+        "context_after": None,
+        "context_mode": "independent",
+        "planned_input_tokens": 10,
+        "planned_output_tokens": 2,
+        "source_output_tokens": 2,
+        "backend_sampling_seed": None,
+    }
+
+
+def _timing_node(key: str, *, actor_id: str = "lead") -> dict:
+    return {
+        "runtime_request_id": f"rid-{key}",
+        "source_key": key,
+        "node_type": "timing_dependency",
+        "send_after": None,
+        "effective_interval_seconds": 0.0,
+        "effective_duration_seconds": 1.0,
+        "prompt_kind": "none",
+        "actor_id": actor_id,
+        "actor_role": "unknown",
+        "parent_actor_id": None,
+    }
+
+
+def test_loaded_plan_drives_the_executor(tmp_path: Path) -> None:
+    """A plan written by the runner and reloaded from disk still executes.
+
+    The runner currently executes the in-memory plan and only *writes*
+    ``replay-plan.json``, so nothing else proves the loader's output is a valid
+    executor input. This drives the real :class:`ReplayExecutor` with a stub
+    transport: no backend and no accelerator are involved, but the loaded plan
+    goes through prompt preparation, scheduling, interval release and result
+    collection exactly as a live run would.
+    """
+
+    async def exercise() -> None:
+        source = tmp_path / "requests.jsonl"
+        _source(source)
+        config = ReplayBenchConfig.model_validate(
+            {
+                "experiment": {"task_num": 5, "result_dir": tmp_path / "result", "max_concurrency": 2},
+                "backend": {"endpoint": "/v1/chat/completions"},
+                "replay": {"trace_path": source, "sample_seed": 9, "prompt_transport": "completion_token_ids"},
+            }
+        )
+        plan = build_replay_plan(config, analyze_replay_trace(source))
+
+        path = tmp_path / "replay-plan.json"
+        path.write_text(json.dumps(plan.to_dict()), encoding="utf-8")
+        loaded = ReplayPlan.load(path)
+        validate_loaded_plan(loaded)
+
+        tokenizer = TokenizerClient(config)
+        await tokenizer.client.aclose()
+        tokenizer.client = httpx.AsyncClient(transport=httpx.MockTransport(_tokens))
+        try:
+            prompts = PromptBuilder(config, tokenizer)
+            await prompts.prepare_tasks(loaded)
+            results = await ReplayExecutor(config, loaded, prompts, _StubTransport()).execute()
+        finally:
+            await tokenizer.close()
+
+        assert len(results) == len(loaded.tasks)
+        assert all(result.status == "completed" for result in results)
+        expected = {task.runtime_session_id: len(task.requests) for task in loaded.tasks}
+        for result in results:
+            assert len(result.nodes) == expected[result.runtime_session_id]
+
+    asyncio.run(exercise())
+
+
+async def _tokens(request) -> httpx.Response:
+    return httpx.Response(200, json={"tokens": [10, 20, 30]})
+
+
+class _StubTransport:
+    """Records a successful completion without contacting a backend."""
+
+    async def send(self, task, node, prompt) -> TransportResult:
+        return TransportResult(
+            True,
+            "answer",
+            time.monotonic(),
+            200,
+            None,
+            input_tokens=len(prompt.token_ids),
+            assistant_token_ids=(42,),
+            output_tokens=1,
+        )
 
 
 def _first_request_node(data: dict) -> dict:
