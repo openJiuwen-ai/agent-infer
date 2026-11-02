@@ -16,14 +16,21 @@ steps:
         timeout_in_minutes: 25
         mirror_hardwares: l20_1
 
+  # Image is local to the agent. cpu_small is a different machine from the GPU
+  # build, so it builds the same Dockerfile via agentinfer-cpu.
+  - label: ":docker: Build CI image (cpu)"
+    key: ci-image-cpu
+    mirror_hardwares: cpu_small
+    docker_compose_build: agentinfer-cpu
+
   - group: ":card_index_dividers: Unit Tests"
-    depends_on: ci-image
+    depends_on: ci-image-cpu
     steps:
       - label: "ut"
         commands:
           - pytest tests -sv --ignore=tests/e2e --ignore=tests/agentcache/core -m "not gpu_test and not e2e_perf"
         timeout_in_minutes: 20
-        mirror_hardwares: l20_1
+        mirror_hardwares: cpu_small
 
   - wait
   - label: ":broom: Cleanup"

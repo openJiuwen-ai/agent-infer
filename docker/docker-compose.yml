@@ -32,3 +32,11 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  # Same image as agentinfer-ci. !override clears the GPU reservation so this
+  # service can start on a machine with no NVIDIA runtime. An empty mapping
+  # would be merged and the GPU devices would remain.
+  agentinfer-cpu:
+    extends:
+      service: agentinfer-ci
+    deploy: !override {}

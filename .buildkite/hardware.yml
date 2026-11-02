@@ -8,6 +8,7 @@
 #   l20_2: both GPUs. Use a different queue so it does not run on a 1-GPU agent.
 #          Buildkite will not wait for both 1-GPU agents to go idle; do not
 #          point this queue at the same agents as l20_1.
+#   cpu_small: no GPU reservation. Runs the agentinfer-cpu service.
 
 mirror_hardwares:
   l20_1:
@@ -31,6 +32,18 @@ mirror_hardwares:
           config: docker/docker-compose.yml
           cli-version: 2
           run: agentinfer-ci
+          environment:
+            - HOME=/tmp/ci-home
+            - PYTEST_ADDOPTS=-o cache_dir=/tmp/pytest-cache
+
+  cpu_small:
+    agents:
+      queue: cpu-small
+    plugins:
+      - docker-compose#v4.9.0:
+          config: docker/docker-compose.yml
+          cli-version: 2
+          run: agentinfer-cpu
           environment:
             - HOME=/tmp/ci-home
             - PYTEST_ADDOPTS=-o cache_dir=/tmp/pytest-cache

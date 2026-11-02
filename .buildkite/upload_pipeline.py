@@ -48,6 +48,10 @@ def _apply_preset(step: dict, presets: dict) -> None:
 
     env = dict(preset.get("env") or {})
     env.update(step.get("env") or {})
+    # Compose Bake refuses to replace an image tag that is already present
+    # (`image "...": already exists`). The classic builder overwrites the tag.
+    if image_build:
+        env.setdefault("COMPOSE_BAKE", "false")
     if env:
         step["env"] = env
     elif "env" in step and not step["env"]:
