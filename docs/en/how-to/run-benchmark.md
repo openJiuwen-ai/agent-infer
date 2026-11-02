@@ -193,6 +193,31 @@ timeout or cancellation reasons are preserved. Cleanup details are recorded in
 For Router runs use `swebench_agentinfer.yaml`, with `backend.base_url` pointing to the Router and
 `backend.metrics_url` directly to vLLM. The Router forwards transparently without the old registration/cleanup API.
 
+## Historical DSH execution record (2026-10-29)
+
+The run `test-dsh-20261029-102951` exercised 16 SWE-bench Verified Astropy tasks
+at task concurrency 8, with a 3600-second per-task timeout and no overall timeout.
+It used DSH 0.2.1-rc.2, Node 24.22.1, Python 3.12.13 and
+Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8 in the plan-subagent profile.
+
+| Observation | Result |
+| --- | --- |
+| Agent tasks completed / failed | 14 / 2 |
+| Tasks with exported patches | 14 |
+| Run wall time | 3614.25 seconds |
+| Model requests successful / failed | 1971 / 1 |
+| Request Proxy TTFT mean / P95 | 1.201 / 2.887 seconds |
+
+Task 13033 timed out after a child repeatedly read the same source; its final
+request was cancelled during cleanup. Task 13579 failed because the lead ended
+without completing plan approval. These are observations from that dated run,
+not outcomes guaranteed by the current runtime safeguards.
+
+No official correctness evaluation was available for this run. The 87.5% agent
+completion rate is not a SWE-bench resolved rate, and its long-tail behavior does
+not establish normal-workload scaling. The [Chinese run record](../../zh/how-to/run-benchmark.md)
+retains the full parameters, task evidence and reproduction example.
+
 For captured traces, see [Trace Replay](run-trace-replay.md).
 
 ## Local smoke validation

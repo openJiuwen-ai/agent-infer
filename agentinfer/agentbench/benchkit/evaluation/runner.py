@@ -19,7 +19,11 @@ from .config import EvaluationConfig
 from .inputs import digest, freeze_inputs, json_digest, prepare_inputs
 
 _PROBE = """
-import hashlib, importlib.metadata as m, json, pathlib, platform
+import hashlib, importlib.metadata as m, json, pathlib, platform, sys
+# Check version before importing any version-specific harness module.
+version = m.version('swebench')
+if version != sys.argv[2]:
+    sys.exit(f'expected SWE-bench {sys.argv[2]}, got {version}')
 import swebench
 from swebench.harness.test_spec.test_spec import make_test_spec
 root = pathlib.Path(swebench.__file__).parent
@@ -27,9 +31,9 @@ h = hashlib.sha256()
 for p in sorted(root.rglob('*.py')):
     h.update(str(p.relative_to(root)).encode())
     h.update(p.read_bytes())
-rows = json.loads(pathlib.Path(__import__('sys').argv[1]).read_bytes())
+rows = json.loads(pathlib.Path(sys.argv[1]).read_bytes())
 print(json.dumps({
-    'version': m.version('swebench'), 'source_sha256': h.hexdigest(),
+    'version': version, 'source_sha256': h.hexdigest(),
     'python': platform.python_version(),
     'packages': {d.metadata['Name']: d.version for d in m.distributions()},
     'images': {r['instance_id']: make_test_spec(r, namespace='swebench').instance_image_key for r in rows}
@@ -38,23 +42,11 @@ print(json.dumps({
 
 
 def harness_identity(config: EvaluationConfig, dataset: Path, timeout: float) -> dict:
-    # Check version before importing any version-specific harness module.
-    deadline = time.monotonic() + timeout
-    probe = subprocess.run(
-        [str(config.harness_python), "-c", "import importlib.metadata; print(importlib.metadata.version('swebench'))"],
+    result = subprocess.run(
+        [str(config.harness_python), "-c", _PROBE, str(dataset), config.expected_harness_version],
         capture_output=True,
         text=True,
         timeout=timeout,
-    )
-    if probe.returncode:
-        raise ValueError(f"cannot inspect harness version: {probe.stderr[-2000:]}")
-    if probe.stdout.strip() != config.expected_harness_version:
-        raise ValueError(f"expected SWE-bench {config.expected_harness_version}, got {probe.stdout.strip()}")
-    result = subprocess.run(
-        [str(config.harness_python), "-c", _PROBE, str(dataset)],
-        capture_output=True,
-        text=True,
-        timeout=max(0.1, deadline - time.monotonic()),
     )
     if result.returncode:
         raise ValueError(f"harness preflight failed: {result.stderr[-2000:]}")
@@ -62,20 +54,41 @@ def harness_identity(config: EvaluationConfig, dataset: Path, timeout: float) ->
 
 
 def image_identities(images: dict[str, str], timeout: float) -> dict:
+    """Inspect unique image names in one bounded call and map them to task IDs.
+
+    Docker may return JSON for available images with a nonzero exit code when
+    other images are missing. Preserve that evidence and mark only missing names
+    unavailable; never assign results by position after a partial response.
+    """
+    if not images:
+        return {}
+    probe = subprocess.run(
+        ["docker", "image", "inspect", *dict.fromkeys(images.values())],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    items = json.loads(probe.stdout) if probe.stdout.strip() else []
+    if not isinstance(items, list) or (not items and probe.returncode == 0):
+        raise ValueError("docker image inspect returned no image identity list")
+    by_name = {}
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("Id"), str):
+            raise ValueError("docker image inspect returned an invalid image identity")
+        for name in [item["Id"], *(item.get("RepoTags") or []), *(item.get("RepoDigests") or [])]:
+            by_name[name] = item
     result = {}
-    deadline = time.monotonic() + timeout
     for iid, name in images.items():
-        probe = subprocess.run(
-            ["docker", "image", "inspect", name],
-            capture_output=True,
-            text=True,
-            timeout=max(0.1, deadline - time.monotonic()),
+        item = by_name.get(name)
+        result[iid] = (
+            {"name": name, "id": None}
+            if item is None
+            else {
+                "name": name,
+                "id": item["Id"],
+                "digests": item.get("RepoDigests") or [],
+            }
         )
-        if probe.returncode:
-            result[iid] = {"name": name, "id": None}
-        else:
-            item = json.loads(probe.stdout)[0]
-            result[iid] = {"name": name, "id": item["Id"], "digests": item.get("RepoDigests", [])}
     return result
 
 

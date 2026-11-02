@@ -3,6 +3,7 @@
 
 """Correctness contracts, fault handling and CLI integration without Docker."""
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -151,12 +152,46 @@ def test_select_only_completed_and_preserve_patch_bytes(source):
     prepared = prepare_inputs(source)
     assert prepared["instance_ids"] == ["astropy__astropy-0", "astropy__astropy-1"]
     for prediction in prepared["predictions"]:
-        patch = (source / "tasks" / prediction["instance_id"] / "model.patch").read_bytes()
+        iid = prediction["instance_id"]
+        patch = (source / "tasks" / iid / "model.patch").read_bytes()
         assert prediction["model_patch"].encode() == patch
         assert "REFERENCE" not in prediction["model_patch"]
+        for name in ("result.json", "prompt.txt"):
+            relative = f"tasks/{iid}/{name}"
+            assert prepared["source_hashes"][relative] == digest((source / relative).read_bytes())
+        assert prepared["generation"]["prompts"][iid] == prepared["source_hashes"][f"tasks/{iid}/prompt.txt"]
 
 
-@pytest.mark.parametrize("change", ["count", "duplicate", "status", "base_commit", "running"])
+def test_evaluation_preserves_patch_bytes_through_harness(source, fake_harness):
+    task = source / "tasks/astropy__astropy-0"
+    # Exercise JSON escaping, UTF-8, mixed newlines and a missing final newline.
+    patch = '--- a/file.py\r\n+++ b/file.py\n@@ -1 +1 @@\n-old\n+print("中文", "\\\\path")\t '.encode()
+    (task / "model.patch").write_bytes(patch)
+    update(task / "result.json", lambda d: d.update(patch_bytes=len(patch)))
+    originals = {p.parent.name: p.read_bytes() for p in (source / "tasks").glob("*/model.patch")}
+
+    output, code = runner.evaluate(source, config())
+    _, manifest, results = load_evaluation(output / "correctness.json")
+    assert code == 0
+    predictions = {
+        p["instance_id"]: p["model_patch"].encode()
+        for p in map(json.loads, (output / "inputs/predictions.jsonl").read_text().splitlines())
+    }
+    for iid, result in results.items():
+        original = originals[iid]
+        frozen = f"inputs/patches/{iid}.patch"
+        harness_patch = str(Path(result["report_path"]).parent / "patch.diff")
+        assert (source / "tasks" / iid / "model.patch").read_bytes() == original
+        assert (output / frozen).read_bytes() == original
+        assert predictions[iid] == original
+        assert (output / harness_patch).read_bytes() == original
+        expected = hashlib.sha256(original).hexdigest()
+        assert result["patch_sha256"] == expected
+        assert manifest["input_hashes"][frozen] == expected
+        assert manifest["output_hashes"][harness_patch] == expected
+
+
+@pytest.mark.parametrize("change", ["count", "duplicate", "status", "base_commit", "running", "directory"])
 def test_inconsistent_source_rejected(source, change):
     if change == "count":
         update(source / "summary.json", lambda d: d["tasks"].update(completed=1))
@@ -166,6 +201,12 @@ def test_inconsistent_source_rejected(source, change):
         update(source / "tasks/astropy__astropy-0/result.json", lambda d: d.update(outcome="failed"))
     elif change == "running":
         update(source / "manifest.json", lambda d: d.update(status="running"))
+    elif change == "directory":
+        first = source / "tasks/astropy__astropy-0/result.json"
+        second = source / "tasks/astropy__astropy-1/result.json"
+        first_bytes, second_bytes = first.read_bytes(), second.read_bytes()
+        first.write_bytes(second_bytes)
+        second.write_bytes(first_bytes)
     else:
         (source / "tasks/astropy__astropy-0/prompt.txt").write_text("Base commit: wrong")
     with pytest.raises(ValueError):
@@ -200,6 +241,36 @@ def test_exit_zero_does_not_hide_invalid_reports(source, fake_harness, fault):
     output, code = runner.evaluate(source, config())
     summary, _, _ = load_evaluation(output / "correctness.json")
     assert code == 1 and summary.counts.error == 1 and summary.counts.total == 2
+
+
+@pytest.mark.parametrize("resolved", [True, False])
+@pytest.mark.parametrize(
+    "original,replacement",
+    [(b"diff 0", b"diff 9"), (b"\r\n", b"\n")],
+    ids=["same-size-content", "line-endings"],
+)
+def test_harness_patch_mismatch_is_error(source, fake_harness, monkeypatch, resolved, original, replacement):
+    iid = "astropy__astropy-0"
+    fake_harness[iid] = resolved
+    execute = runner.run_harness
+
+    def execute_with_changed_patch(command, output, timeout, cleanup_timeout):
+        code = execute(command, output, timeout, cleanup_timeout)
+        run_id = command[command.index("--run_id") + 1]
+        path = output / "raw/logs/run_evaluation" / run_id / "org__model" / iid / "patch.diff"
+        patch = path.read_bytes()
+        changed = patch.replace(original, replacement)
+        assert changed != patch
+        path.write_bytes(changed)
+        return code
+
+    monkeypatch.setattr(runner, "run_harness", execute_with_changed_patch)
+    output, code = runner.evaluate(source, config())
+    summary, manifest, results = load_evaluation(output / "correctness.json")
+    assert code == 1 and manifest["returncode"] == 0 and manifest["status"] == "failed"
+    assert summary.counts.model_dump() == {"total": 2, "resolved": 0, "unresolved": 1, "empty_patch": 0, "error": 1}
+    assert results[iid]["status"] == "error"
+    assert results[iid]["reason"] == "invalid_or_missing_report: report patch does not match submitted patch"
 
 
 def test_timeout_still_finalizes_all_selected_tasks(source, fake_harness, monkeypatch):
@@ -332,11 +403,13 @@ def test_actual_subprocess_timeout_preserves_logs(tmp_path):
 
 
 def test_version_mismatch_fails_before_harness_import(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        runner.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a[0], 0, stdout="5.0.2\n", stderr="")
-    )
-    with pytest.raises(ValueError, match="expected SWE-bench 4.1.0"):
-        runner.harness_identity(config(), tmp_path / "dataset.json", 1)
+    metadata = tmp_path / "swebench-5.0.2.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text("Name: swebench\nVersion: 5.0.2\n")
+    (tmp_path / "swebench.py").write_text("raise AssertionError('harness imported before version check')\n")
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+    with pytest.raises(ValueError, match="expected SWE-bench 4.1.0, got 5.0.2"):
+        runner.harness_identity(config(), tmp_path / "dataset.json", 5)
 
 
 def test_cli_evaluation_without_config_uses_current_python(source, fake_harness, monkeypatch, tmp_path, capsys):
@@ -373,6 +446,63 @@ def test_optional_config_still_rejects_unknown_fields(tmp_path):
     with pytest.raises(SystemExit) as exc:
         main(["evaluate", "--result-path", str(tmp_path), "--config", str(config)])
     assert exc.value.code == 2
+
+
+def test_image_identity_capture_batches_verified_scale_and_deduplicates_aliases(monkeypatch):
+    images = {f"task-{i}": f"repo/image-{i}:latest" for i in range(500)}
+    images["same-image"] = images["task-0"]
+    calls = []
+
+    def inspect(command, **kwargs):
+        calls.append((command, kwargs))
+        records = [
+            {"Id": f"sha256:{i}", "RepoTags": [f"repo/image-{i}:latest"], "RepoDigests": [f"repo/image-{i}@sha256:{i}"]}
+            for i in reversed(range(500))
+        ]
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(records), stderr="")
+
+    monkeypatch.setattr(runner.subprocess, "run", inspect)
+    result = runner.image_identities(images, 30)
+    assert len(calls) == 1 and len(calls[0][0]) == 503
+    assert calls[0][1]["timeout"] == 30
+    assert result["task-499"]["id"] == "sha256:499"
+    assert result["task-0"] == result["same-image"]
+
+
+def test_image_identity_capture_keeps_partial_results_without_position_assumptions(monkeypatch):
+    def inspect(command, **kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout=json.dumps([{"Id": "sha256:second", "RepoTags": ["second:latest"], "RepoDigests": None}]),
+            stderr="No such image: first:latest",
+        )
+
+    monkeypatch.setattr(runner.subprocess, "run", inspect)
+    result = runner.image_identities({"a": "first:latest", "b": "second:latest"}, 30)
+    assert result == {
+        "a": {"name": "first:latest", "id": None},
+        "b": {"name": "second:latest", "id": "sha256:second", "digests": []},
+    }
+
+
+@pytest.mark.parametrize("stdout", ["not-json", "{}", "[]", '[{"RepoTags": ["image"]}]'])
+def test_image_identity_capture_rejects_invalid_success_responses(monkeypatch, stdout):
+    monkeypatch.setattr(
+        runner.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a[0], 0, stdout=stdout, stderr="")
+    )
+    with pytest.raises(ValueError):
+        runner.image_identities({"task": "image"}, 30)
+
+
+def test_image_identity_capture_skips_empty_input_and_propagates_timeout(monkeypatch):
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(runner.subprocess, "run", timeout)
+    assert runner.image_identities({}, 30) == {}
+    with pytest.raises(subprocess.TimeoutExpired):
+        runner.image_identities({"task": "image"}, 30)
 
 
 def test_cli_delegation_and_evaluation(source, fake_harness, tmp_path, capsys):
