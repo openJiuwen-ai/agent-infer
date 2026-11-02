@@ -3,6 +3,8 @@
 Evaluate existing AgentBench patches using official SWE-bench **4.1.0**. Only
 tasks with outcome=completed are selected; the finalized run may contain failed
 tasks. No model requests are made. Version 5 requires a different dataset schema.
+The evaluation runner targets Linux and uses POSIX process groups for bounded
+shutdown. On Windows, run it inside a Linux environment such as WSL2.
 
 The configuration file is optional. By default, evaluation uses the Python
 environment running AgentInfer, which must have swebench==4.1.0 installed:
@@ -44,6 +46,8 @@ per-task results/prompts and the local Verified dataset referenced by the manife
 Task IDs, repository and base commit are checked. With no completed tasks, no
 score is produced. Relative interpreter paths resolve against the configuration
 file; unknown fields and unsupported harness versions are rejected.
+Preflight checks the installed SWE-bench version before importing evaluator modules
+and collecting environment details; a version mismatch prevents scoring from starting.
 
 Omit --output-dir to create a unique directory under the run's evaluations/.
 Existing directories are not overwritten. Original patches, manifest and

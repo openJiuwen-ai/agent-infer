@@ -95,11 +95,12 @@ def prepare_inputs(run: Path) -> dict:
     for iid in selected:
         result = results[iid]
         task_dir = run / "tasks" / iid
-        if read_object(task_dir / "result.json").get("instance_id") != iid:
+        result_bytes = (task_dir / "result.json").read_bytes()
+        if json.loads(result_bytes)["instance_id"] != iid:
             raise ValueError("task directory and result ID differ")
         prompt = (task_dir / "prompt.txt").read_bytes()
-        for name in ("result.json", "prompt.txt"):
-            source_hashes[f"tasks/{iid}/{name}"] = digest((task_dir / name).read_bytes())
+        source_hashes[f"tasks/{iid}/result.json"] = digest(result_bytes)
+        source_hashes[f"tasks/{iid}/prompt.txt"] = digest(prompt)
         text = prompt.decode("utf-8")
         for label, expected in (
             ("Instance", iid),
@@ -108,7 +109,7 @@ def prepare_inputs(run: Path) -> dict:
         ):
             if not re.search(rf"^{label}: {re.escape(expected)}\s*$", text, flags=re.MULTILINE):
                 raise ValueError(f"source prompt {label} differs from dataset: {iid}")
-        prompts[iid] = digest(prompt)
+        prompts[iid] = source_hashes[f"tasks/{iid}/prompt.txt"]
         record = {"instance_id": iid, "status": "error", "patch_sha256": None, "reason": None}
         try:
             path = task_dir / "model.patch"

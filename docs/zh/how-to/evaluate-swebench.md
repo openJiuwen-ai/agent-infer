@@ -2,6 +2,7 @@
 
 使用官方 SWE-bench **4.1.0** 评测已有补丁，仅选择 outcome=completed 的任务。
 整批运行可以包含失败任务，评测不重新调用模型。5.x 要求不同的数据集字段。
+评测编排面向 Linux，使用 POSIX 进程组执行有界清理；Windows 请使用 WSL2 等 Linux 环境。
 
 配置文件可选。省略时使用运行 AgentInfer 的当前 Python 环境，该环境需要安装 swebench==4.1.0：
 
@@ -40,6 +41,7 @@ vllm bench serve --agentinfer evaluate \
 输入需要已结束的 manifest/summary、任务索引、逐任务 result/prompt 和 manifest 引用的
 本地 Verified 数据集。核对任务 ID、仓库和 base commit；无成功任务时不生成成绩。
 解释器相对路径以配置文件目录为基准，未知字段和不支持的版本会被拒绝。
+预检查先确认已安装的 SWE-bench 版本，匹配后才导入评分模块并采集环境信息；版本不匹配时不启动评分。
 
 省略 --output-dir 时，在原 run 的 evaluations/ 中创建唯一目录；已有目录不覆盖。
 原始补丁、manifest 和性能 summary 不修改。首次使用会下载官方 Docker 镜像。
