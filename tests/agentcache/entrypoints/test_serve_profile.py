@@ -138,9 +138,24 @@ def test_user_middleware_order_is_preserved_and_duplicates_removed() -> None:
         "custom.Mid",
         serve_profile.IDENTITY_MIDDLEWARE,
         serve_profile.LIFECYCLE_MIDDLEWARE,
+    ]
+    assert injected["middleware"] == [serve_profile.LIFECYCLE_MIDDLEWARE]
+
+
+def test_mori_profile_installs_sse_framing_without_changing_pt_defaults() -> None:
+    namespace, explicit = _parse(["MODEL", "--agentinfer", "--additional-config", '{"agentcache":{"strategy":"mori"}}'])
+    serve_profile.inject_profile(namespace, explicit)
+
+    assert namespace.middleware == [
+        *serve_profile.DEFAULT_SERVE_PROFILE.middlewares,
         serve_profile.SSE_FRAMING_MIDDLEWARE,
     ]
-    assert injected["middleware"] == [serve_profile.LIFECYCLE_MIDDLEWARE, serve_profile.SSE_FRAMING_MIDDLEWARE]
+
+
+def test_null_agentcache_config_preserves_default_middlewares() -> None:
+    namespace, explicit = _parse(["MODEL", "--agentinfer", "--additional-config", '{"agentcache":null}'])
+    serve_profile.inject_profile(namespace, explicit)
+    assert namespace.middleware == list(serve_profile.DEFAULT_SERVE_PROFILE.middlewares)
 
 
 def test_user_additional_config_merges_with_user_priority() -> None:

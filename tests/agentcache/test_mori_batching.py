@@ -10,7 +10,7 @@ from vllm.v1.core.sched.async_scheduler import AsyncScheduler
 from vllm.v1.core.sched.scheduler import Scheduler
 
 from agentinfer.agentcache.core.controller import build_mori_controller
-from agentinfer.agentcache.core.scheduler import (
+from agentinfer.agentcache.mori.scheduler import (
     AgentCacheAsyncSchedulerBridge,
     AgentCacheSyncSchedulerBridge,
     _VllmAdmissionHooks,
@@ -67,7 +67,7 @@ def test_unsupported_native_budget_fails_before_installing_cache_hooks(ceiling, 
     )
     with (
         patch.object(_VllmAdmissionHooks, "backend_pool_info", return_value=backend()),
-        patch("agentinfer.agentcache.core.scheduler.install_vllm_mori") as install,
+        patch("agentinfer.agentcache.mori.scheduler.install_vllm_mori") as install,
         pytest.raises(ValueError, match="decode_batch_tokens requires"),
     ):
         _VllmAdmissionHooks(owner, config, SimpleNamespace(num_blocks=100, kv_cache_groups=(object(),)), 16)

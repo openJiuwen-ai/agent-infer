@@ -14,11 +14,15 @@ from vllm.v1.engine import EngineCoreOutput, EngineCoreOutputs, FinishReason
 from vllm.v1.request import RequestStatus
 
 from agentinfer.agentcache.core.scheduler import (
+    AgentCacheAsyncSchedulerBridge as PublicAsyncSchedulerBridge,
+    AgentCacheSyncSchedulerBridge as PublicSyncSchedulerBridge,
+)
+from agentinfer.agentcache.mori.runtime_state import MORI_RUNTIME_STATE
+from agentinfer.agentcache.mori.scheduler import (
     AgentCacheAsyncSchedulerBridge,
     AgentCacheSyncSchedulerBridge,
     _VllmAdmissionHooks,
 )
-from agentinfer.agentcache.mori.runtime_state import MORI_RUNTIME_STATE
 from agentinfer.agentcache.mori.vllm_adapter import (
     VllmMORIAdapter,
     VllmOffloadObservation,
@@ -58,11 +62,40 @@ def mock_bridge_native(monkeypatch):
         MORI_RUNTIME_STATE.bind_provider(strategy)
         return VllmMORIAdapter(hbm_policy=None, cpu_policy=None, owner=owner, strategy=strategy)
 
-    monkeypatch.setattr("agentinfer.agentcache.core.scheduler.install_vllm_mori", install)
+    monkeypatch.setattr("agentinfer.agentcache.mori.scheduler.install_vllm_mori", install)
     monkeypatch.setattr(
-        "agentinfer.agentcache.core.scheduler.observe_vllm_offload",
+        "agentinfer.agentcache.mori.scheduler.observe_vllm_offload",
         lambda owner: VllmOffloadObservation(total_dram_kv_tokens=0, dram_chunk_size_tokens=16),
     )
+
+
+@pytest.mark.parametrize(
+    ("public_bridge", "mori_bridge", "async_enabled"),
+    [
+        (PublicAsyncSchedulerBridge, AgentCacheAsyncSchedulerBridge, True),
+        (PublicSyncSchedulerBridge, AgentCacheSyncSchedulerBridge, False),
+    ],
+)
+def test_public_bridge_constructs_real_mori_scheduler(public_bridge, mori_bridge, async_enabled, mock_bridge_native):
+    config = SimpleNamespace(
+        scheduler_config=SimpleNamespace(async_scheduling=async_enabled),
+        parallel_config=SimpleNamespace(data_parallel_index=0),
+        additional_config={"agentcache": {"strategy": "mori"}},
+    )
+
+    def initialize(owner, *args, **kwargs):
+        owner.requests = {}
+        owner.kv_cache_manager = None
+
+    with (
+        patch.object(Scheduler, "__init__", initialize),
+        patch.object(AsyncScheduler, "__init__", initialize),
+        patch.object(Scheduler, "get_request_counts", return_value=(0, 0)),
+    ):
+        bridge = public_bridge(config, SimpleNamespace(num_blocks=10), object(), 16, 16)
+    assert type(bridge) is mori_bridge
+    assert bridge._agentcache._mori_adapter is not None
+    bridge._agentcache.close()
 
 
 def test_full_adapter_can_close_and_rebind_in_process() -> None:
@@ -91,7 +124,7 @@ def test_failed_mori_startup_does_not_install_prefix_observer(mock_bridge_native
         parallel_config=SimpleNamespace(data_parallel_index=0),
         additional_config={"agentcache": {"strategy": "mori", "mori": {"mode": "full"}}},
     )
-    with patch("agentinfer.agentcache.core.scheduler.install_vllm_mori", side_effect=RuntimeError("missing hook")):
+    with patch("agentinfer.agentcache.mori.scheduler.install_vllm_mori", side_effect=RuntimeError("missing hook")):
         with pytest.raises(RuntimeError, match="missing hook"):
             _VllmAdmissionHooks(owner, config, SimpleNamespace(num_blocks=10), 16)
     assert owner.kv_cache_manager.get_computed_blocks is lookup
@@ -463,7 +496,7 @@ def test_retained_abort_uses_host_contract_and_releases_program_binding(
     monkeypatch, returns_requests, mock_bridge_native
 ) -> None:
     """Retained-only aborts preserve the installed host's return contract and clean bindings."""
-    monkeypatch.setattr("agentinfer.agentcache.core.scheduler._NATIVE_FINISH_RETURNS_REQUESTS", returns_requests)
+    monkeypatch.setattr("agentinfer.agentcache.mori.scheduler._NATIVE_FINISH_RETURNS_REQUESTS", returns_requests)
     owner = SimpleNamespace(requests={}, kv_cache_manager=None)
     config = SimpleNamespace(
         parallel_config=SimpleNamespace(data_parallel_index=0),
@@ -507,7 +540,7 @@ def test_running_abort_keeps_lease_until_native_finish_confirmation(
     monkeypatch, returns_requests, mock_bridge_native
 ) -> None:
     """A cancellation intent alone cannot convert an executing lease into Acting."""
-    monkeypatch.setattr("agentinfer.agentcache.core.scheduler._NATIVE_FINISH_RETURNS_REQUESTS", returns_requests)
+    monkeypatch.setattr("agentinfer.agentcache.mori.scheduler._NATIVE_FINISH_RETURNS_REQUESTS", returns_requests)
     owner = SimpleNamespace(requests={}, kv_cache_manager=None)
     config = SimpleNamespace(
         parallel_config=SimpleNamespace(data_parallel_index=0),
@@ -584,7 +617,7 @@ def test_retained_prefix_observation_accepts_vllm_cache_hit_results(cache_hit) -
     hooks = object.__new__(_VllmAdmissionHooks)
     hooks.controller = controller
 
-    with patch("agentinfer.agentcache.core.scheduler.logger.warning") as warning:
+    with patch("agentinfer.agentcache.mori.scheduler.logger.warning") as warning:
         hooks._observe_retained_prefix_cache(owner)
 
     lookup.assert_called_once_with(request.block_hashes, 128)
@@ -607,7 +640,7 @@ def test_retained_prefix_observation_continues_after_incomplete_cache_hit(cache_
     hooks = object.__new__(_VllmAdmissionHooks)
     hooks.controller = controller
 
-    with patch("agentinfer.agentcache.core.scheduler.logger.warning") as warning:
+    with patch("agentinfer.agentcache.mori.scheduler.logger.warning") as warning:
         hooks._observe_retained_prefix_cache(owner)
 
     controller.on_prefix_cache_observation.assert_called_once_with("valid", 96)

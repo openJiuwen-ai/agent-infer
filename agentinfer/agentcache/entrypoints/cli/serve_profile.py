@@ -50,7 +50,7 @@ class ServeProfile:
 DEFAULT_SERVE_PROFILE = ServeProfile(
     async_scheduler_cls=ASYNC_SCHEDULER_CLS,
     sync_scheduler_cls=SYNC_SCHEDULER_CLS,
-    middlewares=(IDENTITY_MIDDLEWARE, LIFECYCLE_MIDDLEWARE, SSE_FRAMING_MIDDLEWARE),
+    middlewares=(IDENTITY_MIDDLEWARE, LIFECYCLE_MIDDLEWARE),
     agentcache_config={},
 )
 
@@ -184,10 +184,15 @@ def inject_profile(
     setattr(namespace, SCHEDULER_CLS_DEST, scheduler_cls)
     injected[SCHEDULER_CLS_DEST] = scheduler_cls
 
+    merged_config = _merge_additional_config(getattr(namespace, ADDITIONAL_CONFIG_DEST, None), resolved)
+    configured_middlewares = resolved.middlewares
+    agentcache_config = merged_config.get("agentcache")
+    if profile is None and isinstance(agentcache_config, dict) and agentcache_config.get("strategy") == "mori":
+        configured_middlewares = (*configured_middlewares, SSE_FRAMING_MIDDLEWARE)
     user_middleware = list(getattr(namespace, MIDDLEWARE_DEST, None) or [])
     merged_middleware = list(user_middleware)
     appended: list[str] = []
-    for middleware in resolved.middlewares:
+    for middleware in configured_middlewares:
         if middleware not in merged_middleware:
             merged_middleware.append(middleware)
             appended.append(middleware)
@@ -196,7 +201,6 @@ def inject_profile(
         injected[MIDDLEWARE_DEST] = appended
 
     if hasattr(namespace, ADDITIONAL_CONFIG_DEST):
-        merged_config = _merge_additional_config(getattr(namespace, ADDITIONAL_CONFIG_DEST, None), resolved)
         setattr(namespace, ADDITIONAL_CONFIG_DEST, merged_config)
         injected[ADDITIONAL_CONFIG_DEST] = merged_config
 

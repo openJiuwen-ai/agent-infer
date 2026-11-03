@@ -355,8 +355,7 @@ def test_async_bridge_rejects_invalid_adapter_settings(settings: dict[str, objec
             AgentCacheAsyncSchedulerBridge(config, SimpleNamespace(num_blocks=10), object(), 16, 16)
 
 
-@pytest.mark.parametrize("returns_requests", [False, True])
-def test_async_bridge_reports_native_abort_as_completion_without_failure_semantics(returns_requests) -> None:
+def test_async_bridge_reports_native_abort_as_completion_without_failure_semantics() -> None:
     config = SimpleNamespace(
         scheduler_config=SimpleNamespace(async_scheduling=True),
         parallel_config=SimpleNamespace(data_parallel_index=0),
@@ -366,14 +365,14 @@ def test_async_bridge_reports_native_abort_as_completion_without_failure_semanti
             }
         },
     )
-    native_request = SimpleNamespace(request_id="request-1", client_index=3, num_tokens=123)
-    native_finished = [native_request] if returns_requests else [("request-1", 3)]
+    native_request = SimpleNamespace(num_tokens=123)
 
     def initialize(scheduler, *args, **kwargs) -> None:
         scheduler.waiting = []
         scheduler.running = []
         scheduler.skipped_waiting = []
         scheduler.requests = {"request-1": native_request}
+        scheduler.kv_holding_waiting = []
 
     with (
         _patch_controller_build(),
@@ -381,7 +380,7 @@ def test_async_bridge_reports_native_abort_as_completion_without_failure_semanti
         patch.object(
             Scheduler,
             "finish_requests",
-            return_value=native_finished,
+            return_value=[("request-1", 3)],
         ),
     ):
         bridge = AgentCacheAsyncSchedulerBridge(config, SimpleNamespace(num_blocks=10), object(), 16, 16)
@@ -390,6 +389,6 @@ def test_async_bridge_reports_native_abort_as_completion_without_failure_semanti
         bridge._agentcache.tracked_native.add("request-1")
         finished = bridge.finish_requests("request-1", object())
 
-    assert finished == native_finished
+    assert finished == [("request-1", 3)]
     assert controller.completed == [("request-1", 123)]
     assert bridge._agentcache.tracked_native == set()
