@@ -25,7 +25,8 @@ Shared vLLM/case loading: [`../../helpers/`](../../helpers/).
 | `helpers/replay_executor.py` | `run_replay_cold_starts` |
 | `helpers/replay_compare.py` | Repeatability compare between two run dirs |
 | `helpers/replay_repeatability.py` | Shared pytest body |
-| `conftest.py` | `--test-config-file`, `--bench-config`, `--cold-runs`, etc. |
+| [`../../conftest.py`](../../conftest.py) | Shared `--test-config-file`, `--task-num`, and `--max-concurrency` options |
+| `conftest.py` | Replay-specific `--bench-config`, `--cold-runs`, and `--stability-tolerance` options |
 
 `test_replay.py` parametrizes three suites; only the param whose `workload` matches `--test-config-file`
 runs—the others **skip**. Prefer `test_replay.py::test_trace_replay[tracelab]`.
