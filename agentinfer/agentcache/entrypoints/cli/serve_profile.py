@@ -187,7 +187,11 @@ def inject_profile(
     merged_config = _merge_additional_config(getattr(namespace, ADDITIONAL_CONFIG_DEST, None), resolved)
     configured_middlewares = resolved.middlewares
     agentcache_config = merged_config.get("agentcache")
-    if profile is None and isinstance(agentcache_config, dict) and agentcache_config.get("strategy") == "mori":
+    if (
+        (profile is None or profile is DEFAULT_SERVE_PROFILE)
+        and isinstance(agentcache_config, dict)
+        and agentcache_config.get("strategy") == "mori"
+    ):
         configured_middlewares = (*configured_middlewares, SSE_FRAMING_MIDDLEWARE)
     user_middleware = list(getattr(namespace, MIDDLEWARE_DEST, None) or [])
     merged_middleware = list(user_middleware)

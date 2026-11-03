@@ -7,10 +7,10 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-import agentinfer.agentcache.mori.scheduler as bridge_module
+import agentinfer.agentcache.core.scheduler as bridge_module
+from agentinfer.agentcache.core.scheduler import _VllmAdmissionHooks
 from agentinfer.agentcache.mori.hbm_policy import MORIHBMPolicy
 from agentinfer.agentcache.mori.runtime_state import MORIRuntimeState
-from agentinfer.agentcache.mori.scheduler import _VllmAdmissionHooks
 from agentinfer.agentcache.mori.simple_cpu_policy import MORISimpleCPUOffloadPolicy
 from agentinfer.scheduling.domain import ProgramRef, ProgramState, ProgramStatus
 from agentinfer.scheduling.identity import AgentIdentity

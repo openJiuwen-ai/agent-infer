@@ -5,12 +5,18 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
 
 from vllm.v1.request import Request
 
 from agentinfer.scheduling.backend import BackendPoolInfo
 from agentinfer.scheduling.identity import JsonMapping
+from agentinfer.scheduling.mori import (
+    MORIConfig,
+    MORIGlobalFactors,
+    MORIMode,
+    MORIProgramFactors,
+    build_mori_strategy,
+)
 from agentinfer.scheduling.observability import SchedulerObservabilityConfig
 from agentinfer.scheduling.progress_ttl import (
     ProgressTTLConfig,
@@ -21,9 +27,6 @@ from agentinfer.scheduling.progress_ttl import (
     build_progress_ttl_strategy,
 )
 from agentinfer.scheduling.runtime import ProgramScheduler
-
-if TYPE_CHECKING:
-    from agentinfer.scheduling.mori import MORIGlobalFactors, MORIMode, MORIProgramFactors
 
 _FIXED_PROGRESS_TTL_SETTINGS = frozenset({"decode_buffer_tokens"})
 
@@ -115,8 +118,6 @@ def build_mori_controller(
     settings: JsonMapping,
 ) -> ProgramScheduler[Request, MORIGlobalFactors, MORIProgramFactors]:
     """Build MORI through the same explicit construction path as Progress-TTL."""
-    from agentinfer.scheduling.mori import MORIConfig, MORIMode, build_mori_strategy
-
     raw = settings.get("mori", {})
     if not isinstance(raw, dict):
         raise ValueError("additional_config.agentcache.mori must be an object")
@@ -385,8 +386,6 @@ def _mode_setting(settings: JsonMapping, name: str, default: ProgressTTLMode) ->
 
 def _mori_mode_setting(settings: JsonMapping, name: str, default: MORIMode) -> MORIMode:
     """Accept the full MORI mode, including the existing explicit configuration."""
-    from agentinfer.scheduling.mori import MORIMode
-
     value = settings.get(name, default.value)
     if not isinstance(value, str):
         raise ValueError(f"mori.{name} must be: full")

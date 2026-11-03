@@ -8,8 +8,8 @@ from unittest.mock import Mock, patch
 import pytest
 
 from agentinfer.agentcache.core.controller import build_mori_controller
+from agentinfer.agentcache.core.scheduler import _VllmAdmissionHooks
 from agentinfer.agentcache.mori.runtime_state import MORI_RUNTIME_STATE
-from agentinfer.agentcache.mori.scheduler import _VllmAdmissionHooks
 from agentinfer.agentcache.mori.vllm_adapter import VllmMORIAdapter
 from agentinfer.agentcache.mori.writeback_audit import WritebackSourceAudit
 from agentinfer.scheduling.mori import MORIConfig, MORIStrategy
