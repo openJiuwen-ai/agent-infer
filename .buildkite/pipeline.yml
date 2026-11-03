@@ -1,7 +1,15 @@
-# Bootstrap. Buildkite runs this file directly. It expands test-ready.yml
-# (mirror_hardwares names) and uploads the concrete steps onto this build.
+# Bootstrap. Buildkite runs this file directly. test-ready.yml is uploaded only
+# when the pull request has the `ready` label.
+#
+# Adding the label starts a build only when both GitHub settings are set on
+# this pipeline:
+#   - Build when pull request labels are changed: enabled
+#   - Skip when pull request has existing build for commit and branch: disabled
+# The second one is on by default, and it drops the label event when that
+# commit was already built.
 steps:
   - label: ":pipeline: Upload ready pipeline"
+    if: build.pull_request.labels includes "ready"
     command: python3 .buildkite/upload_pipeline.py .buildkite/test-ready.yml
     agents:
       queue: L20-cpu-small
