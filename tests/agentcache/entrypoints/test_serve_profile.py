@@ -138,8 +138,9 @@ def test_user_middleware_order_is_preserved_and_duplicates_removed() -> None:
         "custom.Mid",
         serve_profile.IDENTITY_MIDDLEWARE,
         serve_profile.LIFECYCLE_MIDDLEWARE,
+        serve_profile.SSE_FRAMING_MIDDLEWARE,
     ]
-    assert injected["middleware"] == [serve_profile.LIFECYCLE_MIDDLEWARE]
+    assert injected["middleware"] == [serve_profile.LIFECYCLE_MIDDLEWARE, serve_profile.SSE_FRAMING_MIDDLEWARE]
 
 
 def test_user_additional_config_merges_with_user_priority() -> None:

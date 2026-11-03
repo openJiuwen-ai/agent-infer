@@ -52,6 +52,7 @@ class RequestPool(Generic[RetainedRequestT]):
     def __init__(self) -> None:
         self._entries: dict[str, RequestPoolEntry[RetainedRequestT]] = {}
         self._recent_admit: dict[str, DispatchTarget] = {}
+        self._by_program: dict[ProgramRef | None, dict[str, None]] = {}
 
     @property
     def waiting_request_ids(self) -> tuple[str, ...]:
@@ -70,6 +71,21 @@ class RequestPool(Generic[RetainedRequestT]):
         if entry.request_id in self._entries:
             raise ValueError(f"duplicate request_id: {entry.request_id}")
         self._entries[entry.request_id] = entry
+        self._by_program.setdefault(entry.program, {})[entry.request_id] = None
+
+    def for_program(self, program: ProgramRef) -> tuple[RequestPoolEntry[RetainedRequestT], ...]:
+        """Return only this owner's retained attempts, in arrival order."""
+        return tuple(self._entries[key] for key in self._by_program.get(program, ()))
+
+    def _remove(self, request_id: str) -> RequestPoolEntry[RetainedRequestT] | None:
+        """Remove one entry from both indexes; admission receipts are managed by callers."""
+        entry = self._entries.pop(request_id, None)
+        if entry is not None:
+            ids = self._by_program[entry.program]
+            ids.pop(request_id, None)
+            if not ids:
+                del self._by_program[entry.program]
+        return entry
 
     def get(self, request_id: str) -> RequestPoolEntry[RetainedRequestT] | None:
         """Return one retained attempt without mutation."""
@@ -94,7 +110,7 @@ class RequestPool(Generic[RetainedRequestT]):
         """Remove and return all newly admitted attempts in decision order."""
         admitted: list[tuple[RequestPoolEntry[RetainedRequestT], DispatchTarget]] = []
         for request_id, target in tuple(self._recent_admit.items()):
-            entry = self._entries.pop(request_id, None)
+            entry = self._remove(request_id)
             self._recent_admit.pop(request_id, None)
             if entry is not None:
                 admitted.append((entry, target))
@@ -108,10 +124,10 @@ class RequestPool(Generic[RetainedRequestT]):
         target = self._recent_admit.pop(request_id, None)
         if target is None:
             return None
-        entry = self._entries.pop(request_id, None)
+        entry = self._remove(request_id)
         return (entry, target) if entry is not None else None
 
     def cancel(self, request_id: str) -> RequestPoolEntry[RetainedRequestT] | None:
         """Remove a cancelled or timed-out retained request attempt."""
         self._recent_admit.pop(request_id, None)
-        return self._entries.pop(request_id, None)
+        return self._remove(request_id)

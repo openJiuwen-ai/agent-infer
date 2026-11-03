@@ -22,6 +22,7 @@ ASYNC_SCHEDULER_CLS = "agentinfer.agentcache.core.scheduler.AgentCacheAsyncSched
 SYNC_SCHEDULER_CLS = "agentinfer.agentcache.core.scheduler.AgentCacheSyncSchedulerBridge"
 IDENTITY_MIDDLEWARE = "agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware"
 LIFECYCLE_MIDDLEWARE = "agentinfer.agentcache.core.api_adapter.AgentCacheLifecycleMiddleware"
+SSE_FRAMING_MIDDLEWARE = "agentinfer.agentcache.core.sse_framing.SSEJsonFramingMiddleware"
 
 LIFECYCLE_SOCKET_ENV = "AGENTCACHE_VLLM_LIFECYCLE_SOCKET"
 DEFAULT_LIFECYCLE_SOCKET = "/tmp/agentinfer-vllm-lifecycle.sock"
@@ -49,7 +50,7 @@ class ServeProfile:
 DEFAULT_SERVE_PROFILE = ServeProfile(
     async_scheduler_cls=ASYNC_SCHEDULER_CLS,
     sync_scheduler_cls=SYNC_SCHEDULER_CLS,
-    middlewares=(IDENTITY_MIDDLEWARE, LIFECYCLE_MIDDLEWARE),
+    middlewares=(IDENTITY_MIDDLEWARE, LIFECYCLE_MIDDLEWARE, SSE_FRAMING_MIDDLEWARE),
     agentcache_config={},
 )
 
@@ -65,9 +66,9 @@ def add_agentinfer_arguments(parser: argparse.ArgumentParser) -> None:
         "--agentinfer",
         action="store_true",
         default=False,
-        help="Enable the AgentInfer Progress-TTL serving path: injects the AgentCache scheduler bridge "
+        help="Enable the AgentInfer agent-aware serving path: injects the AgentCache scheduler bridge "
         "(async or sync, following --async-scheduling/--no-async-scheduling), the identity and lifecycle "
-        "middleware, and the embedded Progress-TTL controller.",
+        "middleware, and the explicitly selected embedded scheduling controller.",
     )
 
 

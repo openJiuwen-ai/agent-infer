@@ -41,6 +41,12 @@ class SchedulingSnapshot:
     waiting_programs: tuple[ProgramRef, ...]
     native_used_kv_tokens: int | None = None
     native_waiting_kv_tokens: int | None = None
+    total_dram_kv_tokens: int | None = None
+    used_dram_kv_tokens: int | None = None
+    pending_h2d_kv_tokens: int | None = None
+    pending_d2h_kv_tokens: int | None = None
+    hbm_block_size_tokens: int | None = None
+    dram_chunk_size_tokens: int | None = None
     request_pool_waiting_requests: int = 0
     _programs_by_ref: Mapping[ProgramRef, ProgramView] = field(init=False, repr=False, compare=False)
 
@@ -58,6 +64,17 @@ class SchedulingSnapshot:
             raise ValueError("snapshot native_used_kv_tokens must be non-negative")
         if self.native_waiting_kv_tokens is not None and self.native_waiting_kv_tokens < 0:
             raise ValueError("snapshot native_waiting_kv_tokens must be non-negative")
+        dram_counts = (
+            self.total_dram_kv_tokens,
+            self.used_dram_kv_tokens,
+            self.pending_h2d_kv_tokens,
+            self.pending_d2h_kv_tokens,
+        )
+        if any(value is not None and value < 0 for value in dram_counts):
+            raise ValueError("snapshot DRAM and transfer token counts must be non-negative")
+        sizes = (self.hbm_block_size_tokens, self.dram_chunk_size_tokens)
+        if any(value is not None and value <= 0 for value in sizes):
+            raise ValueError("snapshot KV block and chunk sizes must be positive when supplied")
         if self.request_pool_waiting_requests < 0:
             raise ValueError("snapshot request_pool_waiting_requests must be non-negative")
         if (
@@ -66,6 +83,12 @@ class SchedulingSnapshot:
             and self.native_used_kv_tokens > self.total_kv_tokens
         ):
             raise ValueError("snapshot native_used_kv_tokens must not exceed total_kv_tokens")
+        if (
+            self.total_dram_kv_tokens is not None
+            and self.used_dram_kv_tokens is not None
+            and self.used_dram_kv_tokens > self.total_dram_kv_tokens
+        ):
+            raise ValueError("snapshot used_dram_kv_tokens must not exceed total_dram_kv_tokens")
         programs_by_ref: dict[ProgramRef, ProgramView] = {}
         for program in self.programs:
             if program.ref in programs_by_ref:
