@@ -56,6 +56,8 @@ def _get_open_port() -> int:
 
 
 def _wait_for_health(port: int, timeout: int) -> None:
+    """Poll /health until ready."""
+
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -87,20 +89,39 @@ def _shutdown(proc: subprocess.Popen) -> None:
         proc.wait()
 
 
-def _tee_server_output(proc: subprocess.Popen, log_file: Path) -> threading.Thread:
-    """Mirror server stdout/stderr to log_file and pytest stderr in real time."""
+def _tee_server_output(proc: subprocess.Popen, log_file: Path) -> tuple[threading.Thread, list[BaseException]]:
+    """Mirror server stdout/stderr to log_file and pytest stderr in real time.
+
+    Exceptions are stored and printed. They do not fail the test.
+    """
+
+    errors: list[BaseException] = []
 
     def _run() -> None:
-        assert proc.stdout is not None
-        with open(log_file, "w", encoding="utf-8") as log_fp:
-            for line in proc.stdout:
-                log_fp.write(line)
-                log_fp.flush()
-                print(line, end="", file=sys.stderr, flush=True)
+        try:
+            assert proc.stdout is not None
+            with open(log_file, "w", encoding="utf-8") as log_fp:
+                for line in proc.stdout:
+                    log_fp.write(line)
+                    log_fp.flush()
+                    print(line, end="", file=sys.stderr, flush=True)
+        except BaseException as exc:
+            errors.append(exc)
+            print(f"vllm serve log tee failed: {exc!r}", file=sys.stderr, flush=True)
 
     thread = threading.Thread(target=_run, name="vllm-serve-log-tee", daemon=True)
     thread.start()
-    return thread
+    return thread, errors
+
+
+def _finish_tee(tee: threading.Thread, errors: list[BaseException]) -> None:
+    """Give the log reader a moment to exit. A slow or failed reader is only logged."""
+
+    tee.join(timeout=5)
+    if errors:
+        print(f"vllm serve log tee failed: {errors[0]!r}", file=sys.stderr, flush=True)
+    if tee.is_alive():
+        print("vllm serve log tee still running after shutdown", file=sys.stderr, flush=True)
 
 
 def _print_server_log(log_file: Path, *, header: str) -> None:
@@ -154,22 +175,23 @@ def server(tmp_path_factory: pytest.TempPathFactory):
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        errors="replace",
         bufsize=1,
         start_new_session=True,
     )
-    tee = _tee_server_output(proc, log_file)
+    tee, tee_errors = _tee_server_output(proc, log_file)
 
     try:
         _wait_for_health(port, STARTUP_TIMEOUT)
     except Exception:
         _shutdown(proc)
-        tee.join(timeout=5)
+        _finish_tee(tee, tee_errors)
         _print_server_log(log_file, header="server failed to start; full log")
         pytest.fail(f"server failed to start; full log printed above ({log_file})")
 
     yield port, str(log_file), str(lifecycle_socket)
     _shutdown(proc)
-    tee.join(timeout=5)
+    _finish_tee(tee, tee_errors)
     _print_server_log(log_file, header="server shutdown; full log")
 
 

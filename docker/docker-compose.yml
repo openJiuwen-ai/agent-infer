@@ -13,18 +13,17 @@ services:
     working_dir: ${BUILDKITE_BUILD_CHECKOUT_PATH:-/app}
     network_mode: host
     ipc: host
-    privileged: true
     shm_size: 64gb
     cap_add: [SYS_PTRACE]
-    security_opt: [seccomp:unconfined]
     volumes:
-      - /home:/home
+      - /home/models:/home/models
       - ${BUILDKITE_BUILD_CHECKOUT_PATH:-/app}:${BUILDKITE_BUILD_CHECKOUT_PATH:-/app}
     environment:
       HF_ENDPOINT: https://hf-mirror.com
       HF_HOME: /home/models
       HF_HUB_CACHE: /home/models/hub
       HOME: /tmp/ci-home
+      PYTEST_ADDOPTS: -o cache_dir=/tmp/pytest-cache
     deploy:
       resources:
         reservations:
