@@ -7,7 +7,6 @@ import random
 import pytest
 
 from agentinfer.scheduling.domain import ProgramRef
-from agentinfer.scheduling.mori import MORIConfig
 from agentinfer.scheduling.mori.capacity import CapacityClaim, CapacityLedger
 
 pytestmark = pytest.mark.cpu_test
@@ -75,14 +74,3 @@ def test_three_to_two_to_one_owner_transitions_and_replacement():
     assert ledger.used == 16 and set(ledger.owners) == {7}
     assert ledger.remove(owners[2]) == 16
     assert ledger.used == 0 and not ledger.owners and not ledger._shared
-
-
-@pytest.mark.parametrize("value", [0, 1, None, "true"])
-def test_fast_capacity_configuration_is_strict_boolean(value):
-    with pytest.raises(ValueError, match="boolean"):
-        MORIConfig(fast_capacity_accounting=value)
-
-
-def test_fast_capacity_is_explicit():
-    assert not MORIConfig().fast_capacity_accounting
-    assert MORIConfig(fast_capacity_accounting=True).fast_capacity_accounting

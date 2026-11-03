@@ -10,8 +10,10 @@ from vllm.v1.core.block_pool import BlockPool
 from agentinfer.agentcache.mori.footprints import FootprintBook
 from agentinfer.agentcache.mori.hbm_policy import MORIHBMPolicy
 from agentinfer.agentcache.mori.runtime_state import MORIRuntimeState
-from agentinfer.scheduling.domain import ProgramRef
-from agentinfer.scheduling.mori import MORIConfig, MORIStrategy
+from agentinfer.agentcache.mori.simple_cpu_policy import MORISimpleCPUOffloadPolicy
+from agentinfer.scheduling import ProgramRef, ProgramState, ProgramStatus, TransitionController
+from agentinfer.scheduling.mori import MORIConfig, MORIMode, MORIStrategy, MORITier, build_mori_strategy
+from tests.scheduling.test_mori_strategy import set_tier, snapshot, view
 
 pytestmark = pytest.mark.cpu_test
 
@@ -100,3 +102,79 @@ def test_actual_native_block_id_reuse_invalidates_the_cached_footprint():
     policy.close()
     state.reset()
     assert not state.footprints._snapshots
+
+
+def test_recycled_block_and_new_prompt_invalidate_only_relevant_proof():
+    book = FootprintBook()
+    book.enabled = True
+    a, b = ProgramRef("a", 0), ProgramRef("b", 0)
+    for owner in (a, b):
+        book.add("gpu", 1, owner)
+    book.add("cpu", 1, a)
+    book.remove_block("gpu", 1)
+    assert book.get(a, "gpu") == book.get(b, "gpu") == frozenset()
+    assert book.get(a, "cpu") == frozenset({1})
+    book.add("gpu", 1, b)  # new contents, old owner proof cannot survive reuse
+    book.invalidate(a)
+    assert book.get(b, "gpu") == frozenset({1})
+    assert not book.get(a, "cpu")
+
+
+@pytest.mark.parametrize(("policy_type", "tier"), [(MORIHBMPolicy, "gpu"), (MORISimpleCPUOffloadPolicy, "cpu")])
+def test_native_ownership_reestablishes_proof_after_prompt_change_and_clears_on_reuse(policy_type, tier):
+    """The native ownership delta supplies proof even if the LRU owner was already known."""
+    state = MORIRuntimeState()
+    state.footprints.enabled = True
+    owner = ProgramRef("agent", 0)
+    state.bind_request("request", owner)
+    policy = policy_type(state)
+    policy.on_block_owner_added(8, "request")
+    assert state.footprint(owner, tier) == frozenset({8})
+    state.invalidate_footprint(owner)
+    policy.on_block_owner_added(8, "request")
+    assert state.footprint(owner, tier) == frozenset({8})
+    policy.on_block_removed(8)
+    assert not state.footprint(owner, tier)
+    policy.on_block_owner_added(8, "request")
+    policy.on_cache_reset()
+    assert not state.footprint(owner, tier)
+    policy.close()
+
+
+def test_runtime_state_idle_to_inactive_callback_preserves_footprint_book():
+    components = build_mori_strategy(MORIConfig(mode=MORIMode.FULL, decode_buffer_tokens=0))
+    program = view("cpu", state=ProgramState.PAUSED, status=ProgramStatus.ACTING, tokens=60, step_count=1)
+    set_tier(components, program, MORITier.CPU, idleness=0.9)
+    state = MORIRuntimeState()
+    state.footprints.enabled = True
+
+    class Index:
+        def __init__(self) -> None:
+            self.reclassified: list[ProgramRef] = []
+
+        def reclassify_program(self, program: ProgramRef) -> int:
+            self.reclassified.append(program)
+            return 0
+
+        def release_program(self, program: ProgramRef) -> int:
+            del program
+            return 0
+
+    index = Index()
+    state.register_index(index)
+    state.bind_provider(components.strategy)
+    state.footprints.add("cpu", 7, program.ref)
+    before = state.footprints.get(program.ref, "cpu")
+    try:
+        components.strategy.repair_capacity(
+            snapshot(program, hbm=1000, dram=0),
+            components.initial_factors,
+            TransitionController(lambda request: None),
+        )
+
+        assert components.initial_factors.for_program(program.ref).tier is MORITier.WAITING
+        assert index.reclassified == [program.ref]
+        assert before == frozenset({7})
+        assert state.footprints.get(program.ref, "cpu") == before
+    finally:
+        state.unbind_provider(components.strategy)

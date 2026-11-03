@@ -12,6 +12,14 @@ from agentinfer.scheduling.mori import MORIConfig, MORIMode, MORIStrategy
 
 pytestmark = pytest.mark.cpu_test
 
+BOOLEAN_SETTINGS = [
+    ("enable_wait_credit", True),
+    ("fast_capacity_accounting", False),
+    ("audit_writeback_sources", False),
+    ("repair_writeback_endpoints", False),
+    ("history_gated_gpu_service", False),
+]
+
 
 def backend(*, dram: int | None = 2000, chunk: int | None = 16) -> BackendPoolInfo:
     return BackendPoolInfo(
@@ -62,10 +70,26 @@ def test_decode_buffer_cannot_be_overridden() -> None:
         build_mori_controller(backend(), {"mori": {"decode_buffer_tokens": 999}})
 
 
-def test_wait_credit_can_be_disabled_for_exchange_only_ablation() -> None:
-    controller = build_mori_controller(backend(), {"mori": {"enable_wait_credit": False}})
+@pytest.mark.parametrize(("setting", "default"), BOOLEAN_SETTINGS)
+def test_boolean_configuration_defaults_and_overrides(setting, default):
+    options = {"gpu_service_requests": 4} if setting == "history_gated_gpu_service" else {}
+    assert getattr(MORIConfig(**options), setting) is default
+    assert getattr(build_mori_controller(backend(), {"mori": options}).strategy.config, setting) is default
+    for value in (False, True):
+        configured = {**options, setting: value}
+        assert getattr(MORIConfig(**configured), setting) is value
+        assert getattr(build_mori_controller(backend(), {"mori": configured}).strategy.config, setting) is value
 
-    assert controller.strategy.config.enable_wait_credit is False
+
+@pytest.mark.parametrize("setting", [name for name, _ in BOOLEAN_SETTINGS])
+@pytest.mark.parametrize("value", [0, 1, "true", "false", None])
+def test_boolean_configuration_requires_exact_boolean(setting, value):
+    options = {"gpu_service_requests": 4} if setting == "history_gated_gpu_service" else {}
+    configured = {**options, setting: value}
+    with pytest.raises(ValueError, match=f"{setting} must be a boolean"):
+        MORIConfig(**configured)
+    with pytest.raises(ValueError, match=f"{setting} must be a boolean"):
+        build_mori_controller(backend(), {"mori": configured})
 
 
 def test_ready_wait_reservation_is_explicit_and_defaults_off() -> None:
@@ -90,22 +114,6 @@ def test_gpu_service_request_budget_requires_non_negative_integer(value):
         build_mori_controller(backend(), {"mori": {"gpu_service_requests": value}})
 
 
-def test_history_gated_service_defaults_off_and_is_explicit():
-    assert build_mori_controller(backend(), {}).strategy.config.history_gated_gpu_service is False
-    controller = build_mori_controller(
-        backend(), {"mori": {"gpu_service_requests": 4, "history_gated_gpu_service": True}}
-    )
-    assert controller.strategy.config.history_gated_gpu_service is True
-
-
-@pytest.mark.parametrize("value", [0, 1, "true", None])
-def test_history_gated_service_requires_exact_boolean(value):
-    with pytest.raises(ValueError, match="history_gated_gpu_service must be a boolean"):
-        MORIConfig(gpu_service_requests=4, history_gated_gpu_service=value)
-    with pytest.raises(ValueError, match="history_gated_gpu_service must be a boolean"):
-        build_mori_controller(backend(), {"mori": {"gpu_service_requests": 4, "history_gated_gpu_service": value}})
-
-
 def test_history_gated_service_requires_service_budget():
     with pytest.raises(ValueError, match="requires full mode and a positive service budget"):
         MORIConfig(history_gated_gpu_service=True)
@@ -117,14 +125,6 @@ def test_invalid_ready_wait_limit_is_rejected(value) -> None:
         build_mori_controller(backend(), {"mori": {"ready_wait_limit_seconds": value}})
     with pytest.raises(ValueError):
         MORIConfig(ready_wait_limit_seconds=value)
-
-
-@pytest.mark.parametrize("value", [0, 1, "false", None])
-def test_wait_credit_requires_an_exact_boolean(value: object) -> None:
-    with pytest.raises(ValueError, match="enable_wait_credit must be a boolean"):
-        build_mori_controller(backend(), {"mori": {"enable_wait_credit": value}})
-    with pytest.raises(ValueError, match="enable_wait_credit must be a boolean"):
-        MORIConfig(enable_wait_credit=value)  # type: ignore[arg-type]
 
 
 def test_slow_request_diagnostics_default_and_explicit_settings() -> None:

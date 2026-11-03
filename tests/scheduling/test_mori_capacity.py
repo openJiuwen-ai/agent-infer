@@ -7,10 +7,6 @@ from unittest.mock import patch
 
 import pytest
 
-from agentinfer.agentcache.mori.footprints import FootprintBook
-from agentinfer.agentcache.mori.hbm_policy import MORIHBMPolicy
-from agentinfer.agentcache.mori.runtime_state import MORIRuntimeState
-from agentinfer.agentcache.mori.simple_cpu_policy import MORISimpleCPUOffloadPolicy
 from agentinfer.scheduling.domain import ProgramRef, ProgramState, ProgramStatus
 from agentinfer.scheduling.mori import MORITier, build_mori_strategy
 from agentinfer.scheduling.mori.capacity import CapacityClaim, CapacityLedger, ReliefProjection
@@ -145,43 +141,6 @@ def test_relief_projection_matches_independent_union_after_admissions_at_every_b
             assert projection.required(boundary, candidate) == expected
         admitted.append(candidate)
         projection.admit(candidate)
-
-
-def test_recycled_block_and_new_prompt_invalidate_only_relevant_proof():
-    book = FootprintBook()
-    book.enabled = True
-    a, b = ProgramRef("a", 0), ProgramRef("b", 0)
-    for owner in (a, b):
-        book.add("gpu", 1, owner)
-    book.add("cpu", 1, a)
-    book.remove_block("gpu", 1)
-    assert book.get(a, "gpu") == book.get(b, "gpu") == frozenset()
-    assert book.get(a, "cpu") == frozenset({1})
-    book.add("gpu", 1, b)  # new contents, old owner proof cannot survive reuse
-    book.invalidate(a)
-    assert book.get(b, "gpu") == frozenset({1})
-    assert not book.get(a, "cpu")
-
-
-@pytest.mark.parametrize(("policy_type", "tier"), [(MORIHBMPolicy, "gpu"), (MORISimpleCPUOffloadPolicy, "cpu")])
-def test_native_ownership_reestablishes_proof_after_prompt_change_and_clears_on_reuse(policy_type, tier):
-    """The native ownership delta supplies proof even if the LRU owner was already known."""
-    state = MORIRuntimeState()
-    state.footprints.enabled = True
-    owner = ProgramRef("agent", 0)
-    state.bind_request("request", owner)
-    policy = policy_type(state)
-    policy.on_block_owner_added(8, "request")
-    assert state.footprint(owner, tier) == frozenset({8})
-    state.invalidate_footprint(owner)
-    policy.on_block_owner_added(8, "request")
-    assert state.footprint(owner, tier) == frozenset({8})
-    policy.on_block_removed(8)
-    assert not state.footprint(owner, tier)
-    policy.on_block_owner_added(8, "request")
-    policy.on_cache_reset()
-    assert not state.footprint(owner, tier)
-    policy.close()
 
 
 def test_capacity_repair_uses_marginal_shared_relief_and_keeps_lazy_debt():

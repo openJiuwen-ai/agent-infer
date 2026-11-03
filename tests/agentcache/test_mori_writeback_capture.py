@@ -99,17 +99,6 @@ def test_nonpositional_layout_fails_without_replacing_native_hook():
     assert manager._mori_capture_finished_store is original
 
 
-@pytest.mark.parametrize("value", [0, 1, "true", None])
-def test_endpoint_repair_flag_is_strict_boolean(value):
-    with pytest.raises(ValueError):
-        MORIConfig(repair_writeback_endpoints=value)
-
-
-def test_endpoint_repair_is_explicit():
-    assert not MORIConfig().repair_writeback_endpoints
-    assert MORIConfig(repair_writeback_endpoints=True).repair_writeback_endpoints
-
-
 def native_transfer(*, capacity=3):
     """Real native pools and bookkeeping; no GPU bytes copied by this CPU test."""
     manager, strategy, pool, blocks, request, context, _ = native_metadata()

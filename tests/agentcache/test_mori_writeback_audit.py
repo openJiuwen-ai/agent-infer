@@ -7,13 +7,11 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from agentinfer.agentcache.core.controller import build_mori_controller
 from agentinfer.agentcache.core.scheduler import _VllmAdmissionHooks
 from agentinfer.agentcache.mori.runtime_state import MORI_RUNTIME_STATE
 from agentinfer.agentcache.mori.vllm_adapter import VllmMORIAdapter
 from agentinfer.agentcache.mori.writeback_audit import WritebackSourceAudit
 from agentinfer.scheduling.mori import MORIConfig, MORIStrategy
-from tests.agentcache.core.test_mori_controller import backend
 
 pytestmark = pytest.mark.cpu_test
 
@@ -192,18 +190,3 @@ def test_diagnostic_cleanup_failure_still_releases_every_native_handle():
     unregister_cpu.assert_called_once()
     unbind.assert_called_once_with(strategy)
     clear.assert_called_once()
-
-
-def test_audit_configuration_is_explicit():
-    assert not MORIConfig().audit_writeback_sources
-    assert build_mori_controller(
-        backend(), {"mori": {"audit_writeback_sources": True}}
-    ).strategy.config.audit_writeback_sources
-
-
-@pytest.mark.parametrize("value", [0, 1, "true", None])
-def test_audit_configuration_rejects_non_boolean_values(value):
-    with pytest.raises(ValueError):
-        MORIConfig(audit_writeback_sources=value)
-    with pytest.raises(ValueError):
-        build_mori_controller(backend(), {"mori": {"audit_writeback_sources": value}})
