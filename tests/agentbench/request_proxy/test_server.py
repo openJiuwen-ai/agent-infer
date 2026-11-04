@@ -783,3 +783,52 @@ def test_stream_read_failure_records_error_and_releases_shutdown(tmp_path: Path)
         assert row["error"] == "ReadError: stream exploded"
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "endpoint,terminal",
+    [
+        ("/v1/chat/completions", b"data: [DONE]\n\n"),
+        ("/v1/messages", b'data: {"type":"message_stop"}\n\n'),
+    ],
+)
+@pytest.mark.parametrize("complete", [False, True])
+def test_sdk_closing_after_terminal_event_is_success(tmp_path, endpoint, terminal, complete):
+    class FakeRequest:
+        headers = {}
+
+        async def body(self):
+            return b"{}"
+
+    async def scenario():
+        class CancelledStream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield b'data: {"choices":[{"delta":{"content":"answer"}}]}\n\n'
+                if complete:
+                    # Exercise a terminal marker split across transport chunks.
+                    yield terminal[:8]
+                    yield terminal[8:]
+                raise asyncio.CancelledError
+
+        writer = RequestTraceWriter(tmp_path / "requests.jsonl")
+        server = RequestProxyServer("http://backend", "run", writer, 10, "token", endpoint)
+        server.client = httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=CancelledStream())
+            )
+        )
+        await writer.start()
+        response = await server.handle_model_request(FakeRequest())
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                async for _ in response.body_iterator:
+                    pass
+        finally:
+            await response._finalize()
+            await server.close()
+        row = json.loads((tmp_path / "requests.jsonl").read_text())
+        assert row["status"] == ("success" if complete else "error")
+        assert row["error"] == (None if complete else "request cancelled")
+        assert server._active_requests == 0
+
+    asyncio.run(scenario())
