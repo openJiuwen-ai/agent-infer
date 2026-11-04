@@ -1,0 +1,45 @@
+# CI service. GPU and CPU builds run in parallel and must not share a tag:
+# each one deletes its own tag before building. Bind-mount the checkout onto
+# itself for pytest, and also onto /app. The image editable-installs
+# agentinfer there, and the vllm console script loads that path rather than
+# the pytest working directory.
+services:
+  agentinfer-ci:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: agentinfer-ci:${BUILDKITE_BUILD_ID:-local}-gpu
+    # Runs as root, then ci-entrypoint.sh switches to the UID that owns the
+    # checkout (the working directory). Do not set `user:` here.
+    entrypoint: ["/usr/local/bin/ci-entrypoint.sh"]
+    working_dir: ${BUILDKITE_BUILD_CHECKOUT_PATH:-/app}
+    network_mode: host
+    ipc: host
+    shm_size: 64gb
+    cap_add: [SYS_PTRACE]
+    volumes:
+      - /home/models:/home/models
+      - ${BUILDKITE_BUILD_CHECKOUT_PATH:-/app}:${BUILDKITE_BUILD_CHECKOUT_PATH:-/app}
+      - ${BUILDKITE_BUILD_CHECKOUT_PATH:-/app}:/app
+    environment:
+      HF_ENDPOINT: https://hf-mirror.com
+      HF_HOME: /home/models
+      HF_HUB_CACHE: /home/models/hub
+      HOME: /tmp/ci-home
+      PYTEST_ADDOPTS: -o cache_dir=/tmp/pytest-cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Same Dockerfile as agentinfer-ci, different tag. !override clears the GPU
+  # reservation so this service can start on a machine with no NVIDIA runtime.
+  # An empty mapping would be merged and the GPU devices would remain.
+  agentinfer-cpu:
+    extends:
+      service: agentinfer-ci
+    image: agentinfer-ci:${BUILDKITE_BUILD_ID:-local}-cpu
+    deploy: !override {}
