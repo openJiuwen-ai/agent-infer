@@ -42,7 +42,11 @@ steps:
         timeout_in_minutes: 20
         mirror_hardwares: cpu_small
 
-  - wait
+  # A plain wait skips every later step when an earlier step failed, which
+  # leaves this build's tagged images on the agent. Continue so cleanup still
+  # runs; the build stays failed.
+  - wait: ~
+    continue_on_failure: true
   - label: ":broom: Cleanup GPU agent"
     mirror_hardwares: l20_1
     # Host docker prune. Do not wrap this step in the CI container.

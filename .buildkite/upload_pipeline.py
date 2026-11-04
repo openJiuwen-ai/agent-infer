@@ -25,6 +25,16 @@ except ModuleNotFoundError:
     import yaml
 
 
+class _Dumper(yaml.SafeDumper):
+    """Dump YAML null as ``~`` so a wait step stays ``wait: ~``."""
+
+
+def _represent_none(dumper, _data):
+    return dumper.represent_scalar("tag:yaml.org,2002:null", "~")
+
+
+_Dumper.add_representer(type(None), _represent_none)
+
 ROOT = Path(__file__).resolve().parent
 
 
@@ -93,7 +103,7 @@ def render(pipeline_path: Path, hardware_path: Path) -> str:
     if not isinstance(presets, dict) or not presets:
         raise SystemExit(f"{hardware_path} has no mirror_hardwares presets")
     pipeline = expand(_load(pipeline_path), presets)
-    return yaml.safe_dump(pipeline, sort_keys=False)
+    return yaml.dump(pipeline, Dumper=_Dumper, sort_keys=False)
 
 
 def main() -> None:

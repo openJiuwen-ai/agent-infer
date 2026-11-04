@@ -1,6 +1,8 @@
 # CI service. GPU and CPU builds run in parallel and must not share a tag:
 # each one deletes its own tag before building. Bind-mount the checkout onto
-# itself and set workdir there so pytest runs against the PR code.
+# itself for pytest, and also onto /app. The image editable-installs
+# agentinfer there, and the vllm console script loads that path rather than
+# the pytest working directory.
 services:
   agentinfer-ci:
     build:
@@ -18,6 +20,7 @@ services:
     volumes:
       - /home/models:/home/models
       - ${BUILDKITE_BUILD_CHECKOUT_PATH:-/app}:${BUILDKITE_BUILD_CHECKOUT_PATH:-/app}
+      - ${BUILDKITE_BUILD_CHECKOUT_PATH:-/app}:/app
     environment:
       HF_ENDPOINT: https://hf-mirror.com
       HF_HOME: /home/models
