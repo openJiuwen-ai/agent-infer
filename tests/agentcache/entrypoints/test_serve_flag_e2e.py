@@ -18,9 +18,11 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 
@@ -54,6 +56,8 @@ def _get_open_port() -> int:
 
 
 def _wait_for_health(port: int, timeout: int) -> None:
+    """Poll /health until ready."""
+
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -85,6 +89,52 @@ def _shutdown(proc: subprocess.Popen) -> None:
         proc.wait()
 
 
+def _tee_server_output(proc: subprocess.Popen, log_file: Path) -> tuple[threading.Thread, list[BaseException]]:
+    """Mirror server stdout/stderr to log_file and pytest stderr in real time.
+
+    Exceptions are stored and printed. They do not fail the test.
+    """
+
+    errors: list[BaseException] = []
+
+    def _run() -> None:
+        try:
+            assert proc.stdout is not None
+            with open(log_file, "w", encoding="utf-8") as log_fp:
+                for line in proc.stdout:
+                    log_fp.write(line)
+                    log_fp.flush()
+                    print(line, end="", file=sys.stderr, flush=True)
+        except BaseException as exc:
+            errors.append(exc)
+            print(f"vllm serve log tee failed: {exc!r}", file=sys.stderr, flush=True)
+
+    thread = threading.Thread(target=_run, name="vllm-serve-log-tee", daemon=True)
+    thread.start()
+    return thread, errors
+
+
+def _finish_tee(tee: threading.Thread, errors: list[BaseException]) -> None:
+    """Give the log reader a moment to exit. A slow or failed reader is only logged."""
+
+    tee.join(timeout=5)
+    if errors:
+        print(f"vllm serve log tee failed: {errors[0]!r}", file=sys.stderr, flush=True)
+    if tee.is_alive():
+        print("vllm serve log tee still running after shutdown", file=sys.stderr, flush=True)
+
+
+def _print_server_log(log_file: Path, *, header: str) -> None:
+    print(f"\n===== {header}: {log_file} =====", file=sys.stderr, flush=True)
+    if not log_file.is_file():
+        print("(log file missing)", file=sys.stderr, flush=True)
+        return
+    with open(log_file, encoding="utf-8", errors="replace") as f:
+        content = f.read()
+    print(content if content else "(empty log)", file=sys.stderr, flush=True)
+    print(f"===== end {header} ({len(content)} bytes) =====\n", file=sys.stderr, flush=True)
+
+
 @pytest.fixture(scope="module")
 def server(tmp_path_factory: pytest.TempPathFactory):
     """Launch `vllm serve MODEL --agentinfer`, yield (port, log_file, socket), then shutdown."""
@@ -96,6 +146,7 @@ def server(tmp_path_factory: pytest.TempPathFactory):
     vllm_bin = _vllm_bin()
     env = os.environ.copy()
     env.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
+    env.setdefault("PYTHONUNBUFFERED", "1")
     env["AGENTCACHE_VLLM_LIFECYCLE_SOCKET"] = str(lifecycle_socket)
 
     cmd = [
@@ -113,24 +164,35 @@ def server(tmp_path_factory: pytest.TempPathFactory):
         "--no-enable-prefix-caching",
     ]
 
-    with open(log_file, "w") as log_fp:
-        proc = subprocess.Popen(
-            cmd,
-            env=env,
-            stdout=log_fp,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+    print(
+        f"\n===== starting vllm serve (model={MODEL}, port={port}) =====\ncmd: {' '.join(cmd)}\n",
+        file=sys.stderr,
+        flush=True,
+    )
+    proc = subprocess.Popen(
+        cmd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",
+        bufsize=1,
+        start_new_session=True,
+    )
+    tee, tee_errors = _tee_server_output(proc, log_file)
 
     try:
         _wait_for_health(port, STARTUP_TIMEOUT)
     except Exception:
         _shutdown(proc)
-        with open(log_file) as f:
-            pytest.fail(f"server failed to start; log tail:\n{f.read()[-4000:]}")
+        _finish_tee(tee, tee_errors)
+        _print_server_log(log_file, header="server failed to start; full log")
+        pytest.fail(f"server failed to start; full log printed above ({log_file})")
 
     yield port, str(log_file), str(lifecycle_socket)
     _shutdown(proc)
+    _finish_tee(tee, tee_errors)
+    _print_server_log(log_file, header="server shutdown; full log")
 
 
 def test_injection_banner_logged(server):
