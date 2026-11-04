@@ -1,0 +1,7 @@
+{
+  "temperature": 1.0,
+  "top_p": 1.0,
+  "max_tokens": 12288,
+  "chat_template_kwargs": null,
+  "note": "Large model (e.g., DeepSeek-V4-Flash) thinking mode: official sampling recommendation (temp 1.0 / top_p 1.0); max_tokens 12288 thinking budget"
+}
