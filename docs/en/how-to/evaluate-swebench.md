@@ -52,6 +52,8 @@ and collecting environment details; a version mismatch prevents scoring from sta
 Omit --output-dir to create a unique directory under the run's evaluations/.
 Existing directories are not overwritten. Original patches, manifest and
 performance summary are preserved. First use downloads official Docker images.
+Finalization removes containers left by this evaluation in one batch. Cleanup
+failures or timeouts are recorded in the evaluation manifest and mark the evaluation failed.
 
 ## Results
 

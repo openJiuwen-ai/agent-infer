@@ -8,6 +8,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -213,8 +214,14 @@ def test_inconsistent_source_rejected(source, change):
         prepare_inputs(source)
 
 
-def test_missing_patch_is_error_and_does_not_shrink_total(source, fake_harness):
-    (source / "tasks/astropy__astropy-0/model.patch").unlink()
+@pytest.mark.parametrize("fault", ["missing", "invalid_utf8"])
+def test_invalid_patch_is_error_and_does_not_shrink_total(source, fake_harness, fault):
+    task = source / "tasks/astropy__astropy-0"
+    if fault == "missing":
+        (task / "model.patch").unlink()
+    else:
+        (task / "model.patch").write_bytes(b"\xff")
+        update(task / "result.json", lambda d: d.update(patch_bytes=1))
     output, code = runner.evaluate(source, config())
     summary, manifest, results = load_evaluation(output / "correctness.json")
     assert code == 1
@@ -400,6 +407,66 @@ def test_actual_subprocess_timeout_preserves_logs(tmp_path):
             [sys.executable, "-c", "import time; print('started', flush=True); time.sleep(10)"], tmp_path, 0.5, 1
         )
     assert "started" in (tmp_path / "harness.stdout.log").read_text()
+
+
+@pytest.mark.parametrize("count", [0, 500])
+def test_container_cleanup_batches_only_this_run(monkeypatch, count):
+    names = [f"sweb.eval.task-{i}.eval-current" for i in range(count)]
+    listed = [*names, "sweb.eval.other.eval-other", "unrelated.eval-current", "sweb.eval.other.eval-current-extra"]
+    calls = []
+
+    def execute(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, stdout="\n".join(listed), stderr="")
+
+    monkeypatch.setattr(runner.subprocess, "run", execute)
+    monkeypatch.setattr(runner, "time", SimpleNamespace(monotonic=iter([100, 103]).__next__))
+    assert runner.cleanup_containers("eval-current", 30) == []
+    assert len(calls) == (2 if names else 1)
+    assert calls[0][1]["timeout"] == 30
+    if names:
+        assert calls[1][0] == ["docker", "rm", "-f", *names]
+        assert calls[1][1]["timeout"] == 27
+
+
+@pytest.mark.parametrize("fault", ["partial_failure", "timeout", "list_failure"])
+def test_container_cleanup_reports_failure(monkeypatch, fault):
+    names = ["sweb.eval.first.eval-current", "sweb.eval.second.eval-current"]
+
+    def execute(command, **kwargs):
+        if command[1] == "ps":
+            if fault == "list_failure":
+                raise subprocess.CalledProcessError(1, command, stderr="daemon unavailable")
+            return subprocess.CompletedProcess(command, 0, stdout="\n".join(names), stderr="")
+        if fault == "timeout":
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return subprocess.CompletedProcess(command, 1, stdout=names[0], stderr=f"cannot remove {names[1]}")
+
+    monkeypatch.setattr(runner.subprocess, "run", execute)
+    if fault == "partial_failure":
+        errors = runner.cleanup_containers("eval-current", 30)
+        assert len(errors) == 1
+        assert all(name in errors[0] for name in names)
+        assert "exit 1" in errors[0] and f"cannot remove {names[1]}" in errors[0]
+    else:
+        exception = subprocess.TimeoutExpired if fault == "timeout" else subprocess.CalledProcessError
+        with pytest.raises(exception):
+            runner.cleanup_containers("eval-current", 30)
+
+
+@pytest.mark.parametrize("fault", ["partial_failure", "timeout"])
+def test_cleanup_failure_keeps_scores_and_fails_evaluation(source, fake_harness, monkeypatch, fault):
+    def cleanup(*args):
+        if fault == "timeout":
+            raise subprocess.TimeoutExpired("docker rm", 30)
+        return ["docker rm: exit 1: cannot remove container"]
+
+    monkeypatch.setattr(runner, "cleanup_containers", cleanup)
+    output, code = runner.evaluate(source, config())
+    summary, manifest, _ = load_evaluation(output / "correctness.json")
+    assert code == 1 and manifest["status"] == "failed" and manifest["finished_at"]
+    assert manifest["errors"] and "docker rm" in manifest["errors"][0]
+    assert summary.counts.model_dump() == {"total": 2, "resolved": 1, "unresolved": 1, "empty_patch": 0, "error": 0}
 
 
 def test_version_mismatch_fails_before_harness_import(monkeypatch, tmp_path):

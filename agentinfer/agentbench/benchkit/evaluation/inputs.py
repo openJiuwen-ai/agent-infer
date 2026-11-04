@@ -137,7 +137,7 @@ def prepare_inputs(run: Path) -> dict:
                 status="empty_patch" if not patch else "error",
                 reason=None if not patch else "not_evaluated",
             )
-        except (OSError, UnicodeError, ValueError) as exc:
+        except (OSError, ValueError) as exc:
             record["reason"] = f"input_error: {exc}"
         tasks.append(record)
     generation = {

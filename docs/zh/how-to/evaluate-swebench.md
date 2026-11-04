@@ -45,6 +45,7 @@ vllm bench serve --agentinfer evaluate \
 
 省略 --output-dir 时，在原 run 的 evaluations/ 中创建唯一目录；已有目录不覆盖。
 原始补丁、manifest 和性能 summary 不修改。首次使用会下载官方 Docker 镜像。
+结束时批量清理本次评测遗留的容器；清理失败或超时会记录到评测 manifest，并使评测标记为 failed。
 
 ## 结果
 
