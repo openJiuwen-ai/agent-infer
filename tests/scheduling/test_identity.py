@@ -17,6 +17,9 @@ def test_public_identity_encoder_round_trips_explicit_taskless_context() -> None
         program_id="agent-sess-abc123",
         task_id=None,
         session_id="agent-sess-abc123",
+        spawn_reason="engineer",
+        workflow_profile_id="coding_assistant",
+        profile_version="pythia-min-adaptive-v1",
         blocks_parent=False,
         expected_resume=True,
     )
