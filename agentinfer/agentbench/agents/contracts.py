@@ -28,6 +28,13 @@ class TerminationReason(str, Enum):
     AGENT_STARTUP_FAILED = "agent_startup_failed"
     AGENT_STARTUP_TIMEOUT = "agent_startup_timeout"
     TIMEOUT = "timeout"
+    CLEANUP_TIMEOUT = "cleanup_timeout"
+    AGENT_STEP_LIMIT = "agent_step_limit"
+    SUBAGENT_STEP_LIMIT = "subagent_step_limit"
+    SUBAGENT_READ_LOOP = "subagent_read_loop"
+    SUBAGENT_FAILED = "subagent_failed"
+    PLAN_NOT_APPROVED = "plan_not_approved"
+    MAX_TOKENS = "max_tokens"
     PLAN_EXIT_LOOP = "plan_exit_loop"
     VALIDATION_ERROR_LOOP = "validation_error_loop"
     CONFIRMATION_HANG = "confirmation_hang"
@@ -36,6 +43,17 @@ class TerminationReason(str, Enum):
     INTERRUPTED = "interrupted"
     HARNESS_ERROR = "harness_error"
     CANCELLED = "cancelled"
+
+
+@dataclass(frozen=True)
+class AgentPreflightReport:
+    """Runtime evidence without a dependency on BenchKit artifact types."""
+
+    runtime: str
+    executable: str
+    versions: dict[str, str]
+    capabilities: dict[str, object]
+    installation: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -56,6 +74,9 @@ class AgentRunRequest:
     prompt_delivery_timeout_seconds: int
     tmux_startup_seconds: float
     terminal_capture_interval_seconds: int
+    context_window: int = 262144
+    max_tokens: int = 8192
+    cleanup_timeout_seconds: float = 10.0
 
 
 @dataclass

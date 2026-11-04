@@ -15,7 +15,7 @@ import httpx
 from tqdm import tqdm
 
 from ..agents import AgentRunRequest, AgentRunResult, check_agent_preflight, run_agent
-from ..agents.contracts import AgentRunOutcome, TerminationReason
+from ..agents.contracts import AgentPreflightReport, AgentRunOutcome, TerminationReason
 from ..request_proxy import create_request_proxy_lifecycle, load_request_facts
 from .artifacts import (
     FinalizationContext,
@@ -69,7 +69,15 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
 
     async def execute() -> None:
         nonlocal context, lifecycle, preflight_succeeded, vllm_start
-        await check_preflight(config)
+        try:
+            report = await check_preflight(config)
+        except Exception as exc:
+            captures.append(EvidenceCapture(f"{config.agent.type}_runtime", None, False, str(exc), {}))
+            raise
+        if report is not None:
+            path = output_dir / "evidence" / f"{report.runtime}-runtime.json"
+            atomic_write_json(path, asdict(report))
+            captures.append(EvidenceCapture(f"{report.runtime}_runtime", path, True, None, asdict(report)))
         preflight_succeeded = True
         tasks = tuple(load_tasks(config.dataset.index_path, config.dataset.selection_path, config.experiment.task_num))
         context = RunContext(config, output_dir, output_dir / "requests.jsonl", tasks)
@@ -303,6 +311,9 @@ async def _run_single_task(
                 config.experiment.prompt_delivery_timeout_seconds,
                 config.agent.tmux_startup_seconds,
                 config.agent.terminal_capture_interval_seconds,
+                context_window=config.agent.context_window,
+                max_tokens=config.agent.max_tokens,
+                cleanup_timeout_seconds=config.experiment.cleanup_timeout_seconds,
             )
         )
     except asyncio.CancelledError as exc:
@@ -411,9 +422,10 @@ def _trace_capture(path: Path, close_result) -> EvidenceCapture:
     return EvidenceCapture("request_trace", path if path.exists() else None, available, reason, health)
 
 
-async def check_preflight(config: AgentBenchConfig) -> None:
-    await check_agent_preflight(config.agent.type, config.agent.executable)
+async def check_preflight(config: AgentBenchConfig) -> AgentPreflightReport | None:
+    report = await check_agent_preflight(config.agent.type, config.agent.executable)
     async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
         response = await client.get(f"{config.backend.base_url.rstrip('/')}/v1/models")
         if response.status_code != 200:
             raise RuntimeError(f"Backend {config.backend.base_url} is not healthy")
+    return report
