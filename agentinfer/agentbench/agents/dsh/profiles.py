@@ -40,13 +40,9 @@ _DISABLED_ORCHESTRATION_POLICY = """\
   disabled: true
 - id: tool-subagent-list-agents
   disabled: true
-- id: tool-subagent-report
-  disabled: true
 - id: tool-workflow
   disabled: true
-- id: workflow-worker-thread
-  disabled: true
-- id: tool-ralph
+- id: workflow-ptc
   disabled: true
 - id: tool-goal
   disabled: true
@@ -83,18 +79,7 @@ _PLAN_SUBAGENT_POLICY_PATCH = (
   config:
     provider: spawn
     toolName: subagent
-    enableRunInBackground: false
-    backgroundMode: one-shot
     maxDepth: 1
-    persona: >-
-      You are a focused Explore subagent. Inspect and search the repository to answer the lead's question.
-      Do not edit files, run mutating commands, create subagents, goals, workflows, or background jobs.
-      Report concise evidence and recommendations to the lead.
-    toolFilter:
-      allow:
-        - glob
-        - grep
-        - read
 """
 )
 
@@ -121,9 +106,13 @@ def _plan_subagent_prompt(task: Task) -> str:
 {task_context(task)}
 You must first analyze the task and formulate an implementation plan before investigating or implementing the fix.
 During that planning phase:
+- Your first tool call must be `subagent`; do not use todo_write or inspect files before delegating.
 - Use the `subagent` tool at least once to delegate focused repository exploration.
 - Each subagent is read-only: ask it to inspect code, trace the root cause, or identify tests; do not ask it to edit files.
+- Ask subagents to search first, read at most 200 lines at a time, and return concise findings within the exploration budget.
 - Wait for every subagent report, synthesize the evidence, and finalize the implementation plan before editing.
+- Call `exit_plan_mode` with your completed plan before implementation. If a subagent is still running, end your turn
+  to await its completion notice rather than polling with shell commands.
 
 After planning, write the final patch yourself. Do not delegate implementation.
 

@@ -38,6 +38,7 @@ class _AnthropicSSEUsageObserver:
     def __init__(self) -> None:
         self._buffer = b""
         self.usage: dict[str, int] = {}
+        self.completed = False
 
     def observe(self, chunk: bytes) -> bool:
         self._buffer += chunk
@@ -59,6 +60,8 @@ class _AnthropicSSEUsageObserver:
                 continue
             if isinstance(payload, dict) and payload.get("type") == "content_block_delta":
                 observed_event = True
+            if isinstance(payload, dict) and payload.get("type") == "message_stop":
+                self.completed = True
             usage = payload.get("usage") if isinstance(payload, dict) else None
             if not isinstance(usage, dict) and isinstance(payload, dict):
                 message = payload.get("message")
@@ -82,6 +85,7 @@ class _OpenAISSEUsageObserver:
     def __init__(self) -> None:
         self._buffer = b""
         self.usage: dict[str, int] = {}
+        self.completed = False
 
     def observe(self, chunk: bytes) -> bool:
         self._buffer += chunk
@@ -95,7 +99,10 @@ class _OpenAISSEUsageObserver:
             index, size = min(boundaries)
             event, self._buffer = self._buffer[:index], self._buffer[index + size :]
             data_lines = [line[5:].lstrip() for line in event.splitlines() if line.startswith(b"data:")]
-            if not data_lines or data_lines == [b"[DONE]"]:
+            if data_lines == [b"[DONE]"]:
+                self.completed = True
+                continue
+            if not data_lines:
                 continue
             try:
                 payload = json.loads(b"\n".join(data_lines))
