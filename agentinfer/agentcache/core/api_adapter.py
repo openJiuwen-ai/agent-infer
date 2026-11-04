@@ -21,14 +21,16 @@ import json
 import logging
 import os
 import socket
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 from typing import Protocol, TypeAlias, cast
 
 from agentinfer.agentcache.core.vllm_logging import attach_agentinfer_to_vllm_logging
 from agentinfer.scheduling.identity import (
+    AgentIdentity,
     JsonObject,
     MetadataError,
     encode_agent_identity,
@@ -106,10 +108,13 @@ class LifecycleSignal:
 
     program_id: str
     lifecycle: ProgramLifecycle
+    lifecycle_token: str | None = None
 
     def __post_init__(self) -> None:
         if not self.program_id:
             raise ValueError("lifecycle signal program_id must not be empty")
+        if self.lifecycle_token is not None and (not isinstance(self.lifecycle_token, str) or not self.lifecycle_token):
+            raise ValueError("lifecycle token must be a non-empty string")
 
 
 class UnixLifecycleReceiver:
@@ -143,7 +148,7 @@ class UnixLifecycleReceiver:
                 lifecycle = decoded.get("lifecycle")
                 if not isinstance(program_id, str) or not isinstance(lifecycle, str):
                     raise ValueError("lifecycle signal fields must be strings")
-                signals.append(LifecycleSignal(program_id, ProgramLifecycle(lifecycle)))
+                signals.append(LifecycleSignal(program_id, ProgramLifecycle(lifecycle), decoded.get("lifecycle_token")))
             except (ValueError, RecursionError, UnicodeDecodeError) as exc:
                 logger.warning("Ignoring invalid AgentCache lifecycle signal: %s", exc)
         return tuple(signals)
@@ -172,7 +177,11 @@ class UnixLifecycleSender:
     def send(self, signal: LifecycleSignal, dp_rank: int | None) -> bool:
         """Best-effort delivery to one selected rank or every discoverable internal rank."""
         payload = json.dumps(
-            {"program_id": signal.program_id, "lifecycle": signal.lifecycle.value},
+            {
+                "program_id": signal.program_id,
+                "lifecycle": signal.lifecycle.value,
+                "lifecycle_token": signal.lifecycle_token,
+            },
             separators=(",", ":"),
         ).encode()
         if len(payload) > _MAX_SIGNAL_BYTES:
@@ -241,6 +250,8 @@ def _adapt_identity_request_body(
     )
     if identity is None:
         return request_body
+    identity = replace(identity, lifecycle_token=uuid.uuid4().hex)
+    scope["_agentinfer_identity"] = identity
     encoded_identity = encode_agent_identity(identity)
     if _endpoint_for_scope(scope) is ApiEndpoint.ANTHROPIC_MESSAGES:
         raw_metadata = payload.get("metadata")
@@ -464,6 +475,9 @@ class AgentCacheLifecycleMiddleware:
             agent_hint=request_payload.get("agent_hint"),
             headers=headers,
         )
+        adapted_identity = scope.get("_agentinfer_identity")
+        if isinstance(adapted_identity, AgentIdentity):
+            metadata = adapted_identity
         if metadata is None:
             return
         try:
@@ -471,7 +485,7 @@ class AgentCacheLifecycleMiddleware:
         except ValueError:
             logger.warning("AgentCache lifecycle signal has an invalid X-data-parallel-rank header")
             return
-        self.sender.send(LifecycleSignal(metadata.program_id, lifecycle), dp_rank)
+        self.sender.send(LifecycleSignal(metadata.program_id, lifecycle, metadata.lifecycle_token), dp_rank)
 
 
 class _LifecycleResponseObserver:

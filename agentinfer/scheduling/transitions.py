@@ -26,8 +26,10 @@ class TransitionKind(str, Enum):
     QUEUE = "queue"
     PAUSE = "pause"
     MARK_FOR_PAUSE = "mark_for_pause"
+    CANCEL_PAUSE = "cancel_pause"
     RESUME = "resume"
     RELEASE = "release"
+    RETIRE = "retire"
 
 
 TRANSITION_EVENT_KINDS = {
@@ -35,8 +37,12 @@ TRANSITION_EVENT_KINDS = {
     TransitionKind.QUEUE: SchedulingEventKind.REQUEST_PENDING,
     TransitionKind.PAUSE: SchedulingEventKind.PROGRAM_PAUSED,
     TransitionKind.MARK_FOR_PAUSE: SchedulingEventKind.PROGRAM_MARKED_FOR_PAUSE,
+    TransitionKind.CANCEL_PAUSE: SchedulingEventKind.PROGRAM_PAUSE_CANCELLED,
     TransitionKind.RESUME: SchedulingEventKind.PROGRAM_RESUMED,
     TransitionKind.RELEASE: SchedulingEventKind.PROGRAM_RELEASED,
+    # Both boundaries release the cache/scheduling owner. Only RELEASE ends
+    # the business Program and removes its task/dependency relationships.
+    TransitionKind.RETIRE: SchedulingEventKind.PROGRAM_RELEASED,
 }
 
 
@@ -147,9 +153,17 @@ class TransitionController:
         """Request resume of a paused Program on the configured backend."""
         return self._request(TransitionKind.RESUME, program, reason, backend_id=backend_id)
 
+    def cancel_pause(self, program: ProgramRef, *, reason: str) -> TransitionResult:
+        """Withdraw an uncommitted delayed pause whose beneficiary disappeared."""
+        return self._request(TransitionKind.CANCEL_PAUSE, program, reason)
+
     def release(self, program: ProgramRef, *, reason: str) -> TransitionResult:
         """Request terminal release of a Program."""
         return self._request(TransitionKind.RELEASE, program, reason)
+
+    def retire(self, program: ProgramRef, *, reason: str) -> TransitionResult:
+        """Forget an idle paused scheduling owner while preserving business relationships."""
+        return self._request(TransitionKind.RETIRE, program, reason)
 
     def _request(
         self,

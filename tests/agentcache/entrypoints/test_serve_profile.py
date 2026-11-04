@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import types
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -140,6 +141,62 @@ def test_user_middleware_order_is_preserved_and_duplicates_removed() -> None:
         serve_profile.LIFECYCLE_MIDDLEWARE,
     ]
     assert injected["middleware"] == [serve_profile.LIFECYCLE_MIDDLEWARE]
+
+
+@pytest.mark.parametrize("profile_kind", ["implicit", "default", "copied", "derived"])
+def test_mori_profile_installs_sse_framing_without_changing_pt_defaults(profile_kind: str) -> None:
+    namespace, explicit = _parse(["MODEL", "--agentinfer", "--additional-config", '{"agentcache":{"strategy":"mori"}}'])
+    default = serve_profile.DEFAULT_SERVE_PROFILE
+    profile = {
+        "implicit": None,
+        "default": default,
+        "copied": replace(default),
+        "derived": replace(default, middlewares=("custom.Mid", *default.middlewares)),
+    }[profile_kind]
+    serve_profile.inject_profile(namespace, explicit, profile)
+
+    assert namespace.middleware == [
+        *(profile.middlewares if profile is not None else default.middlewares),
+        serve_profile.SSE_FRAMING_MIDDLEWARE,
+    ]
+
+
+@pytest.mark.parametrize("profile_strategy", ["mori", "progress_ttl"])
+@pytest.mark.parametrize("user_strategy", [None, "mori", "progress_ttl"])
+def test_sse_framing_follows_effective_strategy(profile_strategy: str, user_strategy: str | None) -> None:
+    profile = replace(serve_profile.DEFAULT_SERVE_PROFILE, agentcache_config={"strategy": profile_strategy})
+    config = {} if user_strategy is None else {"agentcache": {"strategy": user_strategy}}
+    namespace, explicit = _parse(["MODEL", "--agentinfer", "--additional-config", json.dumps(config)])
+
+    serve_profile.inject_profile(namespace, explicit, profile)
+
+    effective_strategy = user_strategy or profile_strategy
+    assert namespace.additional_config["agentcache"]["strategy"] == effective_strategy
+    expected = list(profile.middlewares)
+    if effective_strategy == "mori":
+        expected.append(serve_profile.SSE_FRAMING_MIDDLEWARE)
+    assert namespace.middleware == expected
+
+
+def test_mori_framing_is_not_duplicated_when_profile_and_user_already_include_it() -> None:
+    framing = serve_profile.SSE_FRAMING_MIDDLEWARE
+    profile = replace(
+        serve_profile.DEFAULT_SERVE_PROFILE,
+        agentcache_config={"strategy": "mori"},
+        middlewares=(*serve_profile.DEFAULT_SERVE_PROFILE.middlewares, framing),
+    )
+    namespace, explicit = _parse(["MODEL", "--agentinfer", "--middleware", framing, "--middleware", "custom.Mid"])
+
+    injected = serve_profile.inject_profile(namespace, explicit, profile)
+
+    assert namespace.middleware == [framing, "custom.Mid", *serve_profile.DEFAULT_SERVE_PROFILE.middlewares]
+    assert injected["middleware"] == list(serve_profile.DEFAULT_SERVE_PROFILE.middlewares)
+
+
+def test_null_agentcache_config_preserves_default_middlewares() -> None:
+    namespace, explicit = _parse(["MODEL", "--agentinfer", "--additional-config", '{"agentcache":null}'])
+    serve_profile.inject_profile(namespace, explicit)
+    assert namespace.middleware == list(serve_profile.DEFAULT_SERVE_PROFILE.middlewares)
 
 
 def test_user_additional_config_merges_with_user_priority() -> None:

@@ -18,18 +18,85 @@ transition from stale decision factors.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from enum import Enum
 from typing import ClassVar, Generic
 
 from agentinfer.scheduling.admission_outcome import AdmissionOutcome
 from agentinfer.scheduling.domain import ProgramRef, ProgramView
 from agentinfer.scheduling.events import SchedulingEvent, SchedulingEventKind, StrategyDiagnostic
 from agentinfer.scheduling.factors import StrategyFactors, StrategyGlobalFactorsT, StrategyProgramFactorsT
+from agentinfer.scheduling.request_diagnostics import RequestDiagnostics
 from agentinfer.scheduling.snapshot import SchedulingSnapshot
 from agentinfer.scheduling.transitions import TransitionController
 
 
+class SchedulingCycleOrder(str, Enum):
+    """Ordering of the two capacity-changing hooks in one scheduling cycle."""
+
+    RESUME_THEN_REPAIR = "resume_then_repair"
+    REPAIR_THEN_RESUME = "repair_then_resume"
+
+
 class SchedulingStrategy(Generic[StrategyGlobalFactorsT, StrategyProgramFactorsT], ABC):
     """Policy that consumes runtime facts and maintained factors under the caller's scheduling lock."""
+
+    @property
+    def cycle_order(self) -> SchedulingCycleOrder:
+        """Return the hook order required by this strategy.
+
+        Existing strategies retain the historical resume-before-repair behavior. A
+        placement strategy may opt into repair-before-resume so it never promotes
+        new work while an already committed placement exceeds its quota.
+        """
+        return SchedulingCycleOrder.RESUME_THEN_REPAIR
+
+    @property
+    def requires_program_identity(self) -> bool:
+        """Return whether compatibility traffic without Program identity is forbidden."""
+        return False
+
+    @property
+    def allows_overlapping_program_requests(self) -> bool:
+        """Return whether one Program may own multiple simultaneous requests."""
+        return True
+
+    @property
+    def uses_request_branches(self) -> bool:
+        """Isolate overlapping requests into server-owned scheduling branches."""
+        return False
+
+    def request_diagnostics(self) -> RequestDiagnostics | None:
+        """Optionally provide bounded slow-request tracking independent of debug logs."""
+        return None
+
+    def bind_observability(self, enabled: bool) -> None:
+        """Bind the runtime's explicit diagnostic logging policy."""
+
+    def on_context_pending(self, program: ProgramRef) -> None:
+        """Invalidate prompt-specific proof while a replacement request is still retained."""
+
+    def on_context_replaced(self, program: ProgramRef) -> None:
+        """Commit cache ownership replacement immediately before native dispatch."""
+
+    def on_context_growth(
+        self, program: ProgramRef, now: float, *, previous_tokens: int, current_tokens: int, block_size: int
+    ) -> None:
+        """Observe growth; the strategy decides when its rounded reservation needs repair."""
+
+    def on_execution_changed(
+        self,
+        factors: StrategyFactors[StrategyGlobalFactorsT, StrategyProgramFactorsT],
+        program: ProgramRef,
+        now: float,
+        *,
+        running: bool,
+    ) -> None:
+        """Observe native scheduling/preemption boundaries when the adapter provides them."""
+
+    @property
+    def observes_streaming_context_growth(self) -> bool:
+        """Opt into using streamed output tokens in placement capacity estimates."""
+        return False
 
     _EVENT_CALLBACKS: ClassVar[dict[SchedulingEventKind, str]] = {
         SchedulingEventKind.REQUEST_PENDING: "on_request_pending",
@@ -98,9 +165,9 @@ class SchedulingStrategy(Generic[StrategyGlobalFactorsT, StrategyProgramFactorsT
     ) -> None:
         """Optionally yield the Program after its committed request accounting.
 
-        The caller invokes this Hook with fresh facts after dispatching ``REQUEST_FINISHED``. A delayed pause already
-        committed while the request was reasoning takes precedence, so the runtime skips this Hook when it can apply
-        that pause immediately. The default policy does not yield on request completion.
+        The caller invokes this Hook for a surviving owner after dispatching ``REQUEST_FINISHED``, applying any delayed
+        pause, and releasing temporary branches. It also invokes the Hook when cancellation leaves a paused Acting
+        owner. Policies must check current state before yielding or retiring. The default policy takes no action.
 
         Args:
             snapshot: Fresh runtime facts after final token and status accounting.
@@ -108,6 +175,13 @@ class SchedulingStrategy(Generic[StrategyGlobalFactorsT, StrategyProgramFactorsT
             transitions: Lock-scoped capability for caller-owned core state changes.
             completed: Exact Program generation whose request just completed.
         """
+
+    def on_cache_pressure(
+        self,
+        strategy_factors: StrategyFactors[StrategyGlobalFactorsT, StrategyProgramFactorsT],
+        now_monotonic_s: float,
+    ) -> None:
+        """Optionally request earlier policy evaluation after a native cache pressure observation."""
 
     def on_schedule_cycle_start(
         self,

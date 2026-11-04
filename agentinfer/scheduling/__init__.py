@@ -5,6 +5,11 @@
 
 from agentinfer.scheduling.admission_outcome import AdmissionDisposition, AdmissionOutcome
 from agentinfer.scheduling.backend import BackendInfo, BackendPoolInfo, DispatchTarget, DpRankInfo
+from agentinfer.scheduling.cache_placement import (
+    CacheClass,
+    ProgramCacheClassObserver,
+    ProgramCacheClassProvider,
+)
 from agentinfer.scheduling.domain import (
     ProgramRef,
     ProgramState,
@@ -25,7 +30,7 @@ from agentinfer.scheduling.program_runtime import RuntimeProgram
 from agentinfer.scheduling.request_pool import RequestPool, RequestPoolEntry, RequestPoolStatus
 from agentinfer.scheduling.runtime import ProgramScheduler
 from agentinfer.scheduling.snapshot import SchedulingSnapshot
-from agentinfer.scheduling.strategy import SchedulingStrategy
+from agentinfer.scheduling.strategy import SchedulingCycleOrder, SchedulingStrategy
 from agentinfer.scheduling.transitions import (
     TransitionController,
     TransitionKind,
@@ -40,11 +45,14 @@ __all__ = [
     "AgentRequestIdentity",
     "BackendInfo",
     "BackendPoolInfo",
+    "CacheClass",
     "DispatchTarget",
     "DpRankInfo",
     "MetadataError",
     "ProgramLifecycle",
     "ProgramRegistry",
+    "ProgramCacheClassObserver",
+    "ProgramCacheClassProvider",
     "ProgramRef",
     "ProgramState",
     "ProgramStatus",
@@ -58,6 +66,7 @@ __all__ = [
     "SchedulingEvent",
     "SchedulingEventKind",
     "SchedulingSnapshot",
+    "SchedulingCycleOrder",
     "SchedulingStrategy",
     "SchedulerObservabilityConfig",
     "SharedPrefixAttribution",

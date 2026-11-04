@@ -17,6 +17,18 @@ from agentinfer.scheduling.transitions import TransitionKind, TransitionRequest
 pytestmark = pytest.mark.cpu_test
 
 
+def test_streaming_keeps_progress_ttl_context_estimate_until_completion() -> None:
+    components = build_progress_ttl_strategy()
+    runtime = ProgramScheduler(components.strategy, components.initial_factors, backend(10000))
+    assert runtime.on_request_arrival("r", AgentIdentity("p"), 100, backend(10000), "native")
+    ref = runtime.program_ref_for_request("r")
+    before = runtime.registry.require(ref).tokens
+    runtime.on_stream_output("r", 40)
+    assert runtime.registry.require(ref).tokens == before
+    runtime.on_request_completion("r", 140)
+    assert runtime.registry.require(ref).tokens.estimated_context_tokens == 140
+
+
 def backend(capacity: int) -> BackendPoolInfo:
     """Build one fixed embedded backend view."""
     return BackendPoolInfo(

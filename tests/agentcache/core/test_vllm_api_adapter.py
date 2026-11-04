@@ -29,6 +29,15 @@ from agentinfer.scheduling.lifecycle import ProgramLifecycle
 pytestmark = pytest.mark.cpu_test
 
 
+def _convert_anthropic_to_chat(anthropic_request):
+    from vllm.entrypoints.anthropic.serving import AnthropicServingMessages
+
+    convert = getattr(AnthropicServingMessages, "to_chat_completion_request", None)
+    if convert is None:
+        convert = AnthropicServingMessages._convert_anthropic_to_openai_request
+    return convert(anthropic_request)
+
+
 def test_anthropic_replay_sampling_metadata_is_strictly_validated() -> None:
     key = "_agentinfer_replay_sampling"
 
@@ -59,7 +68,6 @@ def test_anthropic_replay_sampling_metadata_rejects_malformed_values(
 
 def test_anthropic_bridge_without_replay_sampling_keeps_vllm_defaults() -> None:
     from vllm.entrypoints.anthropic.protocol import AnthropicMessagesRequest
-    from vllm.entrypoints.anthropic.serving import AnthropicServingMessages
 
     api_adapter._install_anthropic_identity_bridge()
     anthropic_request = AnthropicMessagesRequest.model_validate(
@@ -71,7 +79,7 @@ def test_anthropic_bridge_without_replay_sampling_keeps_vllm_defaults() -> None:
         }
     )
 
-    chat_request = AnthropicServingMessages._convert_anthropic_to_openai_request(anthropic_request)
+    chat_request = _convert_anthropic_to_chat(anthropic_request)
 
     assert chat_request.seed is None
     assert chat_request.min_tokens == 0
@@ -241,7 +249,6 @@ def test_middleware_initialization_explicitly_attaches_vllm_logging(tmp_path, mo
 def test_identity_middleware_carries_anthropic_headers_to_internal_vllm_xargs() -> None:
     """Anthropic Messages must preserve canonical identity through vLLM's Chat conversion."""
     from vllm.entrypoints.anthropic.protocol import AnthropicMessagesRequest
-    from vllm.entrypoints.anthropic.serving import AnthropicServingMessages
 
     captured_body = b""
 
@@ -300,7 +307,7 @@ def test_identity_middleware_carries_anthropic_headers_to_internal_vllm_xargs() 
     assert adapted_payload["metadata"]["caller"] == "benchkit"
     assert "vllm_xargs" not in adapted_payload
     anthropic_request = AnthropicMessagesRequest.model_validate(adapted_payload)
-    chat_request = AnthropicServingMessages._convert_anthropic_to_openai_request(anthropic_request)
+    chat_request = _convert_anthropic_to_chat(anthropic_request)
     assert chat_request.seed == 7
     assert chat_request.min_tokens == 8
     assert chat_request.ignore_eos is True
@@ -450,6 +457,77 @@ def test_lifecycle_channel_isolated_by_dp_rank(tmp_path) -> None:
     assert receiver_one.receive() == (signal,)
     receiver_zero.close()
     receiver_one.close()
+
+
+@pytest.mark.parametrize("identity_outer", [True, False])
+@pytest.mark.parametrize("endpoint", ["/v1/chat/completions", "/v1/messages"])
+def test_lifecycle_receipt_matches_server_attempt_token_in_both_middleware_orders(
+    tmp_path, monkeypatch, identity_outer, endpoint
+) -> None:
+    """An external response identifies the exact canonical request, including Anthropic metadata transport."""
+    socket_path = str(tmp_path / "attempt.sock")
+    receiver = UnixLifecycleReceiver(socket_path, 0)
+    monkeypatch.setenv(LIFECYCLE_SOCKET_ENV, socket_path)
+    captured = {}
+
+    async def app(scope, receive, send):
+        payload = json.loads((await receive())["body"])
+        if endpoint == "/v1/messages":
+            from vllm.entrypoints.anthropic.protocol import AnthropicMessagesRequest
+
+            request = _convert_anthropic_to_chat(AnthropicMessagesRequest.model_validate(payload))
+            xargs = request.vllm_xargs
+            response = {"type": "message", "stop_reason": "end_turn"}
+        else:
+            xargs = payload["vllm_xargs"]
+            response = {"choices": [{"finish_reason": "stop"}]}
+        captured["identity"] = parse_agent_identity(vllm_xargs=xargs, headers={})
+        await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"application/json")]})
+        await send({"type": "http.response.body", "body": json.dumps(response).encode(), "more_body": False})
+
+    middleware = (
+        AgentCacheIdentityMiddleware(AgentCacheLifecycleMiddleware(app))
+        if identity_outer
+        else AgentCacheLifecycleMiddleware(AgentCacheIdentityMiddleware(app))
+    )
+    inbound = [
+        {
+            "type": "http.request",
+            "body": json.dumps(
+                {
+                    "model": "test",
+                    "max_tokens": 8,
+                    "messages": [{"role": "user", "content": "hello"}],
+                }
+            ).encode(),
+            "more_body": False,
+        }
+    ]
+
+    async def receive():
+        return inbound.pop(0)
+
+    async def send(message):
+        pass
+
+    asyncio.run(
+        middleware(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": endpoint,
+                "headers": [(b"x-session-id", b"session")],
+            },
+            receive,
+            send,
+        )
+    )
+    identity = captured["identity"]
+    assert identity.lifecycle_token
+    assert receiver.receive() == (
+        LifecycleSignal(identity.program_id, ProgramLifecycle.TERMINAL, identity.lifecycle_token),
+    )
+    receiver.close()
 
 
 def test_lifecycle_channel_broadcasts_to_internal_dp_ranks_without_explicit_rank(tmp_path) -> None:
