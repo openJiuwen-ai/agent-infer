@@ -111,23 +111,22 @@ def run_harness(command: list[str], output: Path, timeout: float, cleanup_timeou
 
 def cleanup_containers(run_id: str, timeout: int) -> list[str]:
     """Only remove containers ending in this unique harness run ID."""
-    failures = []
     deadline = time.monotonic() + timeout
     result = subprocess.run(
         ["docker", "ps", "-a", "--format", "{{.Names}}"], capture_output=True, text=True, timeout=timeout, check=True
     )
-    for name in result.stdout.splitlines():
-        if name.startswith("sweb.eval.") and name.endswith("." + run_id):
-            try:
-                subprocess.run(
-                    ["docker", "rm", "-f", name],
-                    capture_output=True,
-                    check=True,
-                    timeout=max(0.1, deadline - time.monotonic()),
-                )
-            except (OSError, subprocess.SubprocessError) as exc:
-                failures.append(f"{name}: {exc}")
-    return failures
+    names = [
+        name for name in result.stdout.splitlines() if name.startswith("sweb.eval.") and name.endswith("." + run_id)
+    ]
+    if not names:
+        return []
+    result = subprocess.run(
+        ["docker", "rm", "-f", *names],
+        capture_output=True,
+        text=True,
+        timeout=max(0.1, deadline - time.monotonic()),
+    )
+    return [f"{result.args}: exit {result.returncode}: {result.stderr.strip()}"] if result.returncode else []
 
 
 def evaluate(run: Path, config: EvaluationConfig, output_dir: Path | None = None) -> tuple[Path, int]:
@@ -163,10 +162,10 @@ def evaluate(run: Path, config: EvaluationConfig, output_dir: Path | None = None
     started = time.monotonic()
     launched = False
     interrupted = False
-    active = [p["instance_id"] for p in prepared["predictions"] if p["model_patch"]]
+    has_patches = any(p["model_patch"] for p in prepared["predictions"])
     try:
         manifest["harness"] = harness_identity(config, output / "inputs/dataset.json", config.overall_timeout_seconds)
-        if active:
+        if has_patches:
             command = [
                 str(config.harness_python),
                 "-m",
@@ -206,7 +205,7 @@ def evaluate(run: Path, config: EvaluationConfig, output_dir: Path | None = None
                 manifest["errors"].extend(cleanup_containers(evaluation_id, config.cleanup_timeout_seconds))
             except (OSError, subprocess.SubprocessError) as exc:
                 manifest["errors"].append(f"container cleanup failed: {exc}")
-        if manifest["harness"] and active:
+        if manifest["harness"] and has_patches:
             try:
                 manifest["images"] = image_identities(manifest["harness"]["images"], config.cleanup_timeout_seconds)
             except (OSError, ValueError, subprocess.SubprocessError) as exc:

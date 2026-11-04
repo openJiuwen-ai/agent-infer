@@ -300,8 +300,6 @@ def main(argv: list[str] | None = None, *, cli_metadata: dict[str, object] | Non
 
 
 def _correctness(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    from pydantic import ValidationError
-
     from .evaluation.compare import compare_correctness
     from .evaluation.config import load_evaluation_config
     from .evaluation.runner import evaluate
@@ -310,7 +308,7 @@ def _correctness(args: argparse.Namespace, parser: argparse.ArgumentParser) -> i
         if args.command == "evaluate":
             try:
                 config = load_evaluation_config(args.config)
-            except (ValidationError, OSError, ValueError) as exc:
+            except (OSError, ValueError) as exc:
                 parser.error(str(exc))
             output, code = evaluate(args.result_path, config, args.output_dir)
             logger.info("Correctness results: %s", output / "correctness.json")
