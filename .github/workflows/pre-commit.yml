@@ -34,7 +34,7 @@ jobs:
           extra_args: --all-files --hook-stage manual
         env:
           # The full tree still has historical findings for these hooks.
-          SKIP: mypy,shellcheck,check-buildkite
+          SKIP: mypy,shellcheck,check-buildkite,check-spdx-header
 
       - name: Check files added in the pull request
         if: github.event_name == 'pull_request'
@@ -61,3 +61,4 @@ jobs:
           pre-commit run mypy --hook-stage manual --files "${added[@]}"
           pre-commit run shellcheck --hook-stage manual --files "${added[@]}"
           pre-commit run check-buildkite --hook-stage manual --files "${added[@]}"
+          pre-commit run check-spdx-header --hook-stage manual --files "${added[@]}"

@@ -81,6 +81,13 @@ repos:
     files: ^\.buildkite/.*\.ya?ml$
     additional_dependencies: [pyyaml, check-jsonschema==0.39.0]
     stages: [manual]
+  - id: check-spdx-header
+    name: Check SPDX headers
+    entry: python tools/pre_commit/check_spdx_header.py
+    language: python
+    files: \.(py|pyi|rs|sh)$
+    types: [file]
+    stages: [manual]
   - id: suggestion
     name: Suggestion
     entry: bash -c 'echo "To bypass all the pre-commit hooks, add --no-verify to git commit. To skip a specific hook, prefix the commit command with SKIP=<hook-id>."'
