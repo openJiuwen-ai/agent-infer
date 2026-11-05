@@ -42,7 +42,16 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          mapfile -d '' added < <(git diff -z --name-only --diff-filter=A "$BASE_SHA...$HEAD_SHA")
+          added_list=$(mktemp)
+          trap 'rm -f "$added_list"' EXIT
+          if ! git diff -z --name-only --diff-filter=A "$BASE_SHA...$HEAD_SHA" >"$added_list"; then
+            echo "::error::git diff against $BASE_SHA failed; cannot determine added files"
+            exit 1
+          fi
+          added=()
+          if [ -s "$added_list" ]; then
+            mapfile -d '' added <"$added_list"
+          fi
           if [ "${#added[@]}" -eq 0 ]; then
             echo "No added files in this pull request."
             exit 0
