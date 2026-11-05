@@ -1,65 +1,37 @@
 {
-  "test_name": "glm52_dsh_8x4_plan_subagent",
+  "test_name": "qwen3_coder_dsh_8x4_plan_subagent",
   "scenario": "baseline",
   "functional_validation": "dsh_swebench",
   "mark": [
     {
       "hardware_marks": {
         "res": {
-          "npu": "Ascend"
+          "gpu": "L20"
         },
-        "num_cards": 16
+        "num_cards": 2
       }
     }
   ],
-  "description": "GLM-5.2 Ascend baseline vLLM + DSH plan-subagent, SWE-bench Verified 8 tasks x 4 concurrency",
-  "serve_env": {
-    "HCCL_OP_EXPANSION_MODE": "AIV",
-    "OMP_PROC_BIND": "false",
-    "OMP_NUM_THREADS": "1",
-    "HCCL_BUFFSIZE": "200",
-    "PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True",
-    "VLLM_ASCEND_ENABLE_FLASHCOMM1": "1",
-    "VLLM_ASCEND_ENABLE_FUSED_MC2": "0"
-  },
+  "description": "Qwen3-Coder-30B-A3B-Instruct-FP8 on 2x L20 + DSH plan-subagent, SWE-bench Verified 8 tasks x 4 concurrency",
+  "serve_env": {},
   "server_params": {
-    "model": "Eco-Tech/GLM-5.2-w4a8c8",
+    "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
     "middleware": [],
     "serve_args": {
-      "served-model-name": "glm-5",
+      "served-model-name": "Qwen3-Coder-30B-A3B-Instruct-FP8",
       "enable-prefix-caching": true,
-      "api-server-count": 1,
-      "data-parallel-size": 1,
-      "enable-expert-parallel": true,
-      "tensor-parallel-size": 16,
+      "tensor-parallel-size": 2,
       "seed": 1024,
-      "tool-call-parser": "glm47",
-      "reasoning-parser": "glm45",
+      "tool-call-parser": "qwen3_coder",
       "enable-auto-tool-choice": true,
-      "max-num-seqs": 12,
-      "max-model-len": 180000,
+      "max-num-seqs": 8,
+      "max-model-len": 32768,
       "max-num-batched-tokens": 8192,
       "trust-remote-code": true,
-      "gpu-memory-utilization": 0.92,
-      "quantization": "ascend",
-      "compilation-config": {
-        "cudagraph_mode": "FULL_DECODE_ONLY"
-      },
-      "speculative-config": {
-        "num_speculative_tokens": 3,
-        "method": "deepseek_mtp",
-        "enforce_eager": true
-      },
+      "gpu-memory-utilization": 0.9,
       "enable-prompt-tokens-details": true,
       "async-scheduling": true,
-      "scheduler-cls": "vllm.v1.core.sched.async_scheduler.AsyncScheduler",
-      "additional-config": {
-        "enable_dsa_cp": true,
-        "enable_sparse_sfa_c8": false,
-        "enable_sparse_li_c8": true,
-        "enable_balance_scheduling": true,
-        "multistream_overlap_shared_expert": true
-      }
+      "scheduler-cls": "vllm.v1.core.sched.async_scheduler.AsyncScheduler"
     }
   },
   "result_root": "test-results/vllm",
@@ -69,7 +41,7 @@
     "prepare_output_dir": "agentinfer/agentbench/data/swebench",
     "host": "127.0.0.1",
     "port": 8000,
-    "model": "glm-5",
+    "model": "Qwen3-Coder-30B-A3B-Instruct-FP8",
     "agent-type": "dsh",
     "agent-executable": "dsh",
     "agent-profile": "plan-subagent",

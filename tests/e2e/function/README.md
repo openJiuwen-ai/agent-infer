@@ -24,7 +24,7 @@ tests/e2e/
 
 ## DSH + SWE-bench (`agentbench/dsh/`)
 
-Functional BenchKit run (not replay): GLM-5.2 + DSH on SWE-bench Verified.
+Functional BenchKit run (not replay): Qwen3-Coder-30B-A3B-Instruct-FP8 on 2× L20 + DSH on SWE-bench Verified.
 
 | Case JSON | profile | task-num | max-concurrency | timeout | Source |
 | --------- | ------- | -------- | --------------- | ------- | ------ |
