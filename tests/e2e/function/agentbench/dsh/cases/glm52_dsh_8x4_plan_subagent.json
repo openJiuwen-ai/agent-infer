@@ -13,25 +13,22 @@
     }
   ],
   "description": "Qwen3-Coder-30B-A3B-Instruct-FP8 on 2x L20 + DSH plan-subagent, SWE-bench Verified 8 tasks x 4 concurrency",
-  "serve_env": {},
+  "serve_env": {
+    "VLLM_ENABLE_CUDA_COMPATIBILITY": "1",
+    "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1"
+  },
   "server_params": {
-    "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+    "model": "/home/models/Qwen3-Coder-30B-A3B-Instruct-FP8",
     "middleware": [],
     "serve_args": {
-      "served-model-name": "Qwen3-Coder-30B-A3B-Instruct-FP8",
-      "enable-prefix-caching": true,
+      "served-model-name": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
       "tensor-parallel-size": 2,
-      "seed": 1024,
-      "tool-call-parser": "qwen3_coder",
-      "enable-auto-tool-choice": true,
-      "max-num-seqs": 8,
-      "max-model-len": 32768,
-      "max-num-batched-tokens": 8192,
-      "trust-remote-code": true,
-      "gpu-memory-utilization": 0.9,
-      "enable-prompt-tokens-details": true,
       "async-scheduling": true,
-      "scheduler-cls": "vllm.v1.core.sched.async_scheduler.AsyncScheduler"
+      "scheduler-cls": "vllm.v1.core.sched.async_scheduler.AsyncScheduler",
+      "enable-prefix-caching": true,
+      "enable-prompt-tokens-details": true,
+      "enable-auto-tool-choice": true,
+      "tool-call-parser": "qwen3_coder"
     }
   },
   "result_root": "test-results/vllm",
@@ -41,7 +38,7 @@
     "prepare_output_dir": "agentinfer/agentbench/data/swebench",
     "host": "127.0.0.1",
     "port": 8000,
-    "model": "Qwen3-Coder-30B-A3B-Instruct-FP8",
+    "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
     "agent-type": "dsh",
     "agent-executable": "dsh",
     "agent-profile": "plan-subagent",
