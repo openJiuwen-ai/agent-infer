@@ -256,3 +256,36 @@ vllm bench serve --agentinfer run \
 - `evidence/dsh-runtime.json`、`evidence/source_control.json`：运行时预检和工作区快照。
 - `tasks/<instance_id>/` 下的 `result.json`、`dsh-run-status.json`、`dsh-lineage.json`：逐任务状态与计划审批记录。
 - `tasks/astropy__astropy-13033/dsh-sessions/session-55c296a1-ec3f-492f-b021-4ccbc0fe892d.jsonl`：循环子代理日志。
+
+## ZCode
+
+ZCode 接入对应 [RFC #71](https://github.com/openJiuwen-ai/agent-infer/issues/71)，支持 Linux 上的
+`single` 和 `plan-subagent`。使用源码提交 `a9fe401eede6e6e5e01be9048679c206fe6f02d9`
+（CLI `0.17.1`），按 ZCode 的说明使用 Node `24.14.0` 和 pnpm `10.33.2` 构建 CLI。
+`agent.executable` 指向可执行启动脚本，脚本通过固定 Node 路径运行构建的 `zcode.cjs`，并转发全部参数。
+
+```bash
+vllm bench serve --agentinfer run \
+  --config agentinfer/agentbench/configs/swebench_vllm.yaml \
+  --agent-type zcode --agent-profile single \
+  --agent-executable /absolute/path/to/zcode-launcher \
+  --endpoint /v1/chat/completions --task-num 1 --result-dir results/zcode-single
+```
+
+配置中的 `context_window`、`max_tokens` 须匹配后端模型。当前仅支持无鉴权本地服务，
+`backend.api_key_env` 应为空。每个任务创建独立的 ZCode 状态目录，并经任务专属适配入口向 Request Proxy
+发送规范身份信息。这里的适配入口也处理官方同步 Hook，无需修改 ZCode 源码。
+
+`single` 禁止委派；`plan-subagent` 只委派一次只读 Explore，返回后只展示 `ExitPlanMode`，批准计划后由主 Agent
+修改代码。Explore 的文件工具限于 Read、Glob、Grep，并保留汇报工具；主 Agent 的工具检查与审批由任务 Hook 处理。两种模式均关闭后台任务。
+权限模式不提供操作系统隔离，正式评测须使用外部沙箱或容器。
+
+任务目录包含原始 `transcript.jsonl`、`zcode.stderr.log`、`zcode-hooks.jsonl`、`zcode-lineage.json`、
+`zcode-config.json` 和 `zcode-run-status.json`。代码修改仍导出为 `model.patch`；当前会话自动生成的计划文件
+不会混入补丁。`completed` 表示执行完成，代码是否正确仍需独立评分。
+
+ZCode 的原生 `turn.failed` 错误保存在 `zcode-run-status.json` 的 `native_error` 字段；
+上下文压缩或容量错误分类为 `model_context_exceeded`。模型工具列表随规划阶段变化，
+子代理类型限定为本任务的只读探索配置，最多执行 8 轮工具调用，随后只返回报告。
+规划阶段通过 `tool_choice` 指定探索或提交计划；此过程调整工具声明，不改写对话消息。
+任务的测试依赖需要由执行环境预先准备。

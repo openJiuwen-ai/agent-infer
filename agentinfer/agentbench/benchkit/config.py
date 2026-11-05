@@ -37,7 +37,7 @@ class DatasetConfig(StrictModel):
 
 
 class AgentConfig(StrictModel):
-    type: Literal["claude", "jiuwenswarm", "dsh"] = Field(
+    type: Literal["claude", "jiuwenswarm", "dsh", "zcode"] = Field(
         "claude", json_schema_extra={"cli": {"flag": "--agent-type", "dest": "agent_type"}}
     )
     profile: str = Field("single", json_schema_extra={"cli": {"flag": "--agent-profile", "dest": "agent_profile"}})
