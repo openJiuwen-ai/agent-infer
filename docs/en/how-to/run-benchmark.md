@@ -113,7 +113,83 @@ vllm bench serve --agentinfer run \
   --task-num 1 --result-dir results/jiuwenswarm-smoke
 ```
 
-For DSH use `--agent-type dsh --agent-profile single --agent-executable dsh --endpoint /v1/chat/completions`.
+DSH live runs require **0.2.1-rc.2** and Node `^22.19.0 || >=24`.
+Put a supported Node on `PATH` first; activating a Python virtual environment does not switch Node.
+DSH and runtime preflight look up `node` through `PATH` even when `--agent-executable` is an absolute path.
+Install the required DSH version in the external environment and check versions:
+
+```bash
+node --version
+npm install --global @deepseek-ai/dsh@0.2.1-rc.2
+DSH_EXECUTABLE="$(command -v dsh)"
+"$DSH_EXECUTABLE" --version
+```
+
+Prepare the SWE-bench data and vLLM service described above, then set dataset paths, backend address, and model name
+in `swebench_vllm.yaml`. Merge these fields into that YAML, keeping `agent:` as an uncommented top-level section:
+
+```yaml
+agent:
+  type: dsh
+  profile: plan-subagent
+  context_window: 262144
+  max_tokens: 8192
+backend:
+  endpoint: /v1/chat/completions
+```
+
+Adjust the example context and output capacities to the actual backend. Check `max_model_len` from `/v1/models`
+for the context limit. Declaring a smaller `context_window` restricts the client's available output budget even when
+the model service supports a larger context. See [Benchmark Configuration](../reference/benchmark-config.md).
+
+This example runs two tasks at task concurrency one; subagents may explore in parallel within a task:
+
+```bash
+RESULT_DIR="results/dsh-plan-subagent-$(date +%Y%m%d-%H%M%S)"
+vllm bench serve --agentinfer run \
+  --config agentinfer/agentbench/configs/swebench_vllm.yaml \
+  --base-url http://127.0.0.1:8000 \
+  --agent-type dsh --agent-profile plan-subagent --endpoint /v1/chat/completions \
+  --agent-executable "$DSH_EXECUTABLE" \
+  --task-num 2 --max-concurrency 1 --result-dir "$RESULT_DIR"
+```
+
+BenchKit creates the result directory; it must not already exist. For a global installation, replace
+`--agent-executable` with the actual DSH path. Use `--agent-profile single` for a single agent.
+The `plan-subagent` profile enforces initial plan mode, read-only child tools, and plan-review approval.
+The lead must wait for every child to complete successfully before submitting a plan for approval.
+Only explicit plan-review questions are approved automatically.
+
+The lead may execute at most 200 steps (`agent_step_limit`); Explore subagents may execute at most 100 steps.
+A fourth identical read within the last eight tool calls
+(same file, offset, and limit) stops the task. These limits produce `subagent_step_limit` and `subagent_read_loop`;
+other unsuccessful child endings produce `subagent_failed`.
+If the lead tries to finish in plan mode after all children have completed, it receives one recovery reminder
+to submit its plan. Finishing again without approval produces `plan_not_approved`. The reminder does not exit
+plan mode or approve the plan. Model length truncation is reported as `max_tokens`.
+For both roles, four equivalent argument-validation errors or inactive-plan exit errors from the same tool
+within the last eight tool results produce `validation_error_loop`. Successful calls age old errors out of the window.
+Calling `exit_plan_mode` after plan mode closes returns guidance to continue implementation or reply with the final
+result; it is not a task-completion tool.
+These controls run on DSH lifecycle events; the overall task timeout still applies.
+
+DSH uses pi-ai Chat Completions through the Request Proxy and receives the prompt on stdin.
+Runtime versions and the npm lockfile hash are recorded in `evidence/dsh-runtime.json`.
+DSH runs currently reject a nonempty `backend.api_key_env`.
+
+The default DSH cleanup budget is 10 seconds. Configure it through YAML's `experiment.cleanup_timeout_seconds`.
+For example, increase it for large logs or slow storage:
+
+```yaml
+experiment:
+  cleanup_timeout_seconds: 60.0
+```
+
+Log collection, patch flush waiting, and patch export share this budget. Flush waiting is limited to the smaller of
+`patch_flush_seconds` and half the budget. An exhausted budget is reported as `cleanup_timeout`; existing execution
+timeout or cancellation reasons are preserved. Cleanup details are recorded in
+`tasks/<instance_id>/dsh-run-status.json`; successful completion still requires validated session evidence.
+
 For Router runs use `swebench_agentinfer.yaml`, with `backend.base_url` pointing to the Router and
 `backend.metrics_url` directly to vLLM. The Router forwards transparently without the old registration/cleanup API.
 
