@@ -11,10 +11,10 @@
 python -m pip install -e .
 ```
 
-发布部署时，下载 [AgentInfer 0.1.0 wheel][release-wheel]，然后执行：
+发布部署时，下载 [AgentInfer 0.2.0 wheel][release-wheel]，然后执行：
 
 ```bash
-python -m pip install agentinfer-0.1.0-py3-none-any.whl
+python -m pip install agentinfer-0.2.0-py3-none-any.whl
 ```
 
 确认两个包由同一解释器加载：
@@ -125,4 +125,4 @@ curl http://127.0.0.1:8000/v1/models
 [Python API 参考](../reference/python-api.md)。如需进行可复现的基线和候选组比较，请阅读
 [运行基准测试](run-benchmark.md)。
 
-[release-wheel]: https://gitcode.com/openJiuwen/agent-infer/releases/download/0.1.0/agentinfer-0.1.0-py3-none-any.whl
+[release-wheel]: https://gitcode.com/openJiuwen/agent-infer/releases/download/0.2.0/agentinfer-0.2.0-py3-none-any.whl

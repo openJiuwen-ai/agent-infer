@@ -125,7 +125,7 @@ def test_benchmark_cli_runs_full_contract_with_fake_agent_and_backend(
 ) -> None:
     runtime = FakeAgentRuntime()
     monkeypatch.setitem(RUNTIMES, "jiuwenswarm", runtime)
-    with FakeModelServer() as backend:
+    with FakeModelServer(tmp_path / "backend") as backend:
         config = _config(tmp_path, backend, ("task-a",), run_name="run")
         config_path = tmp_path / "benchmark.yaml"
         _write_config(config, config_path)
@@ -191,7 +191,7 @@ def test_two_tasks_overlap_keep_identity_and_finalize_partial_failure(
         await run_benchmark(config)
         return runtime
 
-    with FakeModelServer() as backend:
+    with FakeModelServer(tmp_path / "backend") as backend:
         runtime = asyncio.run(exercise(backend))
     run_dir = tmp_path / "run-concurrent"
     first = _json(run_dir / "tasks" / "task-a" / "result.json")

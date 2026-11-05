@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "id": "inferrsi.common.skills.rsi_evidence",
+  "title": "rsi-evidence",
+  "repo": "inferrsi",
+  "tier": "contribution",
+  "backend": "common",
+  "component": "skills",
+  "scenario": "skills.discovery",
+  "status": "imported",
+  "summary": "Guide agents to publish and cite RSI evidence using plan/results/patch/validator paths and PASS/FAIL/INCONCLUSIVE verdicts.",
+  "tags": [],
+  "origin": [
+    "unknown"
+  ],
+  "sources": [
+    {
+      "type": "git",
+      "url": "https://github.com/InferMatrixLab/InferRSI/blob/ddeba86177132c5933cf7ab1e6eb7021fb767e22/src/inferrsi/data/skill_library/workflows/rsi-evidence/SKILL.md",
+      "commit": "ddeba86177132c5933cf7ab1e6eb7021fb767e22",
+      "paths": [
+        "src/inferrsi/data/skill_library/skill-index.json",
+        "src/inferrsi/data/skill_library/workflows/rsi-evidence/SKILL.md"
+      ],
+      "content_sha256": "a55610874b658b86a39a1a049efb4e4eab0140f6579ed74dd7718a4ca8cedaca"
+    }
+  ],
+  "index_type": "packaged-skill",
+  "skill_documents": {
+    "original": "data/skill_library/workflows/rsi-evidence/SKILL.md"
+  },
+  "checkout_ref": "checkout:rsi-evidence",
+  "source_files": {
+    "src/inferrsi/data/skill_library/skill-index.json": "75910d82c93d829cc995e1724f4f7e372625f435682640ec5a2fced45d791a21",
+    "src/inferrsi/data/skill_library/workflows/rsi-evidence/SKILL.md": "a55610874b658b86a39a1a049efb4e4eab0140f6579ed74dd7718a4ca8cedaca"
+  },
+  "skill_metadata": {
+    "name": "rsi-evidence",
+    "description": "Guide agents to publish and cite RSI evidence using plan/results/patch/validator paths and PASS/FAIL/INCONCLUSIVE verdicts."
+  },
+  "applicability": {},
+  "recommendations": [
+    "Read the pinned SKILL.md and its prerequisites before choosing this procedure.",
+    "Read the packaged references and owner-local cases alongside the procedure."
+  ],
+  "limitations": [
+    "This generated abstract points to the complete packaged skill; external evidence and upstream repositories remain source links.",
+    "The imported status describes this index, not the original skill; its declared status is unspecified.",
+    "Reading or indexing does not authorize execution, validate efficacy, promote a candidate or grant a license.",
+    "The backend categorizes the procedure's hardware dependency; it does not certify compatibility, and skills.discovery is a discovery scenario."
+  ],
+  "verification": {
+    "locally_verified": false,
+    "evidence_level": "guidance"
+  }
+}

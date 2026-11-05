@@ -28,6 +28,10 @@ BenchKit 将每次运行写入一个全新的结果目录。原始请求事实�
 无法采集的证据会在 `manifest.json` 或 `summary.json` 中标记为 unavailable 或 not applicable。对应的可选文件
 可能不存在；缺少证据不会被静默转换为数值零或成功状态。
 
+`summary.json` 的 `vllm` 块在指标快照缺失时，`reason` 会说明采集失败的具体原因（例如
+`metrics_capture_failed: <采集器错误>`，常见于 `metrics_url` 配置错误或指标服务不可达）。没有采集器错误时，
+`reason` 为 `missing_metrics_snapshot`。
+
 ## 顶层文件
 
 | 文件 | 内容 |

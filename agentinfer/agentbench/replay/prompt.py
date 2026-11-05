@@ -13,13 +13,17 @@ import asyncio
 import hashlib
 import logging
 import os
+import threading
+from collections.abc import Awaitable, Callable
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Literal, TypeVar, cast
 
 import httpx
 
 from .config import ReplayBenchConfig
-from .local_tokenizer import LocalTokenizerCounter
+from .hash_snapshot import HashSnapshotStore, TokenBlockRenderer
+from .local_tokenizer import LocalTokenizerCounter, discover_local_tokenizer
 from .planner import ReplayPlan, ReplayPlanNode, ReplayTaskPlan
 from .tokenizer_retry import TOKENIZER_REQUEST_MAX_ATTEMPTS, TOKENIZER_RETRY_BACKOFF_SECONDS
 from .unified_trace_ir import PromptReference, TraceTextStore, UnifiedTraceIR
@@ -27,6 +31,13 @@ from .unified_trace_ir import PromptReference, TraceTextStore, UnifiedTraceIR
 logger = logging.getLogger(__name__)
 
 SystemContent = str | tuple[dict[str, object], ...]
+T = TypeVar("T")
+TokenizerCacheKey = tuple[str, str] | tuple[str, str, int]
+
+# The renderer requires at least two distinct valid token IDs from the Backend tokenizer.
+AGENTX_TOKEN_PALETTE_SEED = (
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 !@#$%^&*()-_=+[]{};:,.?/ " * 8
+)
 
 
 @dataclass(frozen=True)
@@ -69,6 +80,8 @@ class SyntheticPrompt:
     calibration: PromptCalibration | None = None
     extra_body: dict[str, object] | None = None
     token_ids: tuple[int, ...] | None = None
+    # Half-open ranges of synthetic request-private filler; output and shared segments are immutable.
+    mutable_token_spans: tuple[tuple[int, int], ...] = ()
 
     def anthropic_tools(self) -> list[dict[str, object]]:
         """Convert internal function tools to Anthropic Messages tool objects."""
@@ -128,6 +141,7 @@ class TokenizerClient:
         """Create a tokenizer client, optionally reusing one validated during conversion."""
 
         self.model = config.backend.model
+        self.config = config
         self.endpoint = config.backend.endpoint
         self.base_url = config.backend.resolved_tokenizer_base_url.rstrip("/")
         self.chat_template_kwargs = dict(config.backend.chat_template_kwargs)
@@ -143,9 +157,106 @@ class TokenizerClient:
         )
         self._token_ids: dict[str, tuple[int, ...]] = {}
         self._text_cache: dict[tuple[str, int], str] = {}
+        self._inflight: dict[TokenizerCacheKey, asyncio.Task] = {}
+        self._semaphore = asyncio.Semaphore(config.replay.tokenizer_max_concurrency)
 
     async def close(self) -> None:
+        pending = tuple(self._inflight.values())
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
         await self.client.aclose()
+
+    async def release_task(self, task: ReplayTaskPlan) -> None:
+        """Cancel private work and release completed task caches, retaining shared prefixes."""
+
+        prefixes = (f"{task.runtime_session_id}:", f"session:{task.runtime_session_id}:")
+        request_ids = {node.runtime_request_id for node in task.requests}
+
+        def private(namespace: str) -> bool:
+            return namespace.startswith(prefixes) or (
+                namespace.startswith("trace-record:") and namespace.split(":", 2)[1] in request_ids
+            )
+
+        pending = tuple(operation for key, operation in self._inflight.items() if private(key[1]))
+        for operation in pending:
+            operation.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        for namespace in tuple(self._token_ids):
+            if private(namespace):
+                del self._token_ids[namespace]
+        for key in tuple(self._text_cache):
+            if private(key[0]):
+                del self._text_cache[key]
+
+    async def _shared(self, key: TokenizerCacheKey, operation: Callable[[], Awaitable[T]]) -> T:
+        """Share cache misses without propagating one waiter's cancellation."""
+
+        task = self._inflight.get(key)
+        if task is None:
+
+            async def run() -> T:
+                try:
+                    return await operation()
+                finally:
+                    self._inflight.pop(key, None)
+
+            task = asyncio.create_task(run())
+            # Retrieve failures even when all waiters have been cancelled.
+            task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+            self._inflight[key] = task
+        return cast(T, await asyncio.shield(task))
+
+    async def prepare_local_tokenizer(self) -> None:
+        """Use only backend-validated local tokenization; keep full-template calibration."""
+
+        if self.local_tokenizer is not None or self.endpoint != "/v1/chat/completions":
+            return
+        loop = asyncio.get_running_loop()
+
+        async def get_json(url: str) -> dict[str, object] | None:
+            try:
+                async with self._semaphore:
+                    response = await self.client.get(url)
+                response.raise_for_status()
+                value = response.json()
+                return value if isinstance(value, dict) else None
+            except (httpx.HTTPError, ValueError):
+                return None
+
+        async def backend_tokens(payload: dict[str, object]) -> tuple[int, ...] | None:
+            response = await self._post("/tokenize", json={"model": self.model, **payload})
+            response.raise_for_status()
+            value = response.json().get("tokens")
+            return tuple(value) if isinstance(value, list) and all(type(t) is int for t in value) else None
+
+        stopped = threading.Event()
+
+        def on_loop(operation):
+            if stopped.is_set():
+                operation.close()
+                raise asyncio.CancelledError
+            future = asyncio.run_coroutine_threadsafe(operation, loop)
+            try:
+                while not stopped.is_set():
+                    try:
+                        return future.result(timeout=0.1)
+                    except FutureTimeoutError:
+                        if future.done():
+                            raise
+                raise asyncio.CancelledError
+            finally:
+                future.cancel()
+
+        try:
+            self.local_tokenizer = await asyncio.to_thread(
+                discover_local_tokenizer,
+                self.config,
+                get_json=lambda url: on_loop(get_json(url)),
+                backend_tokens=lambda payload: on_loop(backend_tokens(payload)),
+            )
+        finally:
+            stopped.set()
 
     async def count(self, prompt: SyntheticPrompt) -> int:
         """Return the Backend tokenizer count for one complete synthetic Prompt."""
@@ -192,13 +303,16 @@ class TokenizerClient:
 
     async def text_token_ids(self, text: str) -> tuple[int, ...]:
         if self.local_tokenizer is not None:
-            return await asyncio.to_thread(self.local_tokenizer.text_token_ids, text)
+            return await asyncio.to_thread(self.local_tokenizer.text_token_ids, text, cache=False)
         response = await self._post(
             "/tokenize",
             json={"model": self.model, "prompt": text, "add_special_tokens": False},
         )
         response.raise_for_status()
-        return tuple(response.json()["tokens"])
+        tokens = response.json().get("tokens")
+        if not isinstance(tokens, list) or any(type(token) is not int or token < 0 for token in tokens):
+            raise ValueError("Backend /tokenize response has no valid integer tokens list")
+        return tuple(tokens)
 
     async def detokenize_tokens(self, tokens: tuple[int, ...] | list[int]) -> str:
         if not tokens:
@@ -223,7 +337,8 @@ class TokenizerClient:
 
         for attempt in range(1, TOKENIZER_REQUEST_MAX_ATTEMPTS + 1):
             try:
-                return await self.client.post(f"{self.base_url}{path}", headers=headers, json=json)
+                async with self._semaphore:
+                    return await self.client.post(f"{self.base_url}{path}", headers=headers, json=json)
             except httpx.TransportError as exc:
                 if attempt == TOKENIZER_REQUEST_MAX_ATTEMPTS:
                     raise
@@ -245,16 +360,37 @@ class TokenizerClient:
         cache_key = (namespace, count)
         if cache and cache_key in self._text_cache:
             return self._text_cache[cache_key]
-        ids = self._token_ids.get(namespace)
-        if ids is None:
-            material = hashlib.sha256(namespace.encode()).hexdigest()
-            ids = await self.text_token_ids(f" {material}")
-            self._token_ids[namespace] = ids
-        tokens = [ids[index % len(ids)] for index in range(count)]
-        text = await self.detokenize_tokens(tokens)
+
+        async def prepare() -> str:
+            tokens = await self.token_sequence(namespace, count)
+            text = await self.detokenize_tokens(tokens)
+            if cache:
+                self._text_cache[cache_key] = text
+            return text
+
+        text = await self._shared(("text", namespace, count), prepare)
         if cache:
             self._text_cache[cache_key] = text
         return text
+
+    async def token_sequence(self, namespace: str, count: int) -> tuple[int, ...]:
+        """Repeat a cached seed without detokenizing or encoding historical context."""
+
+        if count <= 0:
+            return ()
+        if namespace not in self._token_ids:
+
+            async def prepare() -> tuple[int, ...]:
+                material = hashlib.sha256(namespace.encode()).hexdigest()
+                ids = await self.text_token_ids(f" {material}")
+                if not ids:
+                    raise ValueError(f"Tokenizer returned an empty seed for {namespace}")
+                self._token_ids[namespace] = ids
+                return ids
+
+            await self._shared(("seed", namespace), prepare)
+        ids = self._token_ids[namespace]
+        return (ids * ((count + len(ids) - 1) // len(ids)))[:count]
 
     async def filler_token_ids(
         self, namespace: str, count: int, *, forbidden_first: int | None = None
@@ -264,7 +400,9 @@ class TokenizerClient:
         if count <= 0:
             return ()
         for variant in range(8):
-            seed = await self.text_token_ids(f" {hashlib.sha256(f'{namespace}:{variant}'.encode()).hexdigest()}")
+            key = f"{namespace}:{variant}"
+            await self.token_sequence(key, 1)
+            seed = self._token_ids[key]
             first = next((index for index, token in enumerate(seed) if token != forbidden_first), None)
             if first is not None:
                 return tuple(seed[(first + index) % len(seed)] for index in range(count))
@@ -292,6 +430,201 @@ class PromptBuilder:
         self.trace_ir = trace_ir
         self._tracelab_warmup_ids: tuple[int, ...] | None = None
         self._tracelab_root_branch_tokens: dict[str, int] = {}
+        if config.replay.prompt_shape == "agentX_snapshot" and (
+            trace_ir is None or trace_ir.prompt_source_kind != "hash_snapshot"
+        ):
+            raise ValueError("AgentX Prompt construction requires hash_snapshot Trace IR")
+        self.hash_snapshots = (
+            HashSnapshotStore(trace_ir.requests_path)
+            if config.replay.prompt_shape == "agentX_snapshot" and trace_ir is not None
+            else None
+        )
+        self._token_blocks: TokenBlockRenderer | None = None
+        self._token_blocks_lock = asyncio.Lock()
+
+    async def release_task(self, task: ReplayTaskPlan) -> None:
+        """Drop task-private preparation data after its graph has stopped."""
+
+        await self.tokenizer.release_task(task)
+        if self.trace_texts is not None:
+            for node in task.requests:
+                if node.prompt_ref is not None:
+                    self.trace_texts.discard(node.prompt_ref)
+
+    @staticmethod
+    def _session_scope(task: ReplayTaskPlan, *, lead: bool) -> str:
+        return f"session:{task.runtime_session_id}:{'lead' if lead else 'subagents'}"
+
+    def _root_segments(self, task: ReplayTaskPlan, node: ReplayPlanNode) -> list[tuple[str, int]]:
+        """Shared namespace recipe used by both preparation and construction."""
+
+        replay = self.config.replay
+        if node.prompt_kind in {"lead_title", "lead_name"}:
+            name = node.prompt_kind.removeprefix("lead_")
+            return [(f"shared:lead-{name}-system", getattr(replay, f"lead_{name}_sys_shared_prefix"))]
+        lead = node.actor_role == "lead"
+        family = "lead" if lead else "subagent"
+        prefix = "lead" if lead else "subagent"
+        return [
+            (f"shared:{family}:system-zero", 1),
+            (f"shared:{family}:system", getattr(replay, f"{prefix}_1st_sys_shared_prefix")),
+            (
+                f"{self._session_scope(task, lead=lead)}:system-private",
+                getattr(replay, f"{prefix}_1st_sys_session_prefix"),
+            ),
+            (
+                f"shared:{family}:tool",
+                replay.lead_1st_tool_shared_prefix if lead else replay.subagent_tool_1st_shared_prefix,
+            ),
+            (f"shared:{family}:message", getattr(replay, f"{prefix}_1st_msg_shared_prefix")),
+            ("shared:lead:trailing-system", replay.lead_1st_trailing_system_prefix if lead else 0),
+        ]
+
+    def _extra_system_segment(self, node: ReplayPlanNode) -> tuple[str, int]:
+        family = "lead" if node.actor_role == "lead" else "subagent"
+        return f"shared:{family}:continuation-system", self.config.replay.extra_system_tokens(
+            node.source_key, node.actor_role
+        )
+
+    async def prepare_tasks(self, plan: ReplayPlan) -> None:
+        """Validate the plan and prepare only consumed global shared segments."""
+
+        if self.config.replay.prompt_shape == "agentX_snapshot":
+            return
+
+        namespaces: set[str] = set()
+        text_segments: set[tuple[str, int]] = set()
+        for task in plan.tasks:
+            by_key = {node.source_key: node for node in task.requests}
+            for node in task.requests:
+                if node.node_type != "request":
+                    continue
+                if node.planned_output_tokens is None or node.planned_output_tokens < 1:
+                    raise ValueError(f"request {node.source_key}: backend cannot replay zero output tokens exactly")
+                if self.config.replay.prompt_shape in {"tracelab_synthetic", "inferact_synthetic"}:
+                    continue
+                if node.context_after is None:
+                    segments = self._root_segments(task, node)
+                else:
+                    segments = [self._extra_system_segment(node)]
+                    previous = by_key[node.context_after]
+                    budget = (
+                        node.planned_input_tokens
+                        - previous.planned_input_tokens
+                        - previous.planned_output_tokens
+                        - sum(count for _, count in segments)
+                    )
+                    if self.config.replay.uses_token_ids and budget < 0 and node.context_mode != "trim":
+                        raise ValueError(
+                            f"request {node.source_key}: append target cannot contain predecessor and output"
+                        )
+                for key, count in segments:
+                    if count > 0 and key.startswith("shared:"):
+                        namespaces.add(key)
+                        text_segments.add((key, count))
+
+        async def bounded(items, operation) -> None:
+            iterator = iter(items)
+
+            async def worker() -> None:
+                for item in iterator:
+                    await operation(item)
+
+            workers = [asyncio.create_task(worker()) for _ in range(self.config.replay.tokenizer_max_concurrency)]
+            try:
+                await asyncio.gather(*workers)
+            finally:
+                for worker_task in workers:
+                    worker_task.cancel()
+                await asyncio.gather(*workers, return_exceptions=True)
+
+        await bounded(sorted(namespaces), lambda key: self.tokenizer.token_sequence(key, 1))
+        if not self.config.replay.uses_token_ids:
+            await bounded(sorted(text_segments), lambda item: self.tokenizer.token_text(*item))
+
+    async def _token_prompt(
+        self, task: ReplayTaskPlan, node: ReplayPlanNode, context: PromptExchange | None
+    ) -> SyntheticPrompt:
+        """Append actual output IDs, trimming only explicitly recorded private filler."""
+
+        target = node.planned_input_tokens
+        assert target is not None
+        namespace = f"{task.runtime_session_id}:{node.prompt_recipe_key}"
+        mode = node.context_mode
+        spans: list[tuple[int, int]] = []
+        trimmed = 0
+        if context is None:
+            if node.context_after is not None:
+                raise ValueError("token continuation lacks predecessor context")
+            segments = self._root_segments(task, node)
+            trailing = segments.pop() if segments[-1][0] == "shared:lead:trailing-system" else ("", 0)
+            parts = [await self.tokenizer.token_sequence(key, count) for key, count in segments]
+            tokens = tuple(token for part in parts for token in part)
+        else:
+            if context.prompt.token_ids is None or context.assistant_token_ids is None:
+                raise ValueError("token continuation lacks actual predecessor input/output IDs")
+            if not context.assistant_token_ids or any(
+                type(token) is not int or token < 0 for token in context.assistant_token_ids
+            ):
+                raise ValueError("token continuation has invalid actual output IDs")
+            tokens = context.prompt.token_ids + context.assistant_token_ids
+            spans = list(context.prompt.mutable_token_spans)
+            trailing = self._extra_system_segment(node)
+        initial = len(tokens) + trailing[1]
+        preserved = len(tokens)
+        deficit = initial - target
+        if deficit > 0:
+            if context is None or mode != "trim" or self.config.replay.context_adjustment_mode != "adaptive":
+                raise ValueError(f"request {node.source_key}: {mode} needs {initial} tokens, target is {target}")
+            if deficit > self.config.replay.context_micro_trim_limit(target):
+                raise ValueError("planned trim exceeds context micro-trim limit")
+            if sum(end - start for start, end in spans) < deficit:
+                raise ValueError("planned trim cannot fit without changing shared prefixes or actual outputs")
+            # Nearest historical private remainder first. Deleting its tail preserves more prefix.
+            for index in range(len(spans) - 1, -1, -1):
+                start, end = spans[index]
+                removed = min(end - start, deficit)
+                cut = end - removed
+                tokens = tokens[:cut] + tokens[end:]
+                preserved = min(preserved, cut)
+                spans[index] = (start, cut)
+                for later in range(index + 1, len(spans)):
+                    left, right = spans[later]
+                    spans[later] = (left - removed, right - removed)
+                trimmed += removed
+                deficit -= removed
+                if deficit == 0:
+                    break
+            spans = [(start, end) for start, end in spans if start < end]
+        filler_count = target - len(tokens) - trailing[1]
+        if filler_count:
+            spans.append((len(tokens), len(tokens) + filler_count))
+            tokens += await self.tokenizer.token_sequence(namespace, filler_count)
+        tokens += await self.tokenizer.token_sequence(*trailing)
+        adjustment = (
+            ("reset_and_pad" if filler_count else "reset")
+            if mode == "reset"
+            else (
+                "trim_and_pad" if trimmed and filler_count else "trim" if trimmed else "pad" if filler_count else "none"
+            )
+        )
+        calibration = PromptCalibration(
+            target,
+            initial,
+            len(tokens),
+            filler_count,
+            filler_count,
+            filler_count,
+            trimmed,
+            target - len(tokens),
+            len(tokens) == target,
+            False,
+            0,
+            (len(tokens),),
+            adjustment,
+            preserved_prefix_tokens=preserved if context is not None else 0,
+        )
+        return SyntheticPrompt("", (), (), calibration=calibration, token_ids=tokens, mutable_token_spans=tuple(spans))
 
     async def prepare_tracelab_warmup(self, plan: ReplayPlan) -> tuple[int, ...]:
         """Build the shared cache root before measured TraceLab execution."""
@@ -347,6 +680,10 @@ class PromptBuilder:
             return await self._trace_record_prompt(node, context)
         if self.config.replay.prompt_shape == "tracelab_synthetic":
             return await self._tracelab_prompt(task, node, context)
+        if self.config.replay.prompt_shape == "agentX_snapshot":
+            return await self._agentx_prompt(task, node, context)
+        if self.config.replay.uses_token_ids:
+            return await self._token_prompt(task, node, context)
         namespace = f"{task.runtime_session_id}:{node.prompt_recipe_key}"
         context_mode = getattr(node, "context_mode", "independent" if context is None else "append")
         if context_mode == "reset":
@@ -357,7 +694,7 @@ class PromptBuilder:
             prompt = await self._auxiliary_prompt(node, namespace, name=False)
         elif node.prompt_kind == "lead_main":
             prompt = await self._first_prompt(task, node, namespace)
-        elif node.prompt_kind == "subagent_first":
+        elif node.prompt_kind == "subagent_first" or context is None:
             prompt = await self._first_prompt(task, node, namespace)
         else:
             assert context is not None
@@ -369,6 +706,40 @@ class PromptBuilder:
             node.planned_input_tokens,
             context_mode=context_mode,
         )
+
+    async def _agentx_prompt(
+        self, task: ReplayTaskPlan, node: ReplayPlanNode, context: PromptExchange | None
+    ) -> SyntheticPrompt:
+        """Build one complete token-ID snapshot without appending live output."""
+
+        if context is not None or node.context_after is not None:
+            raise ValueError("AgentX hash snapshots cannot consume a previous Prompt exchange")
+        assert self.hash_snapshots is not None
+        if self._token_blocks is None:
+            async with self._token_blocks_lock:
+                if self._token_blocks is None:
+                    palette = await self.tokenizer.text_token_ids(AGENTX_TOKEN_PALETTE_SEED)
+                    self._token_blocks = TokenBlockRenderer(palette)
+        recipe = self.hash_snapshots.read(node.prompt_recipe_key, node.source_key)
+        tokens = self._token_blocks.render(recipe, task.runtime_session_id)
+        if len(tokens) != node.planned_input_tokens:
+            raise ValueError(f"AgentX request {node.source_key} rendered the wrong input length")
+        calibration = PromptCalibration(
+            target_tokens=len(tokens),
+            initial_tokens=len(tokens),
+            final_tokens=len(tokens),
+            added_filler_tokens=0,
+            requested_filler_tokens=0,
+            actual_prompt_token_gain=0,
+            trimmed_filler_tokens=0,
+            residual_tokens=0,
+            target_met=True,
+            accepted_with_tolerance=False,
+            repair_attempts=0,
+            count_history=(),
+            adjustment="none",
+        )
+        return SyntheticPrompt("", (), (), calibration=calibration, token_ids=tokens)
 
     async def _tracelab_prompt(
         self,
@@ -473,14 +844,14 @@ class PromptBuilder:
             tool_prefix = self.config.replay.lead_1st_tool_shared_prefix
             message_prefix = self.config.replay.lead_1st_msg_shared_prefix
             family = "lead"
-            session_scope = f"session:{task.runtime_session_id}:lead"
+            session_scope = self._session_scope(task, lead=True)
         else:
             system_prefix = self.config.replay.subagent_1st_sys_shared_prefix
             session_system_prefix = self.config.replay.subagent_1st_sys_session_prefix
             tool_prefix = self.config.replay.subagent_tool_1st_shared_prefix
             message_prefix = self.config.replay.subagent_1st_msg_shared_prefix
             family = "subagent"
-            session_scope = f"actor:{task.runtime_session_id}:{node.actor_id}"
+            session_scope = self._session_scope(task, lead=False)
         system_namespace = f"shared:{family}:system"
         tool_namespace = f"shared:{family}:tool"
         message_namespace = f"shared:{family}:message"

@@ -79,6 +79,17 @@ vllm bench serve --agentinfer compare --baseline DIR [DIR ...] --candidate DIR [
 | `--confidence FLOAT` | `0.95` | Confidence level used by the statistical report. |
 | `--json` | `false` | Emit machine-readable JSON instead of the text report. |
 
+Comparison accepts finalized runs with status `completed` or `failed` without additional options. Each run must
+have a finish timestamp, valid summary and manifest schemas, and matching run identity and lifecycle status.
+Running runs and missing summaries are still rejected.
+
+When any included run failed, the report is diagnostic only: it shows status, available request coverage, errors,
+and descriptive metrics. JSON marks `metadata.diagnostic_only=true` and records every run under
+`metadata.baseline_runs` and `metadata.candidate_runs`. Confidence intervals and significance are `null` because
+the executed request populations may differ. Missing planned counts remain unknown. Available Replay node errors
+are read from `replay-execution.json`; the text report shows up to five per run, and JSON retains all of them.
+The source artifacts are never modified.
+
 See [Run a benchmark](../how-to/run-benchmark.md) for the procedure and
 [Benchmark configuration](benchmark-config.md) for YAML fields.
 
@@ -89,7 +100,7 @@ See [Run a benchmark](../how-to/run-benchmark.md) for the procedure and
 distribution plots.
 
 ```bash
-vllm bench serve --agentinfer replay --config agentinfer/agentbench/configs/replay_benchmark.yaml
+vllm bench serve --agentinfer replay --config agentinfer/agentbench/configs/replay_agentinfer.yaml --task-num 8
 vllm bench serve --agentinfer replay \
   --trace-type tracelab \
   --task-num 8 --max-concurrency 4 \
@@ -97,7 +108,37 @@ vllm bench serve --agentinfer replay \
 vllm bench serve --agentinfer replay --help
 ```
 
-With `--config`, all Replay overrides are optional. Without it, Replay selects a packaged template from
+`replay` CLI overrides are derived from the configuration schema and map one-to-one to YAML fields:
+
+| Argument | Type or value | Configuration field |
+| --- | --- | --- |
+| `--task-num INT` | `>= 1` | `experiment.task_num` |
+| `--result-dir PATH` | Directory path | `experiment.result_dir` |
+| `--max-concurrency INT` | `>= 1` | `experiment.max_concurrency` |
+| `--task-timeout-seconds INT` | Seconds, `>= 1` | `experiment.task_timeout_seconds` |
+| `--run-timeout-seconds INT` | Seconds, `>= 1`; omit for no total timeout | `experiment.run_timeout_seconds` |
+| `--base-url URL` | HTTP URL | `backend.base_url` |
+| `--metrics-url URL` | HTTP URL | `backend.metrics_url` |
+| `--tokenizer-base-url URL` | HTTP URL; falls back to `backend.base_url` when omitted | `backend.tokenizer_base_url` |
+| `--model NAME` | String | `backend.model` |
+| `--endpoint PATH` | `/v1/chat/completions`, `/v1/completions`, or `/v1/messages` | `backend.endpoint` |
+| `--api-key-env NAME` | Environment variable name | `backend.api_key_env` |
+| `--trace-type NAME` | `agentinfer`, `inferact_codex_swebenchpro`, `agentX`, or `tracelab` | `replay.trace_type` |
+| `--trace-path PATH` | File path; omitted uses the default dataset | `replay.trace_path` |
+| `--trace-same-agent-gap-scale FLOAT` | `>= 0` | `replay.trace_same_agent_gap_scale` |
+| `--trace-same-agent-gap-offset-seconds FLOAT` | Signed seconds | `replay.trace_same_agent_gap_offset_seconds` |
+| `--interval-mode NAME` | `trace` or `lognormal` | `replay.interval_mode` |
+| `--sample-seed INT` | Integer | `replay.sample_seed` |
+| `--prompt-transport NAME` | `auto`, `chat_text`, or `completion_token_ids` | `replay.prompt_transport` |
+| `--context-adjustment-mode NAME` | `strict` or `adaptive` | `replay.context_adjustment_mode` |
+| `--context-micro-trim-max-tokens INT` | `>= 0` | `replay.context_micro_trim_max_tokens` |
+| `--context-micro-trim-max-ratio FLOAT` | `0` to `1` | `replay.context_micro_trim_max_ratio` |
+| `--prompt-calibration-tolerance-tokens INT` | `0` to `8` | `replay.prompt_calibration_tolerance_tokens` |
+| `--request-timeout-seconds INT` | Seconds, `>= 1` | `replay.request_timeout_seconds` |
+
+Structured fields such as `backend.chat_template_kwargs` and `replay.interval_lognormal` are not yet
+CLI-overridable; set them in YAML. With `--config`, all other Replay overrides are optional. Without it, Replay
+selects a packaged template from
 `--trace-type` and requires `--trace-type`, `--task-num`, `--base-url`, and `--model`; `--max-concurrency` defaults to
 `1`. A null `trace_path` uses the default AgentInfer, Inferact, or TraceLab dataset. Inferact and TraceLab download
 pinned revisions and cache up to the first `task_num` complete records or sessions. An explicit `--trace-path`

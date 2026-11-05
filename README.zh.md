@@ -23,7 +23,8 @@ AgentInfer 为智能体工作流提供缓存管理和请求调度能力，可集
 
 [文档导航](docs/README.md) · [快速开始](docs/zh/tutorial/01-quick-start.md) ·
 [vLLM 接入](docs/zh/how-to/integrate-vllm.md) · [基准测试指南](docs/zh/how-to/run-benchmark.md) ·
-[AgentRouter WASM affinity + native 补丁](agentinfer/agentrouter/README.md) · [变更日志](CHANGELOG.md)
+[AgentRouter WASM affinity + native 补丁](agentinfer/agentrouter/README.md) ·
+[InferRSI 工作台](docs/zh/reference/inferrsi.md) · [变更日志](CHANGELOG.md)
 
 ## 环境要求
 
@@ -48,10 +49,10 @@ python -m pip install -e .
 
 ### 安装发布包
 
-下载 [AgentInfer 0.1.0 wheel][release-wheel]，然后在目标 vLLM 环境中安装：
+下载 [AgentInfer 0.2.0 wheel][release-wheel]，然后在目标 vLLM 环境中安装：
 
 ```bash
-python -m pip install agentinfer-0.1.0-py3-none-any.whl
+python -m pip install agentinfer-0.2.0-py3-none-any.whl
 ```
 
 ## Quick Start
@@ -82,4 +83,4 @@ AgentBench；`vllm serve MODEL --agentinfer` 激活 AgentInfer 服务路径；�
 
 本产品仅作为流程编排工具，不包含 AI 模型能力；用户在连接 AI 模型用于特定业务场景时，需自行承担欧盟 AI 法案等相关合规义务。
 
-[release-wheel]: https://gitcode.com/openJiuwen/agent-infer/releases/download/0.1.0/agentinfer-0.1.0-py3-none-any.whl
+[release-wheel]: https://gitcode.com/openJiuwen/agent-infer/releases/download/0.2.0/agentinfer-0.2.0-py3-none-any.whl

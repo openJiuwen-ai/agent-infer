@@ -22,7 +22,7 @@ from ..metrics.request import aggregate_request_metrics
 from ..metrics.schema import EvidenceCapture
 from ..metrics.source_health import evaluate_captures
 from ..metrics.task import aggregate_task_results
-from ..metrics.vllm import aggregate_vllm_metrics
+from ..metrics.vllm import aggregate_vllm_metrics, vllm_capture_reason
 from .manifest import RunManifest, finalize_run_manifest
 from .summary import build_run_summary
 from .task_index import build_run_task_index
@@ -92,7 +92,11 @@ class RunFinalizer:
     def _write_summary(self) -> None:
         vllm_metrics = self._guard(
             "vllm_aggregation",
-            lambda: aggregate_vllm_metrics(self._ctx.vllm_start, self._ctx.vllm_end),
+            lambda: aggregate_vllm_metrics(
+                self._ctx.vllm_start,
+                self._ctx.vllm_end,
+                capture_reason=vllm_capture_reason(self._ctx.captures),
+            ),
         )
         self._recompute_status()
         if self._ctx.facts is None or vllm_metrics is None:

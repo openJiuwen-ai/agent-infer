@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 from pathlib import Path
 from typing import Literal
@@ -34,8 +35,8 @@ class ReplayExperimentConfig(ReplayStrictModel):
     task_num: int | None = Field(None, ge=1, json_schema_extra={"cli": True})
     result_dir: Path = Field(Path("replay-results"), json_schema_extra={"cli": True})
     max_concurrency: int = Field(1, ge=1, json_schema_extra={"cli": True})
-    task_timeout_seconds: int | None = Field(3600, ge=1)
-    run_timeout_seconds: int | None = Field(None, ge=1)
+    task_timeout_seconds: int | None = Field(3600, ge=1, json_schema_extra={"cli": True})
+    run_timeout_seconds: int | None = Field(None, ge=1, json_schema_extra={"cli": True})
 
 
 class ReplayBackendConfig(ReplayStrictModel):
@@ -44,17 +45,17 @@ class ReplayBackendConfig(ReplayStrictModel):
     type: Literal["vllm"] = "vllm"
     base_url: str = Field("http://127.0.0.1:8000", json_schema_extra={"cli": True})
     metrics_url: str | None = Field(None, json_schema_extra={"cli": {"flag": "--metrics-url"}})
-    tokenizer_base_url: str | None = None
+    tokenizer_base_url: str | None = Field(None, json_schema_extra={"cli": True})
     model: str = Field(
         "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
         json_schema_extra={"cli": True},
     )
-    endpoint: Literal["/v1/chat/completions", "/v1/messages"] = Field(
+    endpoint: Literal["/v1/chat/completions", "/v1/completions", "/v1/messages"] = Field(
         "/v1/chat/completions",
         json_schema_extra={"cli": True},
     )
     chat_template_kwargs: dict[str, object] = Field(default_factory=dict)
-    api_key_env: str | None = None
+    api_key_env: str | None = Field(None, json_schema_extra={"cli": True})
 
     @property
     def resolved_tokenizer_base_url(self) -> str:
@@ -99,14 +100,21 @@ class ReplayConfig(ReplayStrictModel):
         1.0,
         ge=0,
         description="Scale historical completion-to-next-start gaps between requests from the same Agent.",
+        json_schema_extra={"cli": True},
     )
     trace_same_agent_gap_offset_seconds: float = Field(
         0.0,
         description="Signed offset applied after scaling a same-Agent Trace request gap.",
+        json_schema_extra={"cli": True},
     )
     interval_mode: Literal["trace", "lognormal"] = Field("trace", json_schema_extra={"cli": True})
     interval_lognormal: ReplayIntervalLognormalConfig | None = None
-    sample_seed: int = 0
+    sample_seed: int = Field(0, json_schema_extra={"cli": True})
+    max_inflight_requests: int = Field(8, ge=1, description="Per-session AgentX request limit.")
+    prompt_transport: Literal["auto", "chat_text", "completion_token_ids"] = Field(
+        "auto", json_schema_extra={"cli": True}
+    )
+    tokenizer_max_concurrency: int = Field(16, ge=1)
     lead_title_sys_shared_prefix: int = Field(0, ge=0)
     lead_name_sys_shared_prefix: int = Field(0, ge=0)
     lead_1st_sys_shared_prefix: int = Field(0, ge=0)
@@ -122,16 +130,23 @@ class ReplayConfig(ReplayStrictModel):
     subagent_continuation_extra_system_ratio: float = Field(0, ge=0, le=1)
     lead_continuation_system_tokens: int = Field(0, ge=0)
     subagent_continuation_system_tokens: int = Field(0, ge=0)
-    context_adjustment_mode: Literal["strict", "adaptive"] = "strict"
-    context_micro_trim_max_tokens: int = Field(64, ge=0)
-    context_micro_trim_max_ratio: float = Field(0.005, ge=0, le=1)
+    context_adjustment_mode: Literal["strict", "adaptive"] = Field("strict", json_schema_extra={"cli": True})
+    context_micro_trim_max_tokens: int = Field(64, ge=0, json_schema_extra={"cli": True})
+    context_micro_trim_max_ratio: float = Field(0.005, ge=0, le=1, json_schema_extra={"cli": True})
     prompt_calibration_tolerance_tokens: int = Field(
         0,
         ge=0,
         le=8,
         description="Residual allowance for synthetic prompts; Inferact always uses exact input lengths.",
+        json_schema_extra={"cli": True},
     )
-    request_timeout_seconds: int = Field(3600, ge=1)
+    request_timeout_seconds: int = Field(3600, ge=1, json_schema_extra={"cli": True})
+
+    @property
+    def uses_token_ids(self) -> bool:
+        """Keep legacy text configurations while allowing synthetic raw-token replay."""
+
+        return self.trace_type in {"tracelab", "agentX"} or self.prompt_transport == "completion_token_ids"
 
     @property
     def prompt_shape(self) -> str:
@@ -141,11 +156,18 @@ class ReplayConfig(ReplayStrictModel):
             "inferact_codex_swebenchpro": "inferact_synthetic",
             "agentinfer": "agentinfer_synthetic",
             "tracelab": "tracelab_synthetic",
-            "agentX": "agentX_synthetic",
+            "agentX": "agentX_snapshot",
         }[self.trace_type]
 
     @model_validator(mode="after")
     def validate_replay_modes(self) -> ReplayConfig:
+        if self.trace_type == "inferact_codex_swebenchpro" and self.prompt_transport == "completion_token_ids":
+            raise ValueError("Inferact requires chat_text to preserve source message content")
+        if self.trace_type in {"tracelab", "agentX"} and self.prompt_transport == "chat_text":
+            raise ValueError(f"{self.trace_type} requires completion_token_ids")
+        if self.uses_token_ids and self.prompt_calibration_tolerance_tokens != 0:
+            requirement = self.trace_type if self.trace_type in {"agentX", "tracelab"} else "completion_token_ids"
+            raise ValueError(f"{requirement} requires prompt_calibration_tolerance_tokens=0")
         if self.interval_mode == "lognormal":
             if self.interval_lognormal is None:
                 raise ValueError("interval_mode=lognormal requires interval_lognormal anchors")
@@ -156,9 +178,6 @@ class ReplayConfig(ReplayStrictModel):
                 raise ValueError("inferact_codex_swebenchpro requires interval_mode=lognormal")
             if self.prompt_calibration_tolerance_tokens != 0:
                 raise ValueError("inferact_codex_swebenchpro requires prompt_calibration_tolerance_tokens=0")
-        if self.trace_type == "tracelab":
-            if self.prompt_calibration_tolerance_tokens != 0:
-                raise ValueError("tracelab requires prompt_calibration_tolerance_tokens=0")
         return self
 
     def context_micro_trim_limit(self, target: int) -> int:
@@ -168,6 +187,14 @@ class ReplayConfig(ReplayStrictModel):
             self.context_micro_trim_max_tokens,
             math.ceil(target * self.context_micro_trim_max_ratio),
         )
+
+    def extra_system_tokens(self, source_key: str, actor_role: str) -> int:
+        """Select the same protected continuation segment in planning and construction."""
+
+        family = "lead" if actor_role == "lead" else "subagent"
+        ratio = getattr(self, f"{family}_continuation_extra_system_ratio")
+        bucket = int(hashlib.sha256(source_key.encode()).hexdigest()[:8], 16) / 0xFFFFFFFF
+        return getattr(self, f"{family}_continuation_system_tokens") if bucket < ratio else 0
 
 
 class ReplayBenchConfig(ReplayStrictModel):
@@ -183,10 +210,22 @@ class ReplayBenchConfig(ReplayStrictModel):
 
         if self.experiment.task_num is None:
             raise ValueError("experiment.task_num is required for Replay")
+        if (
+            self.replay.uses_token_ids
+            and self.replay.trace_type != "agentX"
+            and self.backend.endpoint != "/v1/chat/completions"
+        ):
+            raise ValueError("completion_token_ids requires backend.endpoint=/v1/chat/completions")
         if self.replay.trace_type == "inferact_codex_swebenchpro" and self.backend.endpoint != "/v1/chat/completions":
             raise ValueError("inferact_codex_swebenchpro requires backend.endpoint=/v1/chat/completions")
         if self.replay.trace_type == "tracelab" and self.backend.endpoint != "/v1/chat/completions":
             raise ValueError("tracelab requires backend.endpoint=/v1/chat/completions")
+        if self.replay.trace_type == "agentX" and self.backend.endpoint != "/v1/completions":
+            raise ValueError("agentX requires backend.endpoint=/v1/completions")
+        if self.backend.endpoint == "/v1/completions" and self.replay.trace_type != "agentX":
+            raise ValueError("backend.endpoint=/v1/completions requires trace_type=agentX")
+        if self.replay.trace_type == "agentX" and self.backend.chat_template_kwargs:
+            raise ValueError("agentX token-ID prompts do not use chat_template_kwargs")
         return self
 
 

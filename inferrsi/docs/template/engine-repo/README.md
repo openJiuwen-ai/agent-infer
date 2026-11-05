@@ -1,0 +1,122 @@
+# Engine repository
+
+![InferMatrix organization wordmark](docs/assets/infermatrix-logo.png)
+
+An [InferMatrixLab](https://github.com/InferMatrixLab) project.
+
+**Template:** replace this title with the actual engine name, fill the identity
+below, and remove template guidance before publication. Add an approved local
+banner only after following [asset ownership](docs/assets/README.md).
+
+```text
+Engine: <engine-name>
+Purpose: <model-or-modality-and-runtime-purpose>
+Implementation: https://github.com/InferMatrixLab/<engine-repo>
+Upstream sources: <original-projects-and-contribution-boundaries>
+License: <engine-license-and-upstream-notices>
+Model weights: <model-source-and-separate-license>
+Maintainers: <real-github-logins>
+```
+
+[Architecture](docs/architecture.md) · [Reproduction](docs/reproducibility.md) ·
+[Contributing](CONTRIBUTING.md) · [Recipes](recipes/README.md) ·
+[Evidence](evidence/README.md)
+
+## Scope and supported combinations
+
+Describe the actual engine implementation, intended workload and what the
+repository maintains. List each known combination separately; an absent
+combination is unknown. Deployment state and performance acceptance are separate.
+
+```text
+Model / revision: <provider/model-and-version>
+Task: <task_snake_case>
+Backend / precision: <backend> / <precision>
+Hardware / count: <exact-device-model> / <positive-device-count>
+Deployment status: <unverified|validated|unsupported>
+Deployment evidence and date: <evidence-url-and-date-or-unverified>
+Acceptance: <PASS|FAIL|INCONCLUSIVE>
+Acceptance issue / evidence: <issue-and-evidence-urls-or-incomplete>
+Known limitations: <specific-scope-or-blockers>
+```
+
+## Architecture
+
+Summarize the implemented data path, model loading, execution backend, serving
+interface and extension points in [architecture](docs/architecture.md). Describe
+the actual language/build layout; adapting this scaffold does not require an
+InferRSI dependency or Python architecture.
+
+## Environment
+
+Record the operating system, device/driver/firmware, runtime, compiler, language,
+framework and dependency versions, model access/license requirements, disk and
+memory requirements. Keep versioned examples in [configs](configs/README.md).
+Do not imply compatibility for a device or version that has no supporting facts.
+
+## Install
+
+Replace these entire commands with reviewed, executable instructions for the
+documented deployment version. Record source versus released-package ownership
+explicitly. Model installation may have separate terms and credentials; never
+commit secrets.
+
+```bash
+git clone https://github.com/InferMatrixLab/<engine-repo>.git
+cd <engine-repo>
+git checkout <deployment-tag-or-commit>
+<reviewed-install-command>
+```
+
+## Start
+
+Document configuration, model path, device selection, ports, readiness signal,
+logs and shutdown. This complete command must match the source recipe.
+
+```bash
+<reviewed-start-command>
+```
+
+## Minimal request
+
+Show a complete request and the observable success condition, expected media or
+output shape, and output location. Include a health/readiness check where used.
+
+```bash
+<minimal-request-command>
+```
+
+## Reproduce and validate
+
+Follow [reproducibility](docs/reproducibility.md) for the exact software/hardware
+combination and evidence identity. Describe [tests](tests/README.md), quality
+validators and [benchmarks](benchmarks/README.md) separately. Record warmups,
+workload, measured versus setup time, units, statistics and required L0–L4 levels.
+
+```bash
+<lightweight-engine-check-command>
+<model-quality-validation-command>
+<benchmark-command-if-available>
+```
+
+## Results and limitations
+
+Link original reports with their revision, device count, precision, workload,
+statistics and validation scope. Keep negative results. Hardware deployment and
+quality/performance work not yet run must be labeled accordingly. Do not add a
+gain claim before the acceptance issue and complete evidence justify `PASS`;
+CPU CI alone does not validate an accelerator or an E2E service.
+
+## Recipes and contribution
+
+The engine owns its [source recipes](recipes/README.md); the
+[InferMatrixLab recipe catalog](https://github.com/InferMatrixLab/recipe) owns the
+schema, locked collection and website. Follow [contributing](CONTRIBUTING.md) to
+update the implementation and recipe together, then request catalog sync.
+
+## License and acknowledgements
+
+Add the engine's actual license file and its navigation link, plus upstream
+copyright/notices and model-weight terms. Explain forks, reused implementations,
+patches and independent work accurately. Do not treat the organization name or
+this template as permission to relicense external work.

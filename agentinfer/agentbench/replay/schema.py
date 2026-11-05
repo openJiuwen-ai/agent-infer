@@ -44,6 +44,39 @@ class ReplaySourceEvidence:
 
 
 @dataclass(frozen=True)
+class AgentXSourceDetails:
+    """Validated AgentX provenance, retaining the serialized field names."""
+
+    source_session_id: str
+    source_model: str
+    source_request_index: int
+    source_inner_index: int
+    block_size: int
+    block_count: int
+    hash_id_scope: Literal["local"]
+    timing_inference: Literal["latest_completed_global"]
+
+    def __post_init__(self) -> None:
+        for field in ("source_session_id", "source_model"):
+            value = getattr(self, field)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"AgentX source details have invalid {field}")
+        for field, minimum in (
+            ("source_request_index", 0),
+            ("source_inner_index", -1),
+            ("block_size", 1),
+            ("block_count", 1),
+        ):
+            value = getattr(self, field)
+            if type(value) is not int or value < minimum:
+                raise ValueError(f"AgentX source details have invalid {field}")
+        if self.hash_id_scope != "local":
+            raise ValueError("AgentX source details require hash_id_scope=local")
+        if self.timing_inference != "latest_completed_global":
+            raise ValueError("AgentX source details have invalid timing_inference")
+
+
+@dataclass(frozen=True)
 class ReplayRequest:
     """One historical request attempt with inferred Replay relationships."""
 
@@ -81,6 +114,11 @@ class ReplayRequest:
     same_agent_gap_seconds: float | None
     parallel_with: tuple[str, ...]
     source_evidence: ReplaySourceEvidence | None = None
+    source_details: AgentXSourceDetails | None = None
+
+    def __post_init__(self) -> None:
+        if self.source_details is not None and not isinstance(self.source_details, AgentXSourceDetails):
+            raise ValueError("source_details must be AgentXSourceDetails")
 
     def to_dict(self) -> dict[str, object]:
         """Serialize timestamps and tuples for JSON artifacts."""

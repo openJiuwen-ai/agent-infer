@@ -315,6 +315,48 @@ def test_empty_results_produces_empty_index(tmp_path: Path) -> None:
     assert index["failure_summary"]["total_failed"] == 0
 
 
+def test_vllm_capture_failure_reason_lands_in_summary(tmp_path: Path) -> None:
+    """A failed vLLM metrics capture surfaces its error in summary.json vllm.reason (issue #23)."""
+    run_dir = _run_dir(tmp_path, with_tasks=False)
+    manifest = _manifest("run")
+    finished_at = manifest.created_at + timedelta(seconds=2)
+    captures = [
+        EvidenceCapture(
+            "vllm_start",
+            None,
+            False,
+            "Connection refused: connect to http://vllm-backend:8077/metrics failed",
+            {},
+        ),
+        EvidenceCapture("vllm_end", None, False, "Connection refused", {}),
+    ]
+
+    RunFinalizer(
+        FinalizationContext(
+            run_id="run",
+            output_dir=run_dir,
+            manifest=manifest,
+            results=[],
+            facts=_facts(),
+            vllm_start=None,
+            vllm_end=None,
+            captures=captures,
+            correctness=None,
+            close_result=None,
+            run_exception=None,
+            prior_finalization_errors=[],
+            run_wall_time_seconds=2.0,
+            finished_at=finished_at,
+        )
+    ).finalize()
+
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["vllm"]["available"] is False
+    assert summary["vllm"]["reason"].startswith("metrics_capture_failed: Connection refused")
+    # The same reason also remains visible in source_health for parity.
+    assert summary["source_health"]["unavailable"] == 2
+
+
 def test_skips_summary_when_facts_missing(tmp_path: Path) -> None:
     run_dir = _run_dir(tmp_path)
     manifest = _manifest("run")

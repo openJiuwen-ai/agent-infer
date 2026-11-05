@@ -10,3 +10,5 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "e2e_perf: end-to-end performance benchmarks")
     config.addinivalue_line("markers", "e2e_functional: correctness-oriented E2E (AgentBench, replay, etc.)")
     config.addinivalue_line("markers", "benchmark_smoke: hermetic AgentBench benchmark contract tests")
+
+    config.addinivalue_line("markers", "replay_smoke: process-isolated Replay HTTP contract tests")

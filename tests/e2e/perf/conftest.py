@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
-"""Pytest options for E2E benchmark runs."""
+"""Pytest options for E2E performance benchmark runs."""
 
 from __future__ import annotations
 
@@ -14,7 +14,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store",
         default=None,
         metavar="PATH",
-        help=('Case JSON path; scenario from JSON "scenario" (or legacy "arm") or cases/baseline|agentinfer/ path.'),
+        help=(
+            'Case JSON path; scenario from JSON "scenario" (or legacy "arm") '
+            "or cases/baseline|agentinfer/ path."
+        ),
     )
     group.addoption(
         "--task-num",

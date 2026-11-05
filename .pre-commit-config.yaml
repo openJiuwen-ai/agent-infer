@@ -4,6 +4,8 @@ default_install_hook_types:
 default_stages:
   - pre-commit
   - manual
+# Preserve the InferRSI source snapshot; use its own lint/test configuration.
+exclude: ^inferrsi/
 repos:
 - repo: https://github.com/astral-sh/ruff-pre-commit
   rev: v0.14.0

@@ -27,11 +27,11 @@ cd agent-infer
 python -m pip install -e .
 ```
 
-For a release deployment, download the [AgentInfer 0.1.0 wheel][release-wheel], activate the target vLLM environment,
+For a release deployment, download the [AgentInfer 0.2.0 wheel][release-wheel], activate the target vLLM environment,
 and run:
 
 ```bash
-python -m pip install agentinfer-0.1.0-py3-none-any.whl
+python -m pip install agentinfer-0.2.0-py3-none-any.whl
 ```
 
 ## 3. Start vLLM
@@ -69,4 +69,4 @@ options.
 Next, [integrate AgentInfer with vLLM](../how-to/integrate-vllm.md) in an existing service or
 [run a benchmark](../how-to/run-benchmark.md) to compare schedulers.
 
-[release-wheel]: https://github.com/openjiuwen-ai/agent-infer/releases/download/0.1.0/agentinfer-0.1.0-py3-none-any.whl
+[release-wheel]: https://github.com/openjiuwen-ai/agent-infer/releases/download/0.2.0/agentinfer-0.2.0-py3-none-any.whl

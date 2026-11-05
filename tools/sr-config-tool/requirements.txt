@@ -1,0 +1,18 @@
+# sr-config-tool Python dependencies
+# Install with: pip install -r requirements.txt
+
+# Config parsing
+pyyaml>=6.0
+
+# Data processing (build_tasks, split_evalset, convert_eval_to_bench)
+pandas>=2.0
+pyarrow>=12.0
+
+# Model evaluation (run_eval calls multi_benchmark_eval.py)
+openai>=1.0
+
+# Signal prediction (optional, only if using signal_predict.py from SR)
+# torch>=2.0
+# transformers>=4.30
+
+# E2E benchmark (sr_baseline_eval.py is stdlib-only, no extra deps needed)

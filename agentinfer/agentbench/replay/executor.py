@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from dataclasses import asdict, dataclass
 
 from .config import ReplayBenchConfig
+from .observation import RealClock, ReplayClock, ReplayObserver, emit
 from .planner import ReplayPlan, ReplayPlanNode, ReplayTaskPlan
 from .prompt import PromptBuilder, PromptExchange, SyntheticPrompt
 from .transport import ReplayTransport
@@ -35,6 +35,10 @@ class NodeExecution:
     error: str | None
     context_mode: str = "none"
     prompt_calibration: dict[str, object] | None = None
+    prompt_prepare_start_offset_seconds: float | None = None
+    prompt_prepare_end_offset_seconds: float | None = None
+    prompt_prepare_seconds: float | None = None
+    prompt_prepare_mode: str | None = None
 
 
 @dataclass(frozen=True)
@@ -75,11 +79,51 @@ class ReplayExecutor:
         plan: ReplayPlan,
         prompts: PromptBuilder,
         transport: ReplayTransport,
+        *,
+        clock: ReplayClock | None = None,
+        observer: ReplayObserver | None = None,
     ) -> None:
+        self.clock = clock or RealClock()
+        self.observer = observer
         self.config = config
         self.plan = plan
         self.prompts = prompts
         self.transport = transport
+        self._preparation: dict[str, tuple[float, float]] = {}
+
+    async def _prepare(
+        self, task: ReplayTaskPlan, node: ReplayPlanNode, context: PromptExchange | None
+    ) -> SyntheticPrompt:
+        """Build one prompt and record preparation time even if construction fails."""
+        started = self.clock.monotonic()
+        emit(self.observer, self.clock, "prompt_prepare_started", task, node, at=started)
+        try:
+            return await self.prompts.build(task, node, context)
+        finally:
+            finished = self.clock.monotonic()
+            self._preparation[node.runtime_request_id] = (started, finished)
+            emit(self.observer, self.clock, "prompt_prepare_finished", task, node, at=finished)
+
+    def _preparation_metadata(self, node, task_started: float) -> dict[str, object]:
+        times = self._preparation.get(node.runtime_request_id)
+        if times is None:
+            return {}
+        tokenizer = getattr(self.prompts, "tokenizer", None)
+        mode = (
+            "completion_token_ids"
+            if self.config.replay.uses_token_ids
+            else ("chat_text_local_full" if getattr(tokenizer, "local_tokenizer", None) else "chat_text_backend_full")
+        )
+        return {
+            "prompt_prepare_start_offset_seconds": times[0] - task_started,
+            "prompt_prepare_end_offset_seconds": times[1] - task_started,
+            "prompt_prepare_seconds": times[1] - times[0],
+            "prompt_prepare_mode": mode,
+        }
+
+    @property
+    def _uses_agentx_snapshots(self) -> bool:
+        return self.config.replay.prompt_shape == "agentX_snapshot"
 
     async def execute(self) -> tuple[ReplayTaskExecution, ...]:
         """Run every planned Session and return its finalized execution record."""
@@ -87,6 +131,7 @@ class ReplayExecutor:
         semaphore = asyncio.Semaphore(self.config.experiment.max_concurrency)
 
         async def bounded(task: ReplayTaskPlan) -> ReplayTaskExecution:
+            emit(self.observer, self.clock, "task_submitted", task)
             async with semaphore:
                 return await self._execute_task(task)
 
@@ -96,7 +141,8 @@ class ReplayExecutor:
         self,
         task: ReplayTaskPlan,
     ) -> ReplayTaskExecution:
-        started = time.monotonic()
+        started = self.clock.monotonic()
+        emit(self.observer, self.clock, "task_admitted", task, at=started)
         error = None
         nodes: list[NodeExecution] = []
         try:
@@ -109,12 +155,20 @@ class ReplayExecutor:
                 )
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
+        finally:
+            release_task = getattr(self.prompts, "release_task", None)
+            if release_task is not None:
+                await release_task(task)
+            for node in task.requests:
+                self._preparation.pop(node.runtime_request_id, None)
         failed_nodes = any(node.status != "success" for node in nodes)
+        finished = self.clock.monotonic()
+        emit(self.observer, self.clock, "task_finished", task, at=finished)
         return ReplayTaskExecution(
             task.task_id,
             task.runtime_session_id,
             "failed" if error or failed_nodes else "completed",
-            time.monotonic() - started,
+            finished - started,
             error,
             tuple(nodes),
         )
@@ -124,16 +178,22 @@ class ReplayExecutor:
         task: ReplayTaskPlan,
         results: list[NodeExecution],
     ) -> None:
-        roots = [node for node in task.requests if node.node_type == "request" and node.context_after is None]
+        roots = (
+            []
+            if self._uses_agentx_snapshots
+            else [node for node in task.requests if node.node_type == "request" and node.context_after is None]
+        )
         prepared = await asyncio.gather(
-            *(self.prompts.build(task, node, None) for node in roots),
+            *(self._prepare(task, node, None) for node in roots),
             return_exceptions=True,
         )
         root_prompts = dict(zip((node.source_key for node in roots), prepared, strict=True))
-        started = time.monotonic()
+        started = self.clock.monotonic()
+        emit(self.observer, self.clock, "graph_started", task, at=started)
         completions = {node.source_key: asyncio.get_running_loop().create_future() for node in task.requests}
+        inflight = asyncio.Semaphore(self.config.replay.max_inflight_requests)
         running = [
-            asyncio.create_task(self._execute_node(task, node, started, root_prompts, completions, results))
+            asyncio.create_task(self._execute_node(task, node, started, root_prompts, completions, results, inflight))
             for node in task.requests
         ]
         try:
@@ -152,6 +212,7 @@ class ReplayExecutor:
         root_prompts: dict[str, SyntheticPrompt | BaseException],
         completions: dict[str, asyncio.Future[_NodeCompletion]],
         results: list[NodeExecution],
+        inflight: asyncio.Semaphore,
     ) -> None:
         """Execute one node and convert ordinary failures into terminal outcomes.
 
@@ -161,7 +222,7 @@ class ReplayExecutor:
         """
 
         try:
-            await self._execute_node_inner(task, node, task_started, root_prompts, completions, results)
+            await self._execute_node_inner(task, node, task_started, root_prompts, completions, results, inflight)
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
             status = "skipped_dependency_failed" if isinstance(exc, _DependencyFailed) else "failed"
@@ -179,7 +240,7 @@ class ReplayExecutor:
                     node.source_key,
                     node.node_type,
                 )
-            completion = _NodeCompletion(time.monotonic(), None, status, error)
+            completion = _NodeCompletion(self.clock.monotonic(), None, status, error)
             if not completions[node.source_key].done():
                 completions[node.source_key].set_result(completion)
             results.append(
@@ -195,8 +256,23 @@ class ReplayExecutor:
                     error,
                     getattr(node, "context_mode", "none"),
                     None,
+                    **self._preparation_metadata(node, task_started),
                 )
             )
+
+        finally:
+            future = completions[node.source_key]
+            if future.done() and not future.cancelled():
+                completion = future.result()
+                emit(
+                    self.observer,
+                    self.clock,
+                    "node_finished",
+                    task,
+                    node,
+                    at=completion.finished_clock,
+                    status=completion.status,
+                )
 
     async def _execute_node_inner(
         self,
@@ -206,6 +282,7 @@ class ReplayExecutor:
         root_prompts: dict[str, SyntheticPrompt | BaseException],
         completions: dict[str, asyncio.Future[_NodeCompletion]],
         results: list[NodeExecution],
+        inflight: asyncio.Semaphore,
     ) -> None:
         """Prepare, release, and send a node after its required context is ready.
 
@@ -216,15 +293,19 @@ class ReplayExecutor:
         """
 
         predecessor_future = completions[node.send_after] if node.send_after else None
+        if predecessor_future is not None:
+            emit(self.observer, self.clock, "dependency_wait_started", task, node, kind="send_after")
         prompt = None
-        if node.node_type == "request":
+        agentx = self._uses_agentx_snapshots
+        if node.node_type == "request" and not agentx:
 
             async def prepare_prompt() -> SyntheticPrompt:
                 if node.context_after:
+                    emit(self.observer, self.clock, "dependency_wait_started", task, node, kind="context_after")
                     context_completion = await completions[node.context_after]
                     if context_completion.status != "success" or context_completion.exchange is None:
                         raise _DependencyFailed(f"context request {node.context_after} failed")
-                    return await self.prompts.build(task, node, context_completion.exchange)
+                    return await self._prepare(task, node, context_completion.exchange)
                 root_prompt = root_prompts[node.source_key]
                 if isinstance(root_prompt, BaseException):
                     raise RuntimeError(f"root prompt construction failed: {root_prompt}") from root_prompt
@@ -238,12 +319,13 @@ class ReplayExecutor:
         else:
             predecessor = await predecessor_future if predecessor_future else None
         release_clock = (predecessor.finished_clock if predecessor else task_started) + node.effective_interval_seconds
+        emit(self.observer, self.clock, "release_scheduled", task, node, release_clock=release_clock)
         planned_offset = release_clock - task_started
 
         if node.node_type == "timing_dependency":
-            await asyncio.sleep(max(0, release_clock - time.monotonic()))
-            await asyncio.sleep(node.effective_duration_seconds or 0)
-            completion = _NodeCompletion(time.monotonic(), None)
+            await self.clock.sleep(max(0, release_clock - self.clock.monotonic()))
+            await self.clock.sleep(node.effective_duration_seconds or 0)
+            completion = _NodeCompletion(self.clock.monotonic(), None)
             completions[node.source_key].set_result(completion)
             results.append(
                 NodeExecution(
@@ -262,10 +344,19 @@ class ReplayExecutor:
             )
             return
 
-        assert prompt is not None
-        await asyncio.sleep(max(0, release_clock - time.monotonic()))
-        sent_clock = time.monotonic()
-        response = await self.transport.send(task, node, prompt)
+        await self.clock.sleep(max(0, release_clock - self.clock.monotonic()))
+        if agentx:
+            async with inflight:
+                # Bound prepared snapshots; semaphore wait and render time count as scheduler lag.
+                prompt = await self._prepare(task, node, None)
+                sent_clock = self.clock.monotonic()
+                emit(self.observer, self.clock, "transport_entered", task, node, at=sent_clock)
+                response = await self.transport.send(task, node, prompt)
+        else:
+            assert prompt is not None
+            sent_clock = self.clock.monotonic()
+            emit(self.observer, self.clock, "transport_entered", task, node, at=sent_clock)
+            response = await self.transport.send(task, node, prompt)
         exchange = (
             PromptExchange(
                 prompt,
@@ -273,7 +364,7 @@ class ReplayExecutor:
                 response.assistant_reasoning_content,
                 response.assistant_token_ids,
             )
-            if response.success
+            if response.success and not agentx
             else None
         )
         completion_status = "success" if response.success else "failed"
@@ -281,10 +372,7 @@ class ReplayExecutor:
             _NodeCompletion(response.finished_clock, exchange, completion_status, response.error)
         )
         calibration = asdict(prompt.calibration) if prompt.calibration is not None else None
-        if calibration is not None and self.config.replay.prompt_shape in {
-            "inferact_synthetic",
-            "tracelab_synthetic",
-        }:
+        if calibration is not None:
             actual = response.input_tokens
             calibration["backend_input_tokens"] = actual
             calibration["backend_input_residual_tokens"] = (
@@ -292,9 +380,12 @@ class ReplayExecutor:
                 if actual is not None and node.planned_input_tokens is not None
                 else None
             )
-            if self.config.replay.prompt_shape == "tracelab_synthetic":
-                calibration["source_output_tokens"] = node.planned_output_tokens
-                calibration["effective_output_tokens"] = max(1, node.planned_output_tokens or 0)
+            calibration["source_output_tokens"] = node.source_output_tokens
+            calibration["effective_output_tokens"] = node.planned_output_tokens
+            calibration["backend_output_tokens"] = response.output_tokens
+            calibration["backend_target_met"] = (
+                actual == node.planned_input_tokens and response.output_tokens == node.planned_output_tokens
+            )
         results.append(
             NodeExecution(
                 node.source_key,
@@ -308,5 +399,6 @@ class ReplayExecutor:
                 response.error,
                 getattr(node, "context_mode", "none"),
                 calibration,
+                **self._preparation_metadata(node, task_started),
             )
         )

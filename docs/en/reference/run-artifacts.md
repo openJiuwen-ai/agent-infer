@@ -28,6 +28,10 @@ environment evidence are authoritative; `summary.json` is their normalized aggre
 Evidence that cannot be collected is marked unavailable or not applicable in `manifest.json` or `summary.json`. Its
 optional file may be absent; missing evidence is never silently converted to numeric zero or success.
 
+When the `vllm` block in `summary.json` is missing a metrics snapshot, `reason` explains why the capture failed
+(for example `metrics_capture_failed: <collector error>`, typically a misconfigured `metrics_url` or an unreachable
+metrics endpoint). When there is no collector error, `reason` is `missing_metrics_snapshot`.
+
 ## Top-Level Files
 
 | File | Content |

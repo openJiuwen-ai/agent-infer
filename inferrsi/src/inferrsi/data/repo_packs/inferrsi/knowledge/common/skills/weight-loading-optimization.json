@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "id": "inferrsi.common.skills.weight_loading_optimization",
+  "title": "weight-loading-optimization",
+  "repo": "inferrsi",
+  "tier": "contribution",
+  "backend": "common",
+  "component": "skills",
+  "scenario": "skills.discovery",
+  "status": "imported",
+  "summary": "Optimize the serving-level weight load path from storage to device: judge the load path on four dimensions (source, format, placement, duplication), account startup fixed overhead separately from per-request cost with bytes-and-counts lines and hit-criteria warmup validation, verify sharded weight downloads against the safetensors index, apply device-side weight prefetch only on profiled memory-bound hot spots, and order CPU-tier offload candidates by change surface. Includes source-scoped disk-loading modes, pinned staging and synchronous checkpoint save semantics. Use when startup/loading latency dominates; route DCP asynchronous save performance and distributed recovery validity to their separate skills.\n",
+  "tags": [
+    "storage",
+    "weight-loading",
+    "startup",
+    "prefetch",
+    "offload",
+    "serving",
+    "npu"
+  ],
+  "origin": [
+    "external"
+  ],
+  "sources": [
+    {
+      "type": "git",
+      "url": "https://github.com/InferMatrixLab/InferRSI/blob/ddeba86177132c5933cf7ab1e6eb7021fb767e22/src/inferrsi/data/skill_library/methods/weight-loading-optimization/SKILL.md",
+      "commit": "ddeba86177132c5933cf7ab1e6eb7021fb767e22",
+      "paths": [
+        "src/inferrsi/data/skill_library/methods/weight-loading-optimization/SKILL.md",
+        "src/inferrsi/data/skill_library/methods/weight-loading-optimization/metadata.json",
+        "src/inferrsi/data/skill_library/skill-index.json"
+      ],
+      "content_sha256": "df168c23a6f0fadddc147925a11e9eefc61f340be8e7c01a3fbe3aab002aa490"
+    }
+  ],
+  "index_type": "packaged-skill",
+  "skill_documents": {
+    "original": "data/skill_library/methods/weight-loading-optimization/SKILL.md"
+  },
+  "checkout_ref": "checkout:weight-loading-optimization",
+  "source_files": {
+    "src/inferrsi/data/skill_library/methods/weight-loading-optimization/SKILL.md": "df168c23a6f0fadddc147925a11e9eefc61f340be8e7c01a3fbe3aab002aa490",
+    "src/inferrsi/data/skill_library/methods/weight-loading-optimization/metadata.json": "c45d544312627787d523142e25730f1c3aa1b0f007ee9c10dcf0cec9f3044f71",
+    "src/inferrsi/data/skill_library/skill-index.json": "75910d82c93d829cc995e1724f4f7e372625f435682640ec5a2fced45d791a21"
+  },
+  "skill_metadata": {
+    "name": "weight-loading-optimization",
+    "description": "Optimize the serving-level weight load path from storage to device: judge the load path on four dimensions (source, format, placement, duplication), account startup fixed overhead separately from per-request cost with bytes-and-counts lines and hit-criteria warmup validation, verify sharded weight downloads against the safetensors index, apply device-side weight prefetch only on profiled memory-bound hot spots, and order CPU-tier offload candidates by change surface. Includes source-scoped disk-loading modes, pinned staging and synchronous checkpoint save semantics. Use when startup/loading latency dominates; route DCP asynchronous save performance and distributed recovery validity to their separate skills.\n",
+    "tags": [
+      "storage",
+      "weight-loading",
+      "startup",
+      "prefetch",
+      "offload",
+      "serving",
+      "npu"
+    ],
+    "status": "candidate",
+    "profile": "local-skill-v1",
+    "schema_version": 1,
+    "kind": "skill",
+    "origin": [
+      "external"
+    ],
+    "sources": [],
+    "empirical_validation": "not_run",
+    "applicability": {
+      "scope": "See procedure prerequisites and counter-signals"
+    },
+    "limitations": [
+      "Source-derived candidate; no local efficacy validation.",
+      "Original typed source inventory is not normalized; retain source identities and limits in the procedure/readsets."
+    ],
+    "provenance_readsets": [],
+    "references": [],
+    "consumption_mode": "packaged"
+  },
+  "applicability": {
+    "scope": "See procedure prerequisites and counter-signals"
+  },
+  "recommendations": [
+    "Read the pinned SKILL.md and its prerequisites before choosing this procedure.",
+    "Read the packaged references and owner-local cases alongside the procedure."
+  ],
+  "limitations": [
+    "This generated abstract points to the complete packaged skill; external evidence and upstream repositories remain source links.",
+    "The imported status describes this index, not the original skill; its declared status is candidate.",
+    "Reading or indexing does not authorize execution, validate efficacy, promote a candidate or grant a license.",
+    "The backend categorizes the procedure's hardware dependency; it does not certify compatibility, and skills.discovery is a discovery scenario.",
+    "Source-derived candidate; no local efficacy validation.",
+    "Original typed source inventory is not normalized; retain source identities and limits in the procedure/readsets."
+  ],
+  "verification": {
+    "locally_verified": false,
+    "evidence_level": "guidance"
+  }
+}

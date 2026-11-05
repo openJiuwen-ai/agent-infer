@@ -1,0 +1,7 @@
+[default]
+# Git patch index lines contain abbreviated object IDs, not prose.
+extend-ignore-re = ['(?m)^index [0-9a-f]+\.\.[0-9a-f]+ [0-9]+$']
+
+[default.extend-words]
+# Huawei's Compute Architecture for Neural Networks toolkit.
+CANN = "CANN"
