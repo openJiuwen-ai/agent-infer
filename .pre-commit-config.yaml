@@ -7,6 +7,19 @@ default_stages:
 # Preserve the InferRSI source snapshot; use its own lint/test configuration.
 exclude: ^inferrsi/
 repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v6.0.0
+  hooks:
+  - id: check-yaml
+    args: ["--unsafe"]
+  - id: debug-statements
+  - id: end-of-file-fixer
+  - id: mixed-line-ending
+    args: ["--fix=lf"]
+  - id: trailing-whitespace
+    args: ["--markdown-linebreak-ext=md"]
+    # Context lines in vendored patches include trailing spaces. Stripping them changes the patch.
+    exclude: \.patch$
 - repo: https://github.com/astral-sh/ruff-pre-commit
   rev: v0.14.0
   hooks:
@@ -20,12 +33,33 @@ repos:
     # Preserve verbatim upstream license text, including original spelling.
     exclude: ^Third_Party_Open_Source_Software_Notice\.txt$
     args: [--force-exclude]
+- repo: https://github.com/rhysd/actionlint
+  # v1.7.8+ sets `go 1.24.0` in go.mod, which older Go toolchains cannot parse.
+  rev: v1.7.7
+  hooks:
+  - id: actionlint
+    files: ^\.github/workflows/.*\.ya?ml$
 - repo: https://github.com/DavidAnson/markdownlint-cli2
   rev: v0.21.0
   hooks:
   - id: markdownlint-cli2
     language_version: lts
     args: [--fix]
+# manual keeps these out of git commit and `pre-commit run --all-files`.
+# CI invokes them only for files added in a pull request.
+- repo: https://github.com/pre-commit/mirrors-mypy
+  rev: v2.4.1
+  hooks:
+  - id: mypy
+    # args replace the hook defaults, so the two default flags are repeated.
+    # follow-imports=skip limits the check to the added file itself.
+    args: [--ignore-missing-imports, --scripts-are-modules, --follow-imports=skip, --python-version=3.10]
+    stages: [manual]
+- repo: https://github.com/shellcheck-py/shellcheck-py
+  rev: v0.11.0.1
+  hooks:
+  - id: shellcheck
+    stages: [manual]
 - repo: local
   hooks:
   - id: signoff-commit
@@ -40,6 +74,13 @@ repos:
     language: system
     verbose: true
     stages: [commit-msg]
+  - id: check-buildkite
+    name: Validate Buildkite Pipelines
+    entry: python tools/pre_commit/check_buildkite.py
+    language: python
+    files: ^\.buildkite/.*\.ya?ml$
+    additional_dependencies: [pyyaml, check-jsonschema==0.39.0]
+    stages: [manual]
   - id: suggestion
     name: Suggestion
     entry: bash -c 'echo "To bypass all the pre-commit hooks, add --no-verify to git commit. To skip a specific hook, prefix the commit command with SKIP=<hook-id>."'
