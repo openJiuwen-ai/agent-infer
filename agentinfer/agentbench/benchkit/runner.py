@@ -348,7 +348,7 @@ async def _run_single_task(
             result.finished_at = utc_now().isoformat()
         if not result.started_at:
             result.started_at = started_at
-        topology = derive_session_topology(load_request_facts(context.trace_path, session_id=session_id), session_id)
+        topology = derive_session_topology((), session_id)
         atomic_write_json(
             output_dir / "result.json",
             build_task_result(result, topology, error, task_position=task_position).to_dict(),
