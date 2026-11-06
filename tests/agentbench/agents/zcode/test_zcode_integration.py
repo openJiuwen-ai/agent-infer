@@ -30,7 +30,7 @@ class ZCodeMockServer(DshMockServer):
         self.requests.append({"identity": identity, "body": body})
         if identity["agent_role"] == "subagent":
             names = {tool["function"]["name"] for tool in body["tools"]}
-            assert names <= {"Read", "Glob", "Grep", "RespondToCoordinator"}, names
+            assert names <= {"Read", "Glob", "Grep"}, names
             if stage == 0:
                 return "Write", {"file_path": "forbidden-child-write", "content": "must not execute"}
             if stage == 1:

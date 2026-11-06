@@ -37,7 +37,7 @@ class ZCodeRuntime:
             timeout=20,
             check=True,
         )
-        if ZCODE_VERSION not in version.stdout:
+        if version.stdout.strip() != ZCODE_VERSION:
             raise RuntimeError(f"Expected ZCode CLI {ZCODE_VERSION}, got {version.stdout.strip()}")
         doctor = await asyncio.to_thread(
             subprocess.run,

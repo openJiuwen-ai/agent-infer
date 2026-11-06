@@ -104,6 +104,8 @@ async def run_zcode(request: AgentRunRequest) -> AgentRunResult:
             )
         elif bridge.failure:
             result.termination_reason = bridge.failure
+        elif return_code != 0:
+            result.termination_reason = TerminationReason.HARNESS_ERROR
         elif profile.planning and (not bridge.approved or not bridge.reports or bridge.pending):
             result.termination_reason = TerminationReason.PLAN_NOT_APPROVED
         elif return_code == 0 and completed and completed["projection"]["status"] == "idle":

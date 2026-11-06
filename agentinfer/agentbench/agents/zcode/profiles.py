@@ -15,7 +15,7 @@ class ZCodeProfile:
     name: str
     planning: bool = False
 
-    def build_prompt(self, task: Task, *, explore: str = "Explore") -> str:
+    def build_prompt(self, task: Task, *, explore: str) -> str:
         policy = (
             f"Your first tool call must be Agent with subagent_type={explore} and run_in_background=false.\n"
             "Delegate exactly one focused, read-only exploration using the agent type specified above.\n"

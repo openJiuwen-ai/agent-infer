@@ -224,9 +224,9 @@ endpoint that attaches canonical identity before forwarding to the Request Proxy
 synchronous Hook decisions, using the official CLI without patching ZCode.
 
 `single` disables delegation. `plan-subagent` permits one read-only Explore delegation, then exposes only `ExitPlanMode`
-for approval and lead implementation. Explore exposes Read, Glob and Grep plus its reporting tool;
-task Hooks handle the lead's
-tool policy and approvals. Background work is disabled. Permission modes are not OS sandboxes; use an
+for approval and lead implementation. Explore exposes and permits only Read, Glob and Grep, returning its report
+as final text; task Hooks handle the lead's tool policy and approvals. Background work is disabled.
+Permission modes are not OS sandboxes; use an
 external sandbox or container for production benchmarks.
 
 Task artifacts include raw `transcript.jsonl`, `zcode.stderr.log`, `zcode-hooks.jsonl`, `zcode-lineage.json`,
@@ -239,3 +239,5 @@ planning phase and constrain delegation to the task-owned read-only profile. Exp
 rounds, followed by a report without tools. Planning uses named `tool_choice` for delegation/approval;
 conversation messages are preserved. Prepare the task's test dependencies in its execution environment
 before starting the agent.
+Preflight requires the exact CLI version `0.17.1`. Nonzero exits without a more specific error are classified
+as `harness_error` rather than an unapproved plan.

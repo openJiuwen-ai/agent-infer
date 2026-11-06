@@ -277,7 +277,7 @@ vllm bench serve --agentinfer run \
 发送规范身份信息。这里的适配入口也处理官方同步 Hook，无需修改 ZCode 源码。
 
 `single` 禁止委派；`plan-subagent` 只委派一次只读 Explore，返回后只展示 `ExitPlanMode`，批准计划后由主 Agent
-修改代码。Explore 的文件工具限于 Read、Glob、Grep，并保留汇报工具；主 Agent 的工具检查与审批由任务 Hook 处理。两种模式均关闭后台任务。
+修改代码。Explore 只展示并允许 Read、Glob、Grep，以最终文本返回报告；主 Agent 的工具检查与审批由任务 Hook 处理。两种模式均关闭后台任务。
 权限模式不提供操作系统隔离，正式评测须使用外部沙箱或容器。
 
 任务目录包含原始 `transcript.jsonl`、`zcode.stderr.log`、`zcode-hooks.jsonl`、`zcode-lineage.json`、
@@ -289,3 +289,4 @@ ZCode 的原生 `turn.failed` 错误保存在 `zcode-run-status.json` 的 `nativ
 子代理类型限定为本任务的只读探索配置，最多执行 8 轮工具调用，随后只返回报告。
 规划阶段通过 `tool_choice` 指定探索或提交计划；此过程调整工具声明，不改写对话消息。
 任务的测试依赖需要由执行环境预先准备。
+预检精确匹配 CLI 版本 `0.17.1`。未产生更具体错误的非零退出归为 `harness_error`，不再归为未批准计划。

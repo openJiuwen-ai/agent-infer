@@ -122,7 +122,9 @@ class ZCodeBridge:
 
     def model_tools(self, tools: list[dict], *, child: bool) -> list[dict]:
         """Advertise the same phase policy that the synchronous hook enforces."""
-        if child or not self.planning:
+        if child:
+            return [tool for tool in tools if tool["function"]["name"] in READ_TOOLS]
+        if not self.planning:
             return tools
         if self.approved:
             return [tool for tool in tools if tool["function"]["name"] not in AGENT_TOOLS | {"ExitPlanMode"}]
