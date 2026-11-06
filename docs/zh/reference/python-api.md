@@ -114,6 +114,14 @@ def load(cls, path: str | Path) -> ReplayPlan: ...
 `validate_loaded_plan(plan)` 是跨字段校验步骤。加载不会重新推导
 `workload_fingerprint`/`plan_namespace`，也不会重跑 `_validate_plan` —— 这两者都需要原始 source。
 
+`to_dict()` 无条件写出的每个 key 都必须存在，包括可空的那些（`context_after`、
+`parent_actor_id`、`source_output_tokens`、`backend_sampling_seed`、`send_after`、
+`source_task_id`、`execution_unavailable_reason`、`source_bundle_sha256`）。只有条件写出的
+key —— `prompt_ref`、`response_validation`、`effective_output_tokens`、`source_prefix_tokens`
+—— 才是真正可选的。key 缺失意味着产物被截断，而不是该字段为 null，因此拒绝加载而非补默认值。
+`interval_model.mode` 必须与参数一致：`lognormal` 需要同时提供 `mu` 与 `sigma`，`trace`
+则不允许携带它们。
+
 ## Replay 采样参数
 
 Anthropic Replay 元数据 `_agentinfer_replay_sampling` 中的 `seed`、`min_tokens` 和 `ignore_eos`

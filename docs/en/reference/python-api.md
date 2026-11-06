@@ -120,6 +120,14 @@ duplicate session), `json.JSONDecodeError` for malformed JSON, and `OSError` for
 `validate_loaded_plan(plan)` is the cross-field step. Loading does not re-derive
 `workload_fingerprint`/`plan_namespace` or re-run `_validate_plan` -- those need the original source.
 
+Every key `to_dict()` writes unconditionally must be present, including the nullable ones
+(`context_after`, `parent_actor_id`, `source_output_tokens`, `backend_sampling_seed`, `send_after`,
+`source_task_id`, `execution_unavailable_reason`, `source_bundle_sha256`). A key written only
+conditionally -- `prompt_ref`, `response_validation`, `effective_output_tokens`, `source_prefix_tokens`
+-- is genuinely optional. An absent key means the artifact was truncated, not that the field is
+null, so it is rejected rather than defaulted. `interval_model.mode` must match its parameters:
+`lognormal` requires both `mu` and `sigma`, and `trace` rejects them.
+
 ## Replay sampling parameters
 
 Anthropic Replay metadata `_agentinfer_replay_sampling` carries `seed`, `min_tokens`, and `ignore_eos`

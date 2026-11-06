@@ -623,6 +623,139 @@ def test_plan_from_dict_accepts_null_send_after_key() -> None:
     assert plan.tasks[0].requests[0].send_after is None
 
 
+# --- second self-audit round (2026-11-07): the required-key rule, applied to
+# --- every nullable field ``to_dict`` writes unconditionally, plus the interval
+# --- model's per-mode required fields. B6/B7 named the rule; only the token
+# --- targets and ``send_after`` were actually covered.
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "prompt_recipe_key",
+        "prompt_kind",
+        "actor_id",
+        "actor_role",
+        "parent_actor_id",
+        "context_after",
+        "context_mode",
+        "source_output_tokens",
+        "backend_sampling_seed",
+    ],
+)
+def test_request_node_rejects_missing_unconditionally_written_key(field: str) -> None:
+    """A nullable field written by every ``to_dict`` still needs its key.
+
+    Dropping ``context_after`` or ``send_after`` turns a dependent request into a
+    root one, and dropping ``source_output_tokens`` changes the zero-output
+    accounting in the run summary. Absence and an explicit null are different
+    statements, so only the latter is allowed.
+    """
+
+    data = _minimal_plan_dict()
+    node = _first_request_node(data)
+    del node[field]
+    with pytest.raises(ValueError, match=field):
+        ReplayPlan.from_dict(data)
+
+
+@pytest.mark.parametrize("field", ["parent_actor_id", "context_after", "source_output_tokens", "backend_sampling_seed"])
+def test_request_node_still_accepts_the_key_present_as_null(field: str) -> None:
+    """Requiring presence must not also require a value.
+
+    These four are nullable on the dataclass and null on most real nodes, so the
+    guard has to accept an explicit null for all of them. The non-nullable
+    fields above are covered by their own value checks and are not affected.
+    """
+
+    data = _minimal_plan_dict()
+    node = _first_request_node(data)
+    node[field] = None
+    plan = ReplayPlan.from_dict(data)  # must not raise "key must be present"
+    verify = validate_loaded_plan if field == "context_after" else (lambda _plan: None)
+    verify(plan)
+    assert getattr(plan.tasks[0].requests[0], field) is None
+
+
+def test_task_rejects_missing_nullable_source_task_id() -> None:
+    data = _minimal_plan_dict()
+    del data["tasks"][0]["source_task_id"]
+    with pytest.raises(ValueError, match="source_task_id"):
+        ReplayPlan.from_dict(data)
+
+
+def test_task_accepts_null_source_task_id() -> None:
+    data = _minimal_plan_dict()
+    data["tasks"][0]["source_task_id"] = None
+    assert ReplayPlan.from_dict(data).tasks[0].source_task_id is None
+
+
+@pytest.mark.parametrize("field", ["execution_unavailable_reason", "source_bundle_sha256"])
+def test_plan_rejects_missing_nullable_plan_field(field: str) -> None:
+    data = _minimal_plan_dict()
+    del data[field]
+    with pytest.raises(ValueError, match=field):
+        ReplayPlan.from_dict(data)
+
+
+def test_interval_model_lognormal_requires_mu_and_sigma() -> None:
+    """Mode and parameters must agree, or execution fails mid-run.
+
+    ``timing.effective_interval_seconds`` asserts ``mu``/``sigma`` are not None
+    when ``mode == "lognormal"``, so a lognormal artifact without them loaded
+    cleanly and then blew up inside the executor instead of at load.
+    """
+
+    data = _minimal_plan_dict()
+    data["interval_model"] = {"mode": "lognormal", "fit_version": "lognormal-three-quantile-ols"}
+    with pytest.raises(ValueError, match="requires both mu and sigma"):
+        ReplayPlan.from_dict(data)
+
+
+@pytest.mark.parametrize("present", [{"mu": 1.0}, {"sigma": 0.5}])
+def test_interval_model_lognormal_rejects_half_a_fit(present: dict) -> None:
+    data = _minimal_plan_dict()
+    data["interval_model"] = {"mode": "lognormal", "fit_version": "v", **present}
+    with pytest.raises(ValueError, match="requires both mu and sigma"):
+        ReplayPlan.from_dict(data)
+
+
+def test_interval_model_trace_rejects_mu_and_sigma() -> None:
+    """``trace`` samples the recorded gap; carrying a fit means the mode is wrong."""
+
+    data = _minimal_plan_dict()
+    data["interval_model"] = {"mode": "trace", "fit_version": "trace-v1", "mu": 0.5, "sigma": 2.0}
+    with pytest.raises(ValueError, match="must not carry mu or sigma"):
+        ReplayPlan.from_dict(data)
+
+
+def test_interval_model_lognormal_roundtrips(tmp_path: Path) -> None:
+    """The rejection must not also reject a real lognormal artifact."""
+
+    from agentinfer.agentbench.replay.config import ReplayConfig
+    from agentinfer.agentbench.replay.timing import build_interval_model
+
+    model = build_interval_model(
+        ReplayConfig.model_validate(
+            {
+                "interval_mode": "lognormal",
+                # Exactly consistent with a lognormal (sigma = 0.5), so the
+                # builder's 2% anchor-residual guard accepts them.
+                "interval_lognormal": {
+                    "p50_seconds": 1.0,
+                    "p95_seconds": 2.276016608514316,
+                    "p99_seconds": 3.200074007942962,
+                },
+            }
+        )
+    )
+    data = _minimal_plan_dict()
+    data["interval_model"] = model.to_dict()
+    loaded = ReplayPlan.from_dict(data).interval_model
+    assert loaded == model
+    assert loaded.mu is not None and loaded.sigma is not None
+
+
 def test_interval_model_rejects_bad_mode() -> None:
     data = _minimal_plan_dict()
     data["interval_model"]["mode"] = "garbage"

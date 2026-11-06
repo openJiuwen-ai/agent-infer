@@ -87,7 +87,9 @@ Replay 额外写出 `replay-source-analysis.json`、`replay-plan.json` 和 `repl
 `validate_loaded_plan`）能重建并结构化校验已写出的计划，因此它可作为自包含输入用于检视，或在后续的 runner
 路径中恢复执行而无需重新规划。加载只校验产物本身（引用闭包、覆盖 `send_after` 与 `context_after` 的完整等待图
 无环、目标合法性、`context_mode` 配对），不重新派生 `workload_fingerprint`/`plan_namespace`——二者内嵌构建期
-workload 配置。
+workload 配置。`to_dict()` 无条件写出的每个 key 都必须存在，即使其值为 null：否则丢失的 `send_after` 或
+`context_after` 会被读成"无依赖"，静默改变执行顺序。`interval_model.mode` 还必须与参数一致（`lognormal` 需要
+`mu` 与 `sigma`，`trace` 不允许携带），使模式与参数不匹配在加载阶段失败，而不是拖到第一次采样间隔时。
 
 节点序列化出的每个字段都能被解析回来，因此 `from_dict(to_dict())` 保持节点不变。`timing_dependency` 节点在其
 请求类字段中携带 `prompt_kind` 以及 actor 身份（`actor_id`、`actor_role`、`parent_actor_id`），使加载后的计划仍能

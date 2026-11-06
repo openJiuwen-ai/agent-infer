@@ -93,7 +93,10 @@ Replay additionally writes `replay-source-analysis.json`, `replay-plan.json`, an
 self-contained input for inspection or, in a future runner pass, resuming execution without re-planning. Loading
 validates the artifact alone (reference closure, full wait-for graph acyclicity over `send_after` and
 `context_after`, target sanity, context-mode pairing) and does not re-derive `workload_fingerprint`/`plan_namespace`,
-which embed the build-time workload config.
+which embed the build-time workload config. Every key `to_dict()` writes unconditionally must be present, even when its
+value is null: a dropped `send_after` or `context_after` would otherwise read as "no dependency" and quietly change the
+execution order. `interval_model.mode` must also agree with its parameters (`lognormal` needs `mu` and `sigma`;
+`trace` rejects them), so a mode/parameter mismatch fails at load instead of at the first interval sample.
 
 Every field a node serializes is parsed back, so `from_dict(to_dict())` preserves the node. A `timing_dependency`
 node carries `prompt_kind` and its actor identity (`actor_id`, `actor_role`, `parent_actor_id`) so a reloaded plan can
