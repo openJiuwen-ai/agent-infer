@@ -76,6 +76,25 @@ def test_dsh_profile_and_openai_endpoint() -> None:
     assert config.backend.endpoint == "/v1/chat/completions"
 
 
+def test_dsh_authenticated_backend_is_rejected_before_execution(tmp_path: Path) -> None:
+    output = tmp_path / "run"
+    with pytest.raises(ValidationError, match="does not yet support backend.api_key_env"):
+        AgentBenchConfig.model_validate(
+            {
+                "experiment": {"result_dir": output},
+                "agent": {"type": "dsh"},
+                "backend": {"endpoint": "/v1/chat/completions", "api_key_env": "TEST_SECRET_NAME"},
+            }
+        )
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("budget", [0, -1, float("inf"), float("nan")])
+def test_cleanup_budget_must_be_positive_and_finite(budget: float) -> None:
+    with pytest.raises(ValidationError, match="cleanup_timeout_seconds"):
+        AgentBenchConfig.model_validate({"experiment": {"cleanup_timeout_seconds": budget}})
+
+
 @pytest.mark.parametrize(
     ("agent_type", "profile"),
     [
@@ -223,3 +242,28 @@ def test_sample_yaml_loads(
     assert config.backend.metrics_url == metrics_url
     assert config.agent.type == agent_type
     assert config.backend.endpoint == endpoint
+
+
+@pytest.mark.parametrize(
+    "agent_type,profile,endpoint",
+    [
+        ("claude", "single", "/v1/messages"),
+        ("jiuwenswarm", "code.normal", "/v1/chat/completions"),
+    ],
+)
+def test_authenticated_backend_is_allowed_by_runtime(agent_type, profile, endpoint):
+    config = AgentBenchConfig.model_validate(
+        {
+            "agent": {"type": agent_type, "profile": profile},
+            "backend": {"endpoint": endpoint, "api_key_env": "TEST_SECRET_NAME"},
+        }
+    )
+    assert config.backend.api_key_env == "TEST_SECRET_NAME"
+
+
+def test_authentication_validation_uses_runtime_capability(monkeypatch):
+    from agentinfer.agentbench.agents.registry import get_runtime
+
+    monkeypatch.setattr(get_runtime("claude"), "supports_api_key_env", False)
+    with pytest.raises(ValidationError, match="does not yet support backend.api_key_env"):
+        AgentBenchConfig.model_validate({"backend": {"api_key_env": "TEST_SECRET_NAME"}})
