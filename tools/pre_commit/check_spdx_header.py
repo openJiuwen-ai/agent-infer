@@ -5,6 +5,7 @@
 
 Python and shell files use the ``#`` header. Rust files use ``//``. A shebang
 stays on line 1. An older AgentCache copyright line is rewritten in place.
+Only ``.py``, ``.pyi``, ``.sh``, and ``.rs`` files are checked; other paths are ignored.
 """
 
 from __future__ import annotations
