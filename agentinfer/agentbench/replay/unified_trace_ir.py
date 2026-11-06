@@ -64,6 +64,23 @@ class PromptReference:
 
         return {"session_id": self.session_id, "turn_index": self.turn_index}
 
+    @classmethod
+    def from_dict(cls, value: object) -> PromptReference:
+        """Reconstruct a sidecar key from a serialized plan artifact.
+
+        Fail-closed: any malformed key raises so a corrupted plan cannot
+        round-trip into a load that silently points at the wrong turn. The
+        session id is validated by :func:`parse_prompt_reference`, the same
+        parser used when the reference is first derived from a trace, so a
+        loaded reference cannot name a component that the resolver would read
+        outside the text root (``..``, an absolute path, or a nested path).
+        """
+
+        reference = parse_prompt_reference(value)
+        if reference is None:
+            raise ValueError("prompt_ref must be an object")
+        return reference
+
 
 @dataclass(frozen=True)
 class UnifiedTraceIR:

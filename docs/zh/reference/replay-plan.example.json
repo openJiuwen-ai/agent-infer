@@ -1,0 +1,93 @@
+{
+  "schema_version": "1",
+  "plan_kind": "structural",
+  "planner_version": "agentinfer-replay-structural",
+  "execution_ready": false,
+  "execution_unavailable_reason": "structural plan requires runtime Prompt calibration",
+  "source": "requests.jsonl",
+  "source_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "source_bundle_sha256": null,
+  "source_sessions": 1,
+  "replayable_source_sessions": 1,
+  "sample_seed": 0,
+  "plan_namespace": "ns-example",
+  "workload_fingerprint": "fp-example",
+  "prompt_calibration": {
+    "status": "pending",
+    "model": "MODEL_NAME",
+    "tokenizer_base_url": null
+  },
+  "interval_model": {
+    "mode": "trace",
+    "fit_version": "trace-v1",
+    "mu": null,
+    "sigma": null,
+    "anchors": null,
+    "anchor_predictions": null,
+    "anchor_residual_ratios": null,
+    "log_space_rmse": null,
+    "mean_predicted": null,
+    "u_clamp": null,
+    "cdf_version": null
+  },
+  "tasks": [
+    {
+      "task_id": "t0",
+      "task_index": 0,
+      "sample_ordinal": 0,
+      "runtime_session_id": "s1",
+      "source_session_id": "s1",
+      "source_task_id": null,
+      "requests": [
+        {
+          "runtime_request_id": "r0",
+          "source_key": "s1-round0",
+          "node_type": "request",
+          "send_after": null,
+          "effective_interval_seconds": 0.0,
+          "prompt_recipe_key": "s1-round0",
+          "prompt_kind": "lead_main",
+          "actor_id": "lead",
+          "actor_role": "lead",
+          "parent_actor_id": null,
+          "context_after": null,
+          "context_mode": "independent",
+          "planned_input_tokens": 1024,
+          "planned_output_tokens": 128,
+          "source_output_tokens": 128,
+          "backend_sampling_seed": null
+        },
+        {
+          "runtime_request_id": "r1",
+          "source_key": "s1-round1",
+          "node_type": "request",
+          "send_after": "s1-round0",
+          "effective_interval_seconds": 0.5,
+          "prompt_recipe_key": "s1-round1",
+          "prompt_kind": "continuation",
+          "actor_id": "lead",
+          "actor_role": "lead",
+          "parent_actor_id": null,
+          "context_after": "s1-round0",
+          "context_mode": "append",
+          "planned_input_tokens": 1200,
+          "planned_output_tokens": 64,
+          "source_output_tokens": 64,
+          "backend_sampling_seed": null
+        },
+        {
+          "runtime_request_id": "r2",
+          "source_key": "s1-gap",
+          "node_type": "timing_dependency",
+          "send_after": null,
+          "effective_interval_seconds": 0.25,
+          "effective_duration_seconds": 0.25,
+          "prompt_kind": "none",
+          "actor_id": "lead",
+          "actor_role": "lead",
+          "parent_actor_id": null
+        }
+      ]
+    }
+  ]
+}
