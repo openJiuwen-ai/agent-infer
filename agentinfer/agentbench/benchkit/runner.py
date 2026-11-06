@@ -234,6 +234,11 @@ async def _run_tasks(
 ) -> None:
     owner = owner or WorkspaceProcessOwner()
     config = context.config
+    if config.dataset.name == "terminalbench":
+        from .terminalbench import run_terminalbench_tasks
+
+        await run_terminalbench_tasks(context, api_base_url, results)
+        return
     cache = config.dataset.cache_dir.resolve()
     for task in context.tasks:
         await asyncio.to_thread(ensure_repo_cache, task, cache, owner)

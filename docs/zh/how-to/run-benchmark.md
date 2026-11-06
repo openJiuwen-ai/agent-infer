@@ -30,6 +30,29 @@ vllm bench serve --agentinfer prepare swebench \
 
 命令会生成 `instances.jsonl`、`task-lists/default.txt` 和 `manifest.json`。
 
+## Terminal-Bench 4.0.0 实验性单题运行
+
+首期只支持 Claude Code 的 `single` 模式，并通过 Harbor 在 Docker 中运行任务与官方评分。先确认 `docker compose version` 可用；Harbor 需要单独的 Python 3.12 环境，例如 `uv tool install --python 3.12 harbor==0.25.0`。准备已发布的数据：
+
+```bash
+vllm bench serve --agentinfer prepare terminalbench \
+  --output-dir agentinfer/agentbench/data/terminalbench
+```
+
+在 `agentinfer/agentbench/configs/terminalbench_vllm.yaml` 中设置实际模型地址和模型名，然后运行：
+
+```bash
+vllm bench serve --agentinfer run \
+  --config agentinfer/agentbench/configs/terminalbench_vllm.yaml \
+  --agent-type claude --agent-profile single \
+  --agent-executable claude --endpoint /v1/messages \
+  --task-num 1 --result-dir results/claude-smoke
+```
+
+结果目录必须尚不存在。数据准备输出全部任务包；`default.txt` 当前由任务资源字段筛选出本地 CPU 候选，并非已完成全量 oracle 验证的正式子集。运行会保存 Harbor 原始日志、逐题 `verifier.json`、`correctness.json`、请求记录与汇总。汇总中的 `correctness.available` 仅在全部选中任务有有效奖励时为真；Agent 正常结束不代表答对。容器需要能访问 Docker bridge 网关上的模型入口，真实网络和镜像应先用单题验证。其他 Agent/profile、GPU 和多服务任务仍待适配。
+
+设计范围与后续 Agent 适配见 [RFC #76](https://github.com/openJiuwen-ai/agent-infer/issues/76)。
+
 ## 运行一次冷启动对比
 
 仓库脚本会依次启动基线服务、运行任务、彻底停止服务，再启动候选服务并输出比较报告：

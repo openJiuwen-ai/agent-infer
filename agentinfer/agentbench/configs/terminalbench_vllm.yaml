@@ -1,0 +1,21 @@
+experiment:
+  task_num: null
+  result_dir: ../result_terminalbench
+  max_concurrency: 1
+  task_timeout_seconds: 28800
+
+dataset:
+  name: terminalbench
+  index_path: ../data/terminalbench/instances.jsonl
+  selection_path: ../data/terminalbench/task-lists/default.txt
+
+agent:
+  type: claude
+  profile: single
+  executable: claude
+
+backend:
+  type: vllm
+  base_url: http://127.0.0.1:8000
+  model: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8
+  endpoint: /v1/messages
