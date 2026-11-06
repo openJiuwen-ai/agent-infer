@@ -37,6 +37,8 @@ class Task:
     difficulty: str | None = None
     fail_to_pass: tuple[str, ...] = field(default_factory=tuple)
     pass_to_pass: tuple[str, ...] = field(default_factory=tuple)
+    task_path: Path | None = None
+    cpu_candidate: bool = False
 
     def __post_init__(self) -> None:
         stem = self.instance_id.split(".", 1)[0].upper()
@@ -135,6 +137,8 @@ def load_tasks(
                 difficulty=row.get("difficulty"),
                 fail_to_pass=_as_tuple(row.get("fail_to_pass", row.get("FAIL_TO_PASS", []))),
                 pass_to_pass=_as_tuple(row.get("pass_to_pass", row.get("PASS_TO_PASS", []))),
+                task_path=Path(row["task_path"]) if row.get("task_path") else None,
+                cpu_candidate=bool(row.get("cpu_candidate", False)),
             )
 
     tasks = [tasks_by_id[instance_id] for instance_id in instance_ids if instance_id in tasks_by_id]

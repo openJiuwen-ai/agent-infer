@@ -227,7 +227,7 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
 
     prepare = commands.add_parser("prepare", help="Prepare benchmark dataset inputs")
-    prepare.add_argument("dataset", choices=["swebench"])
+    prepare.add_argument("dataset", choices=["swebench", "terminalbench"])
     prepare.add_argument("--output-dir", type=Path, default=Path("data/swebench"))
 
     run = commands.add_parser("run", help="Run one benchmark")
@@ -350,6 +350,10 @@ def _prepare(args: argparse.Namespace) -> None:
 
     if args.dataset == "swebench":
         prepared = prepare_swebench(args.output_dir.resolve())
+    elif args.dataset == "terminalbench":
+        from .terminalbench import prepare_terminalbench
+
+        prepared = prepare_terminalbench(args.output_dir.resolve())
     else:
         raise ValueError(f"unsupported benchmark dataset: {args.dataset}")
     logger.info("Prepared %s rows at %s", prepared.rows, prepared.index_path)

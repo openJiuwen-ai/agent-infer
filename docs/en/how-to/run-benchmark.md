@@ -30,6 +30,29 @@ vllm bench serve --agentinfer prepare swebench \
 
 The command creates `instances.jsonl`, `task-lists/default.txt`, and `manifest.json`.
 
+## Experimental Terminal-Bench 4.0.0 single-task run
+
+The initial path supports Claude Code `single` through Harbor and Docker. Confirm `docker compose version` works. Install Harbor in a separate Python 3.12 environment, for example with `uv tool install --python 3.12 harbor==0.25.0`, then prepare the pinned dataset:
+
+```bash
+vllm bench serve --agentinfer prepare terminalbench \
+  --output-dir agentinfer/agentbench/data/terminalbench
+```
+
+Set the actual model URL and name in `agentinfer/agentbench/configs/terminalbench_vllm.yaml`, then run one task:
+
+```bash
+vllm bench serve --agentinfer run \
+  --config agentinfer/agentbench/configs/terminalbench_vllm.yaml \
+  --agent-type claude --agent-profile single \
+  --agent-executable claude --endpoint /v1/messages \
+  --task-num 1 --result-dir results/claude-smoke
+```
+
+Use a result directory that does not exist yet. Preparation exports all task packages; `default.txt` is currently a CPU candidate set selected from task resource fields, not a fully oracle-validated subset. The run retains raw Harbor logs, per-task `verifier.json`, `correctness.json`, request facts, and the summary. Summary `correctness.available` is true only when every selected task has a valid reward; agent completion does not imply task success. The container must reach the model gateway on the Docker bridge. Validate networking and image availability with one task first; other agents/profiles, GPU, and multi-service tasks still need adapters.
+
+See [RFC #76](https://github.com/openJiuwen-ai/agent-infer/issues/76) for the design scope and additional agent adapters.
+
 ## Run One Cold Comparison
 
 The repository script starts the baseline, runs the workload, stops the service completely, starts the candidate,
