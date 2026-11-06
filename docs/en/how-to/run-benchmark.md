@@ -201,3 +201,63 @@ Run `python -m pytest tests/agentbench/test_benchmark_smoke.py -q` without a mod
 production CLI, configuration, workspace, dispatch, request proxy, and finalization. The local test runtime and
 loopback backend do not establish model quality or performance. The scheduler comparison script uses fields
 supported by the destination controller factory.
+
+## ZCode
+
+The [RFC #71](https://github.com/openJiuwen-ai/agent-infer/issues/71) adapter supports `single` and
+`plan-subagent` on Linux. Build source commit `a9fe401eede6e6e5e01be9048679c206fe6f02d9`
+(CLI `0.17.1`) with Node `24.14.0` and pnpm `10.33.2`, following ZCode's build instructions.
+Point `agent.executable` at an executable launcher that runs the built `zcode.cjs` with a fixed Node path
+and forwards all arguments.
+
+```bash
+vllm bench serve --agentinfer run \
+  --config agentinfer/agentbench/configs/swebench_vllm.yaml \
+  --agent-type zcode --agent-profile single \
+  --agent-executable /absolute/path/to/zcode-launcher \
+  --endpoint /v1/chat/completions --task-num 1 --result-dir results/zcode-single
+```
+
+Set `context_window` and `max_tokens` to the served model's limits. Only unauthenticated local backends
+are supported; leave `backend.api_key_env` empty. Each task has independent ZCode state and a local adapter
+endpoint that attaches canonical identity before forwarding to the Request Proxy. This endpoint also owns
+synchronous Hook decisions, using the official CLI without patching ZCode.
+
+`single` disables delegation. `plan-subagent` defaults to one read-only Explore delegation before plan approval
+and lead implementation. Explore exposes and permits only Read, Glob and Grep, returning its report
+as final text; task Hooks handle the lead's tool policy and approvals. Background work is disabled.
+Permission modes are not OS sandboxes; use an
+external sandbox or container for production benchmarks.
+
+Set positive limits under `agent` in YAML, or override them with `--max-subagents` and
+`--max-concurrent-subagents`:
+
+```yaml
+agent:
+  type: zcode
+  profile: plan-subagent
+  max_subagents: 4
+  max_concurrent_subagents: 2
+```
+
+This permits up to four accepted exploration launches per task, with at most two running together.
+Both limits default to 1; the lead need not use the entire budget. Launch children in parallel in one response,
+or in successive batches. Excess calls are rejected before execution, without queuing. Failed launches still
+consume the total budget. Once a report is available, the lead may explore further or submit a plan;
+approval requires all accepted children to finish without failure. No delegation is allowed after approval.
+Non-default limits apply only to ZCode `plan-subagent`; `single` always disables delegation.
+`--max-concurrency` controls task concurrency separately. `zcode-lineage.json` records limits, accepted launch
+count, peak concurrency and delegation statuses, retaining unfinished calls on timeout or cancellation.
+
+Task artifacts include raw `transcript.jsonl`, `zcode.stderr.log`, `zcode-hooks.jsonl`, `zcode-lineage.json`,
+`zcode-config.json` and `zcode-run-status.json`. Patches use the existing `model.patch` format and exclude
+only the current session's generated plan file. Execution completion is separate from independent scoring.
+
+Native ZCode `turn.failed` details are preserved as `native_error` in `zcode-run-status.json`;
+context capacity/compaction failures use `model_context_exceeded`. The advertised tools follow the
+planning phase and constrain delegation to the task-owned read-only profile. Explore has eight tool
+rounds, followed by a report without tools. Planning uses named `tool_choice` for delegation/approval;
+conversation messages are preserved. Prepare the task's test dependencies in its execution environment
+before starting the agent.
+Preflight requires the exact CLI version `0.17.1`. Nonzero exits without a more specific error are classified
+as `harness_error` rather than an unapproved plan.

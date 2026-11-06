@@ -314,6 +314,8 @@ async def _run_single_task(
                 context_window=config.agent.context_window,
                 max_tokens=config.agent.max_tokens,
                 cleanup_timeout_seconds=config.experiment.cleanup_timeout_seconds,
+                max_subagents=config.agent.max_subagents,
+                max_concurrent_subagents=config.agent.max_concurrent_subagents,
             )
         )
     except asyncio.CancelledError as exc:

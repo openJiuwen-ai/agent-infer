@@ -8,10 +8,32 @@ from pydantic import ValidationError
 
 from agentinfer.agentbench.benchkit.config import (
     AgentBenchConfig,
+    AgentConfig,
     RequestProxyConfig,
     load_config,
     resolve_config_paths,
 )
+
+
+def test_zcode_subagent_limits():
+    config = AgentConfig(type="zcode", profile="plan-subagent", max_subagents=4, max_concurrent_subagents=2)
+    assert (config.max_subagents, config.max_concurrent_subagents) == (4, 2)
+    assert (AgentConfig().max_subagents, AgentConfig().max_concurrent_subagents) == (1, 1)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"max_subagents": 0},
+        {"max_concurrent_subagents": 0},
+        {"max_subagents": 1, "max_concurrent_subagents": 2},
+        {"type": "dsh", "max_subagents": 4},
+        {"profile": "single", "max_subagents": 4},
+    ],
+)
+def test_invalid_subagent_limits(values):
+    with pytest.raises(ValueError):
+        AgentConfig.model_validate({"type": "zcode", "profile": "plan-subagent", **values})
 
 
 def test_defaults_and_nested_overrides() -> None:
