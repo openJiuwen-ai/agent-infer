@@ -17,6 +17,11 @@ _RUN_TOP_LEVEL = frozenset(
         "requests.jsonl",
         "task_index.json",
         "distribution_samples.csv",
+        "agents.csv",
+        "sessions.csv",
+        # Request Proxy process logs written under the run directory.
+        "proxy.stdout.log",
+        "proxy.stderr.log",
     }
 )
 _RUN_TOP_DIRS = frozenset({"evidence", "tasks", "workspaces"})
