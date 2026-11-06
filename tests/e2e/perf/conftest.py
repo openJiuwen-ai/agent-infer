@@ -14,10 +14,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store",
         default=None,
         metavar="PATH",
-        help=(
-            'Case JSON path; scenario from JSON "scenario" (or legacy "arm") '
-            "or cases/baseline|agentinfer/ path."
-        ),
+        help=('Case JSON path; scenario from JSON "scenario" (or legacy "arm") or cases/baseline|agentinfer/ path.'),
     )
     group.addoption(
         "--task-num",

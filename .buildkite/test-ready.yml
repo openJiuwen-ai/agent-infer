@@ -23,6 +23,61 @@ steps:
         timeout_in_minutes: 25
         mirror_hardwares: l20_1
 
+  # l20_2 is another machine. It must build the image itself; the l20_1 daemon
+  # is not shared. The tag matches the agentinfer-ci service so the compose
+  # plugin's prebuild metadata resolves locally.
+  - label: ":docker: Build CI image (2 GPU)"
+    key: ci-image-l20-2
+    mirror_hardwares: l20_2
+    host_only: true
+    commands:
+      - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu" || true
+      - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose -f docker/docker-compose.yml build --pull agentinfer-ci
+      - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-ci-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu"
+
+  - group: ":card_index_dividers: DSH functional"
+    depends_on: ci-image-l20-2
+    steps:
+      # One step on the 2-GPU machine: model, test-user, then both 8x4 profiles.
+      # Skip the download when /home/models already has the checkpoint. Skip
+      # useradd when test-user exists. The step stays root so plan-subagent
+      # can sudo -u test-user. single stays the root process.
+      # DSH is /usr/local/bin/dsh.
+      - label: "e2e · dsh swebench"
+        mirror_hardwares: l20_2
+        env:
+          AGENTINFER_CI_AS_ROOT: "1"
+        timeout_in_minutes: 90
+        commands:
+          - |
+            trap 'status=$?; uid=$(stat -c %u .); gid=$(stat -c %g .); if [ "$uid" != 0 ]; then chown -R "$uid:$gid" . || true; fi; exit "$status"' EXIT
+            python3 - <<'PY'
+            from pathlib import Path
+            from huggingface_hub import snapshot_download
+
+            dest = Path("/home/models/Qwen3-Coder-30B-A3B-Instruct-FP8")
+            if (dest / "config.json").is_file() and (dest / "model.safetensors.index.json").is_file():
+                print(f"model present at {dest}, skip download")
+            else:
+                print(f"downloading Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8 to {dest}")
+                snapshot_download(
+                    repo_id="Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+                    local_dir=str(dest),
+                )
+            PY
+            if id test-user >/dev/null 2>&1; then
+              echo "test-user exists, skip useradd"
+            else
+              useradd -m -s /bin/bash test-user
+            fi
+            for extra in video render; do
+              if getent group "$extra" >/dev/null 2>&1; then
+                usermod -aG "$extra" test-user
+              fi
+            done
+            pytest -s -v tests/e2e/function/agentbench/dsh/test_dsh_swebench.py::test_dsh_swebench --test-config-file tests/e2e/function/agentbench/dsh/cases/glm52_dsh_8x4.json
+            pytest -s -v tests/e2e/function/agentbench/dsh/test_dsh_swebench.py::test_dsh_swebench --test-config-file tests/e2e/function/agentbench/dsh/cases/glm52_dsh_8x4_plan_subagent.json
+
   # cpu_small is another machine, so it builds the same Dockerfile itself.
   - label: ":docker: Build CI image (cpu)"
     key: ci-image-cpu
@@ -50,6 +105,12 @@ steps:
   - label: ":broom: Cleanup GPU agent"
     mirror_hardwares: l20_1
     # Host docker prune. Do not wrap this step in the CI container.
+    host_only: true
+    commands:
+      - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu" || true
+      - docker image prune -f
+  - label: ":broom: Cleanup 2-GPU agent"
+    mirror_hardwares: l20_2
     host_only: true
     commands:
       - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu" || true
