@@ -78,6 +78,8 @@ class AgentRunRequest:
     context_window: int = 262144
     max_tokens: int = 8192
     cleanup_timeout_seconds: float = 10.0
+    max_subagents: int = 1
+    max_concurrent_subagents: int = 1
 
 
 @dataclass

@@ -15,12 +15,17 @@ class ZCodeProfile:
     name: str
     planning: bool = False
 
-    def build_prompt(self, task: Task, *, explore: str) -> str:
+    def build_prompt(
+        self, task: Task, *, explore: str, max_subagents: int = 1, max_concurrent_subagents: int = 1
+    ) -> str:
         policy = (
             f"Your first tool call must be Agent with subagent_type={explore} and run_in_background=false.\n"
-            "Delegate exactly one focused, read-only exploration using the agent type specified above.\n"
+            f"Delegate at least one focused, read-only exploration, at most {max_subagents} total "
+            f"and {max_concurrent_subagents} concurrently, using the agent type specified above.\n"
+            "Independent explorations may be launched together in one response, or in successive batches.\n"
             "Ask the child to use Glob, Grep and Read, read at most 200 lines per call, and return a short report.\n"
-            "After the report, your next tool call must be ExitPlanMode with a concise implementation plan.\n"
+            "Wait for all accepted explorations to finish. If more evidence is needed and budget remains, delegate again; "
+            "otherwise call ExitPlanMode with a concise implementation plan. You need not use all available slots.\n"
             "After approval, implement and test the fix yourself; do not delegate implementation.\n"
             if self.planning
             else "Work directly; do not create subagents or enter plan mode.\n"

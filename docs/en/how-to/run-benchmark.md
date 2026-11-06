@@ -223,11 +223,31 @@ are supported; leave `backend.api_key_env` empty. Each task has independent ZCod
 endpoint that attaches canonical identity before forwarding to the Request Proxy. This endpoint also owns
 synchronous Hook decisions, using the official CLI without patching ZCode.
 
-`single` disables delegation. `plan-subagent` permits one read-only Explore delegation, then exposes only `ExitPlanMode`
-for approval and lead implementation. Explore exposes and permits only Read, Glob and Grep, returning its report
+`single` disables delegation. `plan-subagent` defaults to one read-only Explore delegation before plan approval
+and lead implementation. Explore exposes and permits only Read, Glob and Grep, returning its report
 as final text; task Hooks handle the lead's tool policy and approvals. Background work is disabled.
 Permission modes are not OS sandboxes; use an
 external sandbox or container for production benchmarks.
+
+Set positive limits under `agent` in YAML, or override them with `--max-subagents` and
+`--max-concurrent-subagents`:
+
+```yaml
+agent:
+  type: zcode
+  profile: plan-subagent
+  max_subagents: 4
+  max_concurrent_subagents: 2
+```
+
+This permits up to four accepted exploration launches per task, with at most two running together.
+Both limits default to 1; the lead need not use the entire budget. Launch children in parallel in one response,
+or in successive batches. Excess calls are rejected before execution, without queuing. Failed launches still
+consume the total budget. Once a report is available, the lead may explore further or submit a plan;
+approval requires all accepted children to finish without failure. No delegation is allowed after approval.
+Non-default limits apply only to ZCode `plan-subagent`; `single` always disables delegation.
+`--max-concurrency` controls task concurrency separately. `zcode-lineage.json` records limits, accepted launch
+count, peak concurrency and delegation statuses, retaining unfinished calls on timeout or cancellation.
 
 Task artifacts include raw `transcript.jsonl`, `zcode.stderr.log`, `zcode-hooks.jsonl`, `zcode-lineage.json`,
 `zcode-config.json` and `zcode-run-status.json`. Patches use the existing `model.patch` format and exclude

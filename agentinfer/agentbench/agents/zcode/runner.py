@@ -34,7 +34,12 @@ async def run_zcode(request: AgentRunRequest) -> AgentRunResult:
     )
     request.artifact_dir.mkdir(parents=True, exist_ok=True)
     profile = get_profile(request.profile_name)
-    prompt = profile.build_prompt(request.task, explore=explore_name(request.session_id))
+    prompt = profile.build_prompt(
+        request.task,
+        explore=explore_name(request.session_id),
+        max_subagents=request.max_subagents,
+        max_concurrent_subagents=request.max_concurrent_subagents,
+    )
     (request.artifact_dir / "prompt.txt").write_text(prompt)
     transcript = request.artifact_dir / "transcript.jsonl"
     result.transcript = str(transcript)

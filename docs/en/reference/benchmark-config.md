@@ -80,6 +80,8 @@ successful completion still requires validated session evidence.
 | `terminal_capture_interval_seconds` | `30` | Terminal evidence capture interval; must be `>= 1`. |
 | `context_window` | `262144` | DSH/ZCode model context capacity; match the actual backend. YAML only. |
 | `max_tokens` | `8192` | DSH/ZCode output capacity; match the actual backend. YAML only. |
+| `max_subagents` | `1` | ZCode plan-subagent: total accepted child launches per task, including failed launches. |
+| `max_concurrent_subagents` | `1` | ZCode plan-subagent: concurrent child limit; must not exceed `max_subagents`. |
 
 The Claude `plan-subagent` profile uses `bypassPermissions`. Enable it only as a non-root user
 or with an approved Claude Code permission setup.

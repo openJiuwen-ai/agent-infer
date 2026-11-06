@@ -276,9 +276,27 @@ vllm bench serve --agentinfer run \
 `backend.api_key_env` 应为空。每个任务创建独立的 ZCode 状态目录，并经任务专属适配入口向 Request Proxy
 发送规范身份信息。这里的适配入口也处理官方同步 Hook，无需修改 ZCode 源码。
 
-`single` 禁止委派；`plan-subagent` 只委派一次只读 Explore，返回后只展示 `ExitPlanMode`，批准计划后由主 Agent
+`single` 禁止委派；`plan-subagent` 默认委派一次只读 Explore，批准计划后由主 Agent
 修改代码。Explore 只展示并允许 Read、Glob、Grep，以最终文本返回报告；主 Agent 的工具检查与审批由任务 Hook 处理。两种模式均关闭后台任务。
 权限模式不提供操作系统隔离，正式评测须使用外部沙箱或容器。
+
+可在 YAML 的 `agent` 下设置两个正整数上限，或使用 CLI 的 `--max-subagents` 和
+`--max-concurrent-subagents` 覆盖。例如：
+
+```yaml
+agent:
+  type: zcode
+  profile: plan-subagent
+  max_subagents: 4
+  max_concurrent_subagents: 2
+```
+
+上述配置允许每题最多接受四次探索委派、最多同时运行两个；默认均为 1，不要求用满预算。
+子 Agent 可以在同一次响应中并行启动，也可分批启动。满额时在执行前拒绝新调用，不排队；
+失败的委派仍消耗累计预算。已有成功报告后可继续探索或提交计划，但必须等全部子 Agent 完成且无失败才能批准。
+计划批准后禁止继续委派。非默认上限仅支持 ZCode 的 `plan-subagent`，`single` 始终禁用委派。
+`--max-concurrency` 仍控制任务并发，与每任务子 Agent 并发分别计数。
+`zcode-lineage.json` 记录限额、累计启动数、峰值并发及各次委派状态；超时或取消时保留未完成委派记录。
 
 任务目录包含原始 `transcript.jsonl`、`zcode.stderr.log`、`zcode-hooks.jsonl`、`zcode-lineage.json`、
 `zcode-config.json` 和 `zcode-run-status.json`。代码修改仍导出为 `model.patch`；当前会话自动生成的计划文件

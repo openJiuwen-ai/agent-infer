@@ -78,6 +78,8 @@ DSH 将清理预算耗尽记录为 `cleanup_timeout`，保留已有的任务超�
 | `terminal_capture_interval_seconds` | `30` | 终端证据采集间隔，必须 `>= 1`。 |
 | `context_window` | `262144` | DSH/ZCode 模型上下文容量；须与实际后端一致，仅支持 YAML 配置。 |
 | `max_tokens` | `8192` | DSH/ZCode 输出容量；须与实际后端一致，仅支持 YAML 配置。 |
+| `max_subagents` | `1` | ZCode plan-subagent 每任务累计接受的子 Agent 启动次数，失败也计入。 |
+| `max_concurrent_subagents` | `1` | ZCode plan-subagent 每任务子 Agent 并发上限，不得超过 `max_subagents`。 |
 
 Claude 的 `plan-subagent` 使用 `bypassPermissions`。仅应在非 root 用户或经过批准的 Claude Code 权限环境中启用。
 

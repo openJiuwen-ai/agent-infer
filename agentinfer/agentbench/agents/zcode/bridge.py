@@ -31,6 +31,8 @@ class ZCodeBridge:
         self.planning = get_profile(request.profile_name).planning
         self.sessions: dict[str, dict] = {}
         self.pending: set[str] = set()
+        self.delegations: dict[str, str] = {}
+        self.peak_concurrent_subagents = 0
         self.reports = 0
         self.child_tool_rounds: dict[str, int] = {}
         self.approved = False
@@ -67,27 +69,35 @@ class ZCodeBridge:
             with (self.request.workspace / ".git/info/exclude").open("a") as handle:
                 handle.write(f"\n/{plan}\n")
         if kind == "PreToolUse":
-            reason = self.denial(child, name, args)
+            repeated = not child and name in AGENT_TOOLS and event["toolCallId"] in self.pending
+            reason = None if repeated else self.denial(child, name, args)
             if reason:
                 response = {"decision": "block", "reason": reason}
             else:
                 if name in AGENT_TOOLS:
                     self.pending.add(event["toolCallId"])
+                    self.delegations[event["toolCallId"]] = "running"
+                    self.peak_concurrent_subagents = max(self.peak_concurrent_subagents, len(self.pending))
                 # Headless's immediate deny broker races PermissionRequest hooks.
                 # PreToolUse applies this checked approval before that race starts.
                 response = {"hookSpecificOutput": {"hookEventName": kind, "permissionDecision": "allow"}}
         elif kind == "PostToolUse":
-            if name in AGENT_TOOLS:
-                self.pending.discard(event["toolCallId"])
+            if name in AGENT_TOOLS and event["toolCallId"] in self.pending:
+                self.pending.remove(event["toolCallId"])
                 if event["toolResponse"]["status"] == "completed":
+                    self.delegations[event["toolCallId"]] = "completed"
                     self.reports += 1
+                else:
+                    self.delegations[event["toolCallId"]] = "failed"
+                    self.failure = TerminationReason.SUBAGENT_FAILED
             elif name == "ExitPlanMode":
                 self.approved = True
         elif kind == "PostToolUseFailure" and name in AGENT_TOOLS:
             if event["toolCallId"] in self.pending:
                 self.pending.remove(event["toolCallId"])
+                self.delegations[event["toolCallId"]] = "failed"
                 self.failure = TerminationReason.SUBAGENT_FAILED
-        elif kind == "Stop" and not child and self.planning and not self.approved:
+        elif kind == "Stop" and not child and self.planning and not self.approved and not self.failure:
             if event["stopHookActive"]:
                 self.failure = TerminationReason.PLAN_NOT_APPROVED
             else:
@@ -106,15 +116,19 @@ class ZCodeBridge:
         if name == "AskUserQuestion" or args.get("run_in_background"):
             return "Interactive questions and background work are disabled in AgentBench."
         if name in AGENT_TOOLS:
-            if not self.planning or self.approved or self.reports or self.pending:
-                return "Delegate once, then use the report to submit your plan through ExitPlanMode."
+            if not self.planning or self.approved or self.failure:
+                return "Exploration is disabled outside the planning phase or after a subagent failure."
+            if len(self.delegations) >= self.request.max_subagents:
+                return "The total subagent budget is exhausted; use the existing reports to submit your plan."
+            if len(self.pending) >= self.request.max_concurrent_subagents:
+                return "All subagent slots are occupied; wait for the running explorations to finish."
             if args.get("subagent_type") != explore_name(self.request.session_id):
                 return f"Use subagent_type={explore_name(self.request.session_id)} for read-only exploration."
         if self.planning and not self.approved:
             if not self.reports and not self.pending and name not in AGENT_TOOLS:
                 return "Delegate read-only exploration using Agent before other tools."
             if name == "ExitPlanMode":
-                if not self.reports or self.pending or not args.get("plan", "").strip():
+                if self.failure or not self.reports or self.pending or not args.get("plan", "").strip():
                     return "Wait for all Explore reports and submit a nonempty plan."
             elif name not in AGENT_TOOLS:
                 return "Use the Explore report to submit ExitPlanMode before implementation."
@@ -128,13 +142,27 @@ class ZCodeBridge:
             return tools
         if self.approved:
             return [tool for tool in tools if tool["function"]["name"] not in AGENT_TOOLS | {"ExitPlanMode"}]
-        if self.reports:
-            return [tool for tool in tools if tool["function"]["name"] == "ExitPlanMode"]
-        selected = [tool for tool in tools if tool["function"]["name"] in AGENT_TOOLS]
+        allowed = set()
+        if not self.failure:
+            if (
+                len(self.delegations) < self.request.max_subagents
+                and len(self.pending) < self.request.max_concurrent_subagents
+            ):
+                allowed.update(AGENT_TOOLS)
+            if self.reports and not self.pending:
+                allowed.add("ExitPlanMode")
+        selected = [tool for tool in tools if tool["function"]["name"] in allowed]
         for tool in selected:
             function = tool["function"]
+            if function["name"] not in AGENT_TOOLS:
+                continue
             name = explore_name(self.request.session_id)
-            function["description"] = f"Delegate one read-only exploration to {name}, then submit ExitPlanMode."
+            remaining = self.request.max_subagents - len(self.delegations)
+            slots = self.request.max_concurrent_subagents - len(self.pending)
+            function["description"] = (
+                f"Delegate read-only exploration to {name}. {remaining} launches remain, {slots} slots are available. "
+                "Wait for every report before ExitPlanMode; further exploration is optional."
+            )
             parameters = function["parameters"]
             parameters["properties"]["subagent_type"]["enum"] = [name]
             parameters["required"] = sorted(set(parameters.get("required", [])) | {"subagent_type"})
@@ -149,6 +177,11 @@ class ZCodeBridge:
                     "auto_plan_approvals": int(self.approved),
                     "exploration_reports": self.reports,
                     "pending": sorted(self.pending),
+                    "max_subagents": self.request.max_subagents,
+                    "max_concurrent_subagents": self.request.max_concurrent_subagents,
+                    "started_subagents": len(self.delegations),
+                    "peak_concurrent_subagents": self.peak_concurrent_subagents,
+                    "delegations": self.delegations,
                     "failure": self.failure,
                     "child_tool_rounds": self.child_tool_rounds,
                 },
@@ -186,11 +219,17 @@ class ZCodeBridge:
                             payload["tool_choice"] = "none"
                         else:
                             self.child_tool_rounds[key] = rounds + 1
-                    elif self.planning and not self.approved and payload["tools"]:
-                        payload["tool_choice"] = {
-                            "type": "function",
-                            "function": {"name": payload["tools"][0]["function"]["name"]},
-                        }
+                    elif self.planning and not self.approved:
+                        if not payload["tools"]:
+                            payload.pop("tools")
+                            payload["tool_choice"] = "none"
+                        elif self.reports and len(payload["tools"]) > 1:
+                            payload["tool_choice"] = "auto"
+                        else:
+                            payload["tool_choice"] = {
+                                "type": "function",
+                                "function": {"name": payload["tools"][0]["function"]["name"]},
+                            }
                 self.save()
                 upstream = await client.send(
                     client.build_request(

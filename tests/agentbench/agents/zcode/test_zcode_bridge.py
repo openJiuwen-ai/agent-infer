@@ -188,6 +188,53 @@ def test_preflight_requires_exact_version(tmp_path, version):
             asyncio.run(ZCodeRuntime().preflight(executable))
 
 
+def test_subagent_total_and_concurrent_budgets(request_data):
+    bridge = ZCodeBridge(replace(request_data, max_subagents=4, max_concurrent_subagents=2))
+    args = {"subagent_type": "agentbench-explore-bench-task"}
+
+    def launch(key):
+        return bridge.observe_hook(hook("PreToolUse", "Agent", toolCallId=key, toolInput=args))
+
+    def finish(key, status="completed"):
+        bridge.observe_hook(hook("PostToolUse", "Agent", toolCallId=key, toolResponse={"status": status}))
+
+    for key in ("a", "b"):
+        assert "decision" not in launch(key)
+    launch("a")  # Repeated delivery of the same pending call must not consume another launch.
+    assert len(bridge.delegations) == 2
+    assert launch("c")["decision"] == "block"
+    finish("a")
+    assert bridge.denial(False, "ExitPlanMode", {"plan": "fix"})
+    assert "decision" not in launch("c")
+    finish("b")
+    finish("c")
+    assert "decision" not in launch("d")
+    finish("d")
+    assert launch("e")["decision"] == "block"
+    assert bridge.denial(False, "ExitPlanMode", {"plan": "fix"}) is None
+    assert bridge.reports == 4
+    lineage = json.loads((request_data.artifact_dir / "zcode-lineage.json").read_text())
+    assert lineage["started_subagents"] == 4
+    assert lineage["peak_concurrent_subagents"] == 2
+    assert not lineage["pending"]
+
+
+@pytest.mark.parametrize("failure_event", ["PostToolUse", "PostToolUseFailure"])
+def test_failed_child_consumes_budget_and_prevents_approval(request_data, failure_event):
+    bridge = ZCodeBridge(replace(request_data, max_subagents=4, max_concurrent_subagents=2))
+    args = {"subagent_type": "agentbench-explore-bench-task"}
+    for key in ("a", "b"):
+        bridge.observe_hook(hook("PreToolUse", "Agent", toolCallId=key, toolInput=args))
+    bridge.observe_hook(hook("PostToolUse", "Agent", toolCallId="a", toolResponse={"status": "completed"}))
+    bridge.observe_hook(hook(failure_event, "Agent", toolCallId="b", toolResponse={"status": "failed"}))
+    assert bridge.failure.value == "subagent_failed"
+    assert len(bridge.delegations) == 2 and not bridge.pending
+    assert bridge.denial(False, "Agent", args)
+    assert bridge.denial(False, "ExitPlanMode", {"plan": "fix"})
+    bridge.observe_hook(hook("Stop", stopHookActive=True))
+    assert bridge.failure.value == "subagent_failed"
+
+
 @pytest.mark.parametrize("profile", ["single", "plan-subagent"])
 @pytest.mark.parametrize("exit_code", [0, 1])
 def test_exit_without_completion_is_failed(request_data, tmp_path, profile, exit_code):

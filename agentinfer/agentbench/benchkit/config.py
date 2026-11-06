@@ -48,6 +48,12 @@ class AgentConfig(StrictModel):
     terminal_capture_interval_seconds: int = Field(30, ge=1)
     context_window: int = Field(262144, ge=1)
     max_tokens: int = Field(8192, ge=1)
+    max_subagents: int = Field(
+        1, ge=1, description="Maximum child launches per ZCode plan-subagent task", json_schema_extra={"cli": True}
+    )
+    max_concurrent_subagents: int = Field(
+        1, ge=1, description="Maximum concurrent children per ZCode plan-subagent task", json_schema_extra={"cli": True}
+    )
 
     @model_validator(mode="after")
     def validate_runtime_profile(self) -> "AgentConfig":
@@ -55,6 +61,12 @@ class AgentConfig(StrictModel):
 
         from ..agents.registry import get_runtime
 
+        if self.max_concurrent_subagents > self.max_subagents:
+            raise ValueError("agent.max_concurrent_subagents must not exceed agent.max_subagents")
+        if (self.max_subagents, self.max_concurrent_subagents) != (1, 1) and (
+            self.type != "zcode" or self.profile != "plan-subagent"
+        ):
+            raise ValueError("Subagent limits are supported only by zcode plan-subagent")
         try:
             get_runtime(self.type).get_profile(self.profile)
         except ValueError as exc:
