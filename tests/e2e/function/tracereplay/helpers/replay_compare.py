@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from agentinfer.agentbench.benchkit.compare import _cold_confirmed, load_summary
-from agentinfer.agentbench.benchkit.metrics.vllm import parse_prometheus
 
 from .request_intervals import GLOBAL_INTERVAL_FIELDS, Distribution, global_interval_distribution
 
@@ -17,11 +16,10 @@ from .request_intervals import GLOBAL_INTERVAL_FIELDS, Distribution, global_inte
 @dataclass(frozen=True)
 class MetricCheck:
     label: str
-    baseline: float | int | str | None
-    candidate: float | int | str | None
+    baseline: float | int | None
+    candidate: float | int | None
     ok: bool
     detail: str
-    informational: bool = False
 
 
 @dataclass(frozen=True)
@@ -33,7 +31,7 @@ class StabilityReport:
 
     @property
     def passed(self) -> bool:
-        return all(check.ok for check in self.checks if not check.informational)
+        return all(check.ok for check in self.checks)
 
 
 def _extract(summary: dict[str, Any], *keys: str) -> Any:
@@ -55,55 +53,6 @@ def _cold_start_check(label: str, run_dir: Path) -> MetricCheck:
         "prefix cache queries at run start < 1 (see evidence/vllm_metrics_start.prom)"
         if confirmed
         else f"cold start not confirmed under {run_dir / 'evidence'}",
-        informational=True,
-    )
-
-
-def _process_start_time_seconds(run_dir: Path) -> tuple[float, ...] | None:
-    path = run_dir / "evidence" / "vllm_metrics_start.prom"
-    if not path.is_file():
-        return None
-    try:
-        metrics = parse_prometheus(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, ValueError):
-        return None
-    values = sorted(value for (name, _labels), value in metrics.samples.items() if name == "process_start_time_seconds")
-    return tuple(values) if values else None
-
-
-def _format_process_start_values(values: tuple[float, ...] | None) -> str | None:
-    if values is None:
-        return None
-    return ",".join(f"{value:.3f}" for value in values)
-
-
-def _process_start_check(baseline_dir: Path, candidate_dir: Path) -> MetricCheck:
-    baseline_values = _process_start_time_seconds(baseline_dir)
-    candidate_values = _process_start_time_seconds(candidate_dir)
-    baseline_text = _format_process_start_values(baseline_values)
-    candidate_text = _format_process_start_values(candidate_values)
-    if baseline_values is None or candidate_values is None:
-        return MetricCheck(
-            "evidence.process_start_time_seconds",
-            baseline_text,
-            candidate_text,
-            False,
-            "missing process_start_time_seconds in one or both vllm_metrics_start.prom files",
-            informational=True,
-        )
-    later_start = min(candidate_values) > max(baseline_values)
-    detail = (
-        "candidate run process start is later than baseline (distinct vLLM launches)"
-        if later_start
-        else "candidate process start is not strictly after baseline; verify vLLM was restarted between runs"
-    )
-    return MetricCheck(
-        "evidence.process_start_time_seconds",
-        baseline_text,
-        candidate_text,
-        later_start,
-        detail,
-        informational=True,
     )
 
 
@@ -123,20 +72,19 @@ def _within_ratio(
     candidate: float | None,
     *,
     tolerance: float,
-    informational: bool = False,
 ) -> MetricCheck:
     if baseline is None or candidate is None:
-        return MetricCheck(label, baseline, candidate, False, "missing numeric value", informational=informational)
+        return MetricCheck(label, baseline, candidate, False, "missing numeric value")
     if baseline == 0.0 and candidate == 0.0:
-        return MetricCheck(label, baseline, candidate, True, "both zero", informational=informational)
+        return MetricCheck(label, baseline, candidate, True, "both zero")
     if baseline == 0.0:
         ok = abs(candidate) <= tolerance
         detail = f"baseline zero; |candidate|={abs(candidate):.6g} (limit={tolerance})"
-        return MetricCheck(label, baseline, candidate, ok, detail, informational=informational)
+        return MetricCheck(label, baseline, candidate, ok, detail)
     ratio = abs(candidate - baseline) / abs(baseline)
     ok = ratio <= tolerance
     detail = f"relative delta {ratio * 100:.3f}% (limit {tolerance * 100:.1f}%)"
-    return MetricCheck(label, baseline, candidate, ok, detail, informational=informational)
+    return MetricCheck(label, baseline, candidate, ok, detail)
 
 
 def _compare_distribution_fields(
@@ -145,7 +93,6 @@ def _compare_distribution_fields(
     candidate: Distribution,
     *,
     tolerance: float,
-    informational_fields: frozenset[str] = frozenset(),
 ) -> list[MetricCheck]:
     checks: list[MetricCheck] = []
     for field in GLOBAL_INTERVAL_FIELDS:
@@ -157,13 +104,9 @@ def _compare_distribution_fields(
                 left,
                 right,
                 tolerance=tolerance,
-                informational=field in informational_fields,
             )
         )
     return checks
-
-
-_P99_INFORMATIONAL = frozenset({"p99"})
 
 
 def compare_replay_stability(
@@ -183,7 +126,6 @@ def compare_replay_stability(
     checks: list[MetricCheck] = [
         _cold_start_check("baseline", baseline_dir),
         _cold_start_check("candidate", candidate_dir),
-        _process_start_check(baseline_dir, candidate_dir),
         _exact_int("requests.requests", baseline_summary, candidate_summary, ("requests", "requests")),
         _exact_int("tasks.failed", baseline_summary, candidate_summary, ("tasks", "failed")),
         _exact_int("requests.input_tokens", baseline_summary, candidate_summary, ("requests", "input_tokens")),
@@ -198,7 +140,6 @@ def compare_replay_stability(
                 _extract(baseline_summary, *key),
                 _extract(candidate_summary, *key),
                 tolerance=tolerance_ratio,
-                informational=stat in _P99_INFORMATIONAL,
             )
         )
 
@@ -214,7 +155,6 @@ def compare_replay_stability(
                     _extract(baseline_summary, *key),
                     _extract(candidate_summary, *key),
                     tolerance=tolerance_ratio,
-                    informational=stat in _P99_INFORMATIONAL,
                 )
             )
 
@@ -263,7 +203,6 @@ def compare_replay_stability(
                 baseline_dist,
                 candidate_dist,
                 tolerance=tolerance_ratio,
-                informational_fields=_P99_INFORMATIONAL,
             )
         )
     else:
@@ -291,10 +230,7 @@ def format_stability_report(report: StabilityReport) -> str:
         f"tolerance={report.tolerance_ratio * 100:.1f}%",
     ]
     for check in report.checks:
-        if check.informational:
-            status = "INFO" if check.ok else "WARN"
-        else:
-            status = "OK" if check.ok else "FAIL"
+        status = "OK" if check.ok else "FAIL"
         lines.append(f"  [{status}] {check.label}: {check.baseline} vs {check.candidate} — {check.detail}")
     lines.append("PASS" if report.passed else "FAIL")
     return "\n".join(lines)

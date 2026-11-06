@@ -32,7 +32,7 @@ def test_benchmark_completes(pytestconfig: pytest.Config) -> None:
             benchmark_run_as_user_set=True,
         )
     run_dir = run_benchmark(config)
-    summary = validate_completed_run(run_dir)
+    summary = validate_completed_run(run_dir, functional_validation=config.case.functional_validation)
     print(
         f"[benchmark:{config.scenario.value}] completed: "
         f"tasks={summary['tasks']['completed']} requests={summary['requests']['requests']} "

@@ -21,6 +21,7 @@ from .case_loader import (
     prepare_runs_as_root,
     resolve_benchmark_run_as_user,
 )
+from .functional import validate_dsh_swebench_run
 from .server import managed_vllm
 
 
@@ -170,7 +171,7 @@ def ensure_repo_cache_prepared(config: E2EConfig) -> Path | None:
     return cache_dir
 
 
-def validate_completed_run(run_dir: Path) -> dict[str, Any]:
+def validate_completed_run(run_dir: Path, *, functional_validation: str | None = None) -> dict[str, Any]:
     """Return summary JSON when a run directory contains a completed benchmark."""
 
     summary = load_summary(run_dir)
@@ -183,4 +184,8 @@ def validate_completed_run(run_dir: Path) -> dict[str, Any]:
     requests = summary["requests"]["requests"]
     if requests <= 0:
         raise RuntimeError(f"benchmark run {run_dir} has no requests")
+    if functional_validation == "dsh_swebench":
+        validate_dsh_swebench_run(run_dir)
+    elif functional_validation:
+        raise RuntimeError(f"unknown functional_validation {functional_validation!r}")
     return summary
