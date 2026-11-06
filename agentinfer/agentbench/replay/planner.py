@@ -60,6 +60,26 @@ _REQUEST_ONLY_NODE_FIELDS = frozenset(
         "source_prefix_tokens",
     }
 )
+# Fields a request node's ``to_dict`` writes unconditionally, several of them
+# nullable. Their key must therefore be present in an artifact: a missing key is
+# truncation, and defaulting it to null would silently change the plan (a dropped
+# ``context_after`` turns a dependent request into a root one, and a dropped
+# ``source_output_tokens`` changes the zero-output accounting in the run
+# summary). ``send_after`` is required the same way but has its own accessor
+# because it never carries a value-less meaning beyond ``null``.
+# Both released versions that carry a Replay planner (0.2.0 onward) write all of
+# them, so this rejects no artifact those versions produced.
+_REQUEST_REQUIRED_NODE_FIELDS = (
+    "prompt_recipe_key",
+    "prompt_kind",
+    "actor_id",
+    "actor_role",
+    "parent_actor_id",
+    "context_after",
+    "context_mode",
+    "source_output_tokens",
+    "backend_sampling_seed",
+)
 _RESPONSE_VALIDATIONS = frozenset({"exact_tokens"})
 _PLAN_KINDS = frozenset({"structural"})
 _SCHEMA_VERSIONS = frozenset({"1", "2"})
@@ -215,6 +235,11 @@ class ReplayPlanNode:
             )
 
         prompt_ref = value.get("prompt_ref")
+        # Nullable, but unconditionally written by ``to_dict``: a missing key is
+        # a truncated artifact, not "no value". Reading it as null would, for
+        # ``context_after``, silently turn a dependent request into a root one.
+        for field in _REQUEST_REQUIRED_NODE_FIELDS:
+            _require_key(value, field)
         context_after = _node_optional_str(value, "context_after")
         planned_input_tokens = _node_required_nonneg_int(value, "planned_input_tokens")
         planned_output_tokens = _node_required_nonneg_int(value, "planned_output_tokens")
@@ -279,13 +304,19 @@ class ReplayTaskPlan:
 
     @classmethod
     def from_dict(cls, value: object) -> ReplayTaskPlan:
-        """Reconstruct one task plan from its serialized form."""
+        """Reconstruct one task plan from its serialized form.
+
+        ``source_task_id`` is nullable but always written, so its key must be
+        present for the same reason as the request-node fields: a truncated
+        artifact must not read as "this session has no source task id".
+        """
 
         if not isinstance(value, dict):
             raise ValueError("task plan must be an object")
         requests = value.get("requests")
         if not isinstance(requests, list):
             raise ValueError(f"task {value.get('task_id')!r} requests must be a list")
+        _require_key(value, "source_task_id")
         return cls(
             task_id=_node_str(value, "task_id"),
             task_index=_nonneg_int_field(value, "task_index"),
@@ -368,6 +399,9 @@ class ReplayPlan:
         tasks = value.get("tasks")
         if not isinstance(tasks, list):
             raise ValueError("plan tasks must be a list")
+        # Nullable plan-level fields written unconditionally by ``to_dict``.
+        for field in ("execution_unavailable_reason", "source_bundle_sha256"):
+            _require_key(value, field)
         return cls(
             schema_version=schema_version,
             plan_kind=plan_kind,
@@ -746,6 +780,21 @@ def _node_required_key_optional_str(node: dict[str, object], field: str) -> str 
     return value
 
 
+def _require_key(value: dict[str, object], field: str) -> None:
+    """Require a key ``to_dict`` always writes, without constraining its value.
+
+    Same rule as :func:`_node_required_key_optional_str` for fields read by an
+    accessor that already validates the value: absence and an explicit null mean
+    different things, so a truncated artifact must not be read as "the field is
+    null". Only for unconditional ``to_dict`` output -- conditionally emitted
+    fields (``prompt_ref``, ``response_validation``, ``effective_output_tokens``,
+    ``source_prefix_tokens``) legitimately omit the key and stay optional.
+    """
+
+    if field not in value:
+        raise ValueError(f"{field} key must be present (use null for no value)")
+
+
 def _str_field(plan: dict[str, object], field: str) -> str:
     value = plan.get(field)
     if not isinstance(value, str) or not value:
@@ -815,6 +864,14 @@ def _interval_model_from_dict(value: object) -> IntervalModel:
     interval modes the config layer accepts, and the remaining fields are
     type-checked with the same rules ``IntervalModel`` construction would
     enforce if the dataclass were not frozen.
+
+    The mode's own required fields are then checked against what the interval
+    sampler actually reads. ``build_interval_model`` emits ``mu`` and ``sigma``
+    for ``lognormal`` and leaves every fit field null for ``trace``, so an
+    artifact with the mode and its parameters out of step is rejected here
+    rather than at the first mid-run ``effective_interval_seconds`` call --
+    :func:`timing.effective_interval_seconds` asserts ``mu``/``sigma`` are not
+    ``None`` and would fail only once execution had already started.
     """
 
     if not isinstance(value, dict):
@@ -823,11 +880,21 @@ def _interval_model_from_dict(value: object) -> IntervalModel:
     for key in value:
         if key not in known:
             raise ValueError(f"interval_model has unknown field {key!r}")
+    mode = _node_enum(value, "mode", _INTERVAL_MODES)
+    mu = _opt_finite_field(value, "mu")
+    sigma = _opt_positive_field(value, "sigma")
+    if mode == "lognormal":
+        if mu is None or sigma is None:
+            raise ValueError("interval_model mode 'lognormal' requires both mu and sigma")
+    elif mu is not None or sigma is not None:
+        # ``trace`` samples the recorded gap directly; a mu/sigma here means the
+        # artifact was built by a different mode than it claims.
+        raise ValueError("interval_model mode 'trace' must not carry mu or sigma")
     return IntervalModel(
-        mode=_node_enum(value, "mode", _INTERVAL_MODES),
+        mode=mode,
         fit_version=_str_field(value, "fit_version"),
-        mu=_opt_finite_field(value, "mu"),
-        sigma=_opt_positive_field(value, "sigma"),
+        mu=mu,
+        sigma=sigma,
         anchors=_opt_float_map_field(value, "anchors"),
         anchor_predictions=_opt_float_map_field(value, "anchor_predictions"),
         anchor_residual_ratios=_opt_float_map_field(value, "anchor_residual_ratios"),
