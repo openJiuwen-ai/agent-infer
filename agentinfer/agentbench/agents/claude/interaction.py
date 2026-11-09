@@ -74,6 +74,22 @@ class StartupDialogHandler:
 
     def act(self, ctx: InteractionContext) -> InteractionAction:
         low = ctx.terminal.lower()
+        if any(marker in low for marker in ("do you trust", "quick safety check", "yes, i trust")):
+            options = list(
+                re.finditer(
+                    r"^\s*([❯>➤▶]?)\s*(?:\d+\.\s*)?(yes, i trust\b.*|no\b.*)$",
+                    ctx.terminal,
+                    re.IGNORECASE | re.MULTILINE,
+                )
+            )
+            trusted = next(
+                (i for i, option in enumerate(options) if option[2].lower().startswith("yes, i trust")), None
+            )
+            selected = next((i for i, option in enumerate(options) if option[1]), None)
+            if trusted is None or selected is None:
+                return InteractionAction(kind="none")
+            key = "Enter" if selected == trusted else ("Down" if selected < trusted else "Up")
+            return InteractionAction(kind="send_keys", keys=key)
         if any(marker in low for marker in _STARTUP_MARKERS):
             return InteractionAction(kind="send_keys", keys="Enter")
         ctx.state.startup_dismissed = True
@@ -222,7 +238,12 @@ class NoProgressHandler:
             self._workspace_checked = False
             return False
         low = ctx.terminal.lower()
-        if "❯" in ctx.terminal and "[pasted text #" not in low and "streaming" not in low:
+        if (
+            "❯" in ctx.terminal
+            and "[pasted text #" not in low
+            and "streaming" not in low
+            and "esc to interrupt" not in low
+        ):
             if self._idle_seen_at == 0.0:
                 self._idle_seen_at = ctx.elapsed_seconds
                 return False

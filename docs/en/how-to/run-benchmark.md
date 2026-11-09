@@ -13,6 +13,10 @@ The workflow requires:
 - Claude Code, tmux, and Git, with Claude Code authentication completed.
 - A model that supports Anthropic `POST /v1/messages`.
 
+At startup, the framework selects `Yes, I trust this folder` in Claude's workspace trust dialog and confirms only
+once that option is highlighted, including when `No, exit` is the default. Unrecognized selections are not confirmed.
+While `esc to interrupt` is visible, Claude is treated as busy even if its input prompt is also shown.
+
 Create an environment and install AgentInfer from the repository root:
 
 ```bash

@@ -13,6 +13,10 @@ Progress-TTL Agent 感知调度器。BenchKit 通过相同的 Request Proxy 记�
 - Claude Code、tmux 和 Git，并已完成 Claude Code 身份验证。
 - 支持 Anthropic `POST /v1/messages` 的模型。
 
+Claude 启动时，框架会在工作区信任提示中选择 `Yes, I trust this folder`，确认选中后再继续，
+兼容默认选中 `No, exit` 的界面。无法识别选项时不自动确认。
+终端显示 `esc to interrupt` 时视为仍在执行，不因同时显示输入框而触发空闲终止。
+
 在仓库根目录创建环境并安装 AgentInfer：
 
 ```bash

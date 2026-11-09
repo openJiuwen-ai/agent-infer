@@ -55,10 +55,42 @@ def test_startup_handler_recognizes_dialogs(terminal: str) -> None:
 def test_startup_handler_sends_enter_for_dialog() -> None:
     handler = StartupDialogHandler()
     state = InteractionState()
-    ctx = InteractionContext("Do you trust?", None, 0.0, state)
+    ctx = InteractionContext("Security Guide — press Enter to continue", None, 0.0, state)
     action = handler.act(ctx)
     assert action.kind == "send_keys"
     assert action.keys == "Enter"
+
+
+@pytest.mark.parametrize(
+    ("options", "selected_yes", "key"),
+    [
+        ("❯ No, exit\n  Yes, I trust this folder", "  No, exit\n❯ Yes, I trust this folder", "Down"),
+        ("  Yes, I trust this folder\n❯ No, exit", "❯ Yes, I trust this folder\n  No, exit", "Up"),
+        ("  1. Yes, I trust this folder\n❯ 2. No, exit", "❯ 1. Yes, I trust this folder\n  2. No, exit", "Up"),
+    ],
+)
+def test_startup_selects_trusted_option_before_confirming(options, selected_yes, key) -> None:
+    controller = InteractionController(handler_types_for_profile("single"))
+    state = InteractionState()
+    title = "Accessing workspace:\n/tmp/task\nQuick safety check: Is this a project you trust?\n"
+    action = controller.process(InteractionContext(title + options, None, 0.0, state))
+    assert (action.kind, action.keys) == ("send_keys", key)
+    assert state.startup_dismissed is False
+    action = controller.process(InteractionContext(title + selected_yes, None, 1.0, state))
+    assert (action.kind, action.keys) == ("send_keys", "Enter")
+    controller.process(InteractionContext("Welcome back\n❯ ", None, 2.0, state))
+    assert state.startup_dismissed is True
+
+
+@pytest.mark.parametrize(
+    "terminal",
+    ["Do you trust?", "Quick safety check\n❯ No, exit", "Yes, I trust this folder\nNo, exit"],
+)
+def test_startup_does_not_confirm_unrecognized_trust_selection(terminal: str) -> None:
+    state = InteractionState()
+    action = StartupDialogHandler().act(InteractionContext(terminal, None, 0.0, state))
+    assert action.kind == "none"
+    assert state.startup_dismissed is False
 
 
 def test_startup_handler_dismisses_when_prompt_visible() -> None:
@@ -109,6 +141,20 @@ def test_no_progress_handler_disabled_in_plan_subagent() -> None:
     transcript: list[dict[str, object]] = [{"type": "assistant"} for _ in range(30)]
 
     assert handler.recognize(InteractionContext("❯", transcript, 120.0, InteractionState())) is False
+
+
+def test_no_progress_handler_resets_idle_timer_while_claude_is_busy() -> None:
+    handler = NoProgressHandler()
+    state = InteractionState()
+    transcript = [{"type": "assistant"} for _ in range(20)]
+    busy = "✽ Working… (25s)\n❯\n⏵⏵ accept edits on · esc to interrupt"
+
+    assert handler.recognize(InteractionContext("❯", transcript, 100.0, state)) is False
+    assert handler.recognize(InteractionContext(busy, transcript, 110.0, state)) is False
+    assert handler.recognize(InteractionContext(busy, transcript, 140.0, state)) is False
+    assert handler.recognize(InteractionContext("❯", transcript, 150.0, state)) is False
+    assert handler.recognize(InteractionContext("❯", transcript, 159.9, state)) is False
+    assert handler.recognize(InteractionContext("❯", transcript, 160.0, state)) is True
 
 
 def test_plan_prompt_suppression_ignores_dynamic_updates_and_resets_after_disappearance() -> None:
