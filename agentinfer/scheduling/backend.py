@@ -33,7 +33,12 @@ class DpRankInfo:
     used_hbm_kv_tokens: int | None = None
     waiting_hbm_kv_tokens: int | None = None
     total_dram_kv_tokens: int | None = None
+    used_dram_kv_tokens: int | None = None
+    pending_h2d_kv_tokens: int | None = None
+    pending_d2h_kv_tokens: int | None = None
     total_ssd_kv_tokens: int | None = None
+    hbm_block_size_tokens: int | None = None
+    dram_chunk_size_tokens: int | None = None
     expected_reasoning_agent_nums: int | None = None
 
     def __post_init__(self) -> None:
@@ -47,17 +52,29 @@ class DpRankInfo:
             self.used_hbm_kv_tokens,
             self.waiting_hbm_kv_tokens,
             self.total_dram_kv_tokens,
+            self.used_dram_kv_tokens,
+            self.pending_h2d_kv_tokens,
+            self.pending_d2h_kv_tokens,
             self.total_ssd_kv_tokens,
             self.expected_reasoning_agent_nums,
         )
         if any(value is not None and value < 0 for value in capacities):
             raise ValueError("DP-rank capacities and expected agent count must be non-negative")
+        sizes = (self.hbm_block_size_tokens, self.dram_chunk_size_tokens)
+        if any(value is not None and value <= 0 for value in sizes):
+            raise ValueError("KV block and chunk sizes must be positive when supplied")
         if (
             self.total_hbm_kv_tokens is not None
             and self.used_hbm_kv_tokens is not None
             and self.used_hbm_kv_tokens > self.total_hbm_kv_tokens
         ):
             raise ValueError("used_hbm_kv_tokens must not exceed total_hbm_kv_tokens")
+        if (
+            self.total_dram_kv_tokens is not None
+            and self.used_dram_kv_tokens is not None
+            and self.used_dram_kv_tokens > self.total_dram_kv_tokens
+        ):
+            raise ValueError("used_dram_kv_tokens must not exceed total_dram_kv_tokens")
 
 
 @dataclass(frozen=True)

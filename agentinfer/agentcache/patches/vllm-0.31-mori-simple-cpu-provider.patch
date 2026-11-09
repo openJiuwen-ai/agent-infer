@@ -1,0 +1,580 @@
+--- a/vllm/v1/simple_kv_offload/manager.py
++++ b/vllm/v1/simple_kv_offload/manager.py
+@@ -3,10 +3,10 @@
+ """Scheduler-side manager for SimpleCPUOffloadConnector."""
+ 
+ import contextlib
+-from collections.abc import Iterable
++from collections.abc import Callable, Iterable
+ from dataclasses import dataclass, field, fields, replace
+ from enum import Enum, auto
+-from typing import TYPE_CHECKING, Any
++from typing import TYPE_CHECKING, Any, Protocol
+ 
+ from vllm.config import VllmConfig
+ from vllm.distributed.kv_events import (
+@@ -87,6 +87,101 @@
+     block_meta: list[dict[BlockHashWithGroupId, BlockStoreMeta]] | None = None
+ 
+ 
++@dataclass(frozen=True)
++class _MoriStoreRetryBlock:
++    """An unpinned, confirmed full block from a completed request context."""
++
++    block_id: int
++    block_hash: BlockHashWithGroupId
++    num_tokens: int
++
++
++@dataclass(frozen=True)
++class SimpleCPUOffloadTierSnapshot:
++    """Rank-local physical facts consumed by AgentInfer MORI."""
++
++    total_blocks: int
++    resident_blocks: int
++    pending_store_blocks: int
++    pending_load_blocks: int
++    scheduler_block_size: int
++
++
++class MoriSimpleCPUVictimProvider(Protocol):
++    """Versioned advisory contract; native SimpleCPU remains authoritative."""
++
++    HOOK_API_VERSION: int
++
++    def on_block_ready(self, block_id: int, native_lru_seq: int) -> None: ...
++
++    def on_block_owner_added(self, block_id: int, request_id: object) -> None: ...
++
++    def on_block_evictability_changed(self, block_id: int, ready: bool) -> None: ...
++
++    def on_block_removed(self, block_id: int) -> None: ...
++
++    def on_cache_reset(self) -> None: ...
++
++    def propose(
++        self, count: int, protected_block_ids: Iterable[int] = ()
++    ) -> tuple[int, ...] | None: ...
++
++    def store_capacity(self, request_id: object) -> int: ...
++
++    def propose_for_store(
++        self, count: int, request_id: object
++    ) -> tuple[int, ...] | None: ...
++
++    def bind_store_retry_listener(
++        self, listener: Callable[[object, bool], None] | None
++    ) -> None: ...
++
++    def capture_store_retry_context(self, request_id: str) -> object | None: ...
++
++    def store_retry_context_is_current(self, context: object) -> bool: ...
++
++
++class _MoriSimpleCPUProviderBridge:
++    """Forward BlockPool events while maintaining O(1) residency facts."""
++
++    HOOK_API_VERSION = 1
++
++    def __init__(
++        self,
++        delegate: MoriSimpleCPUVictimProvider,
++        resident_block_ids: set[int],
++    ) -> None:
++        self.delegate = delegate
++        self.resident_block_ids = resident_block_ids
++
++    def on_block_ready(self, block_id: int, native_lru_seq: int) -> None:
++        self.delegate.on_block_ready(block_id, native_lru_seq)
++
++    def on_block_owner_added(self, block_id: int, request_id: object) -> None:
++        self.delegate.on_block_owner_added(block_id, request_id)
++
++    def on_block_evictability_changed(self, block_id: int, ready: bool) -> None:
++        self.delegate.on_block_evictability_changed(block_id, ready)
++
++    def on_block_removed(self, block_id: int) -> None:
++        self.resident_block_ids.discard(block_id)
++        self.delegate.on_block_removed(block_id)
++
++    def on_cache_reset(self) -> None:
++        self.resident_block_ids.clear()
++        self.delegate.on_cache_reset()
++
++    def propose(
++        self, count: int, protected_block_ids: Iterable[int] = ()
++    ) -> tuple[int, ...] | None:
++        return self.delegate.propose(count, protected_block_ids)
++
++    def propose_for_store(
++        self, count: int, request_id: object
++    ) -> tuple[int, ...] | None:
++        return self.delegate.propose_for_store(count, request_id)
++
++
+ @dataclass
+ class LoadRequestState:
+     request: "Request"
+@@ -223,6 +318,15 @@
+         self.fa_block_size: int = self.group_block_sizes[self.fa_gidx]
+         assert self.block_size % self.fa_block_size == 0
+         self.cpu_block_pool: BlockPool = self.cpu_coordinator.block_pool
++        self._mori_offload_tier_provider: MoriSimpleCPUVictimProvider | None = None
++        self._mori_offload_tier_bridge: _MoriSimpleCPUProviderBridge | None = None
++        self._mori_resident_block_ids: set[int] = set()
++        self._mori_store_retries: dict[object, tuple[_MoriStoreRetryBlock, ...]] = {}
++        self._mori_pending_store_retries: dict[
++            object, tuple[_MoriStoreRetryBlock, ...]
++        ] = {}
++        self._mori_cpu_backend = disk_capacity_bytes <= 0
++
+         # GPU block pool reference - bound after scheduler builds kv_cache_manager
+         self._gpu_block_pool: BlockPool | None = None
+ 
+@@ -334,6 +438,260 @@
+         Called by Scheduler after kv_cache_manager is ready."""
+         self._gpu_block_pool = gpu_block_pool
+ 
++    def get_mori_offload_tier_snapshot(self) -> SimpleCPUOffloadTierSnapshot:
++        """Return rank-local physical capacity without exposing pool internals."""
++        pending_store_ids = {
++            block_id
++            for transfer in (
++                *self._store_event_to_blocks.values(),
++                *self._pending_finished_stores,
++                *self._abandoned_store_event_to_blocks.values(),
++            )
++            for block_id in transfer.cpu_block_ids
++        }
++        pending_load_ids = {
++            block_id
++            for state in (
++                *self._reqs_to_load.values(),
++                *self._abandoned_reqs_to_load.values(),
++            )
++            for block_id in state.transfer_meta.cpu_block_ids
++        }
++        for (
++            cpu_hit_blocks,
++            _hit_length,
++            _num_computed_tokens,
++        ) in self._pending_cpu_hits.values():
++            pending_load_ids.update(
++                block.block_id
++                for group in cpu_hit_blocks
++                for block in group
++                if not block.is_null
++            )
++        return SimpleCPUOffloadTierSnapshot(
++            # Block 0 is the coordinator's permanent null block.
++            total_blocks=max(0, self.num_cpu_blocks - 1),
++            resident_blocks=len(self._mori_resident_block_ids),
++            pending_store_blocks=len(pending_store_ids),
++            pending_load_blocks=len(pending_load_ids),
++            scheduler_block_size=self.block_size,
++        )
++
++    def register_mori_offload_tier_provider(
++        self,
++        api_version: int,
++        provider: MoriSimpleCPUVictimProvider,
++    ) -> dict[str, int]:
++        """Install typed victim advice on this scheduler's CPU block pool."""
++        if api_version != 3 or provider.HOOK_API_VERSION != 3:
++            raise ValueError("unsupported MORI SimpleCPU offload-tier hook API")
++        if not self._mori_cpu_backend:
++            raise RuntimeError("MORI SimpleCPU support requires kv_offload_backend=cpu")
++        if self._lazy_mode:
++            raise RuntimeError("MORI SimpleCPU support requires lazy_offload=false")
++        if self._mori_offload_tier_provider not in (None, provider):
++            raise RuntimeError("a MORI SimpleCPU provider is already registered")
++        if self._mori_offload_tier_provider is provider:
++            return {"hook_api_version": 3}
++        register = getattr(
++            self.cpu_block_pool, "register_mori_block_selection_provider", None
++        )
++        if not callable(register):
++            raise RuntimeError(
++                "MORI SimpleCPU support requires the MORI BlockPool provider patch"
++            )
++        self._mori_resident_block_ids.clear()
++        bridge = _MoriSimpleCPUProviderBridge(
++            provider,
++            self._mori_resident_block_ids,
++        )
++        capabilities = register(bridge)
++        version = (
++            capabilities.get("hook_api_version")
++            if isinstance(capabilities, dict)
++            else None
++        )
++        if version != 1 or capabilities.get("store_admission_api_version") != 1:
++            unregister = getattr(
++                self.cpu_block_pool,
++                "unregister_mori_block_selection_provider",
++                None,
++            )
++            if callable(unregister):
++                unregister(bridge)
++            self._mori_resident_block_ids.clear()
++            raise RuntimeError(
++                f"unsupported MORI BlockPool hook API version: {version!r}"
++            )
++        self._mori_resident_block_ids.update(
++            block.block_id
++            for block in self.cpu_block_pool.blocks
++            if not block.is_null and block.block_hash is not None
++        )
++        self._mori_offload_tier_provider = provider
++        self._mori_offload_tier_bridge = bridge
++        self._mori_store_retries = {}
++        self._mori_pending_store_retries = {}
++        provider.bind_store_retry_listener(self._mori_retry_finished_store)
++        return {"hook_api_version": 3}
++
++    def unregister_mori_offload_tier_provider(
++        self, provider: MoriSimpleCPUVictimProvider
++    ) -> None:
++        if self._mori_offload_tier_provider is not provider:
++            return
++        provider.bind_store_retry_listener(None)
++        self._mori_store_retries.clear()
++        self._mori_pending_store_retries.clear()
++        unregister = getattr(
++            self.cpu_block_pool, "unregister_mori_block_selection_provider", None
++        )
++        bridge = self._mori_offload_tier_bridge
++        if callable(unregister) and bridge is not None:
++            unregister(bridge)
++        self._mori_offload_tier_provider = None
++        self._mori_offload_tier_bridge = None
++        self._mori_resident_block_ids.clear()
++
++    def _mori_store_capacity(self, request_id: object) -> int:
++        free = self.cpu_block_pool.get_num_free_blocks()
++        provider = self._mori_offload_tier_provider
++        if provider is None:
++            return free
++        return min(free, max(0, provider.store_capacity(request_id)))
++
++    def _allocate_store_blocks(
++        self, count: int, request_id: object
++    ) -> list["KVCacheBlock"]:
++        if self._mori_offload_tier_provider is None:
++            return self.cpu_block_pool.get_new_blocks(count)
++        try:
++            return self.cpu_block_pool.get_new_blocks(
++                count, mori_store_request_id=request_id
++            )
++        except ValueError:
++            # Optional backup: keep current CPU contents and retry positional
++            # blocks on a later step. Never fall back to unrestricted eviction.
++            return []
++
++    def _observe_mori_owner(
++        self, request_id: object, blocks: Iterable["KVCacheBlock"]
++    ) -> None:
++        observe = getattr(self.cpu_block_pool, "observe_mori_block_owner", None)
++        if callable(observe):
++            observe(request_id, blocks)
++
++    def _discard_mori_entries(self, block_ids: Iterable[int]) -> None:
++        provider = self._mori_offload_tier_provider
++        if provider is not None:
++            for block_id in block_ids:
++                self._mori_resident_block_ids.discard(block_id)
++                provider.on_block_removed(block_id)
++
++    def _mori_capture_finished_store(
++        self, request: "Request", block_ids: tuple[list[int], ...]
++    ) -> None:
++        """Remember immutable positional blocks, without retaining pins.
++
++        A later committed GPU-to-CPU transition may retry this context once.
++        Boundary-state handoffs and partial tails keep their existing semantics.
++        """
++        provider = self._mori_offload_tier_provider
++        gpu_pool = self._gpu_block_pool
++        if provider is None or gpu_pool is None:
++            return
++        context = provider.capture_store_retry_context(request.request_id)
++        if context is None:
++            return
++        self._mori_store_retries.pop(context, None)
++        confirmed = request.num_computed_tokens - request.num_output_placeholders
++        candidates: list[_MoriStoreRetryBlock] = []
++        seen: set[int] = set()
++        for group, ids in enumerate(block_ids):
++            if group not in self.prefix_cacheable_group_ids:
++                continue
++            manager = self.cpu_coordinator.single_type_managers[group]
++            if not manager.has_positionally_stable_blocks:
++                continue
++            size = self.group_block_sizes[group]
++            hashes = resolve_block_hashes(
++                request.block_hashes, self.hash_block_size, size
++            )
++            ready = min(len(ids), confirmed // size, len(hashes))
++            for position in range(ready):
++                block = gpu_pool.blocks[ids[position]]
++                expected = make_block_hash_with_group_id(hashes[position], group)
++                if (
++                    block.is_null
++                    or block.block_id in seen
++                    or block.block_hash != expected
++                    or block.block_hash_num_tokens != size
++                ):
++                    continue
++                seen.add(block.block_id)
++                candidates.append(_MoriStoreRetryBlock(block.block_id, expected, size))
++        if candidates:
++            self._mori_store_retries[context] = tuple(candidates)
++
++    def _mori_retry_finished_store(self, context: object, retry: bool) -> None:
++        """Queue an unpinned intent; do not mutate pools during MORI planning."""
++        candidates = self._mori_store_retries.pop(context, ())
++        if not retry:
++            self._mori_pending_store_retries.pop(context, None)
++        elif candidates:
++            self._mori_pending_store_retries[context] = candidates
++
++    def _mori_drain_store_retries(self) -> None:
++        pending = self._mori_pending_store_retries
++        self._mori_pending_store_retries = {}
++        for context, candidates in pending.items():
++            self._mori_submit_store_retry(context, candidates)
++
++    def _mori_submit_store_retry(
++        self, context: object, candidates: tuple[_MoriStoreRetryBlock, ...]
++    ) -> None:
++        """Submit once at the native boundary; rejected work holds no pins."""
++        provider = self._mori_offload_tier_provider
++        gpu_pool = self._gpu_block_pool
++        if (
++            not candidates
++            or provider is None
++            or gpu_pool is None
++            or not provider.store_retry_context_is_current(context)
++        ):
++            return
++        capacity = self._mori_store_capacity(context)
++        sources = []
++        for candidate in candidates:
++            if len(sources) >= capacity:
++                break
++            block = gpu_pool.blocks[candidate.block_id]
++            if (
++                block.is_null
++                or block.block_hash != candidate.block_hash
++                or block.block_hash_num_tokens != candidate.num_tokens
++                or self._classify_store_candidate(block, context)
++                is not _StoreAdmission.READY
++            ):
++                continue
++            sources.append(block)
++        if not sources:
++            return
++        destinations = self._allocate_store_blocks(len(sources), context)
++        if not destinations:
++            return
++        self._observe_mori_owner(context, destinations)
++        gpu_pool.touch(sources)
++        gpu_ids = [block.block_id for block in sources]
++        self._in_flight_store_gpu_blocks.update(gpu_ids)
++        self._pending_finished_stores.append(
++            TransferMeta(
++                gpu_ids,
++                [block.block_id for block in destinations],
++                [{} for _ in sources] if self.enable_kv_cache_events else None,
++            )
++        )
++
+     def get_num_new_matched_tokens(
+         self, request: "Request", num_computed_tokens: int
+     ) -> tuple[int | None, bool]:
+@@ -381,6 +739,7 @@
+                 blk for grp in cpu_hit_blocks for blk in grp if not blk.is_null
+             ]
+             self.cpu_block_pool.touch(pin_blocks)
++            self._observe_mori_owner(request.request_id, pin_blocks)
+             self._pending_cpu_hits[request.request_id] = (
+                 cpu_hit_blocks,
+                 hit_length,
+@@ -508,6 +867,7 @@
+         self,
+         scheduler_output: SchedulerOutput,
+     ) -> SimpleCPUOffloadMetadata:
++        self._mori_drain_store_retries()
+         # --- Stores ---
+         store_event = -1
+         store_gpu, store_cpu, store_req_ids, store_meta = self.prepare_store_specs(
+@@ -701,7 +1061,7 @@
+             for _, gpu_block_id, _ in entries:
+                 stats.published += 1
+                 gpu_block = gpu_block_pool.blocks[gpu_block_id]
+-                admission = self._classify_store_candidate(gpu_block)
++                admission = self._classify_store_candidate(gpu_block, req_id)
+                 if admission is _StoreAdmission.NULL_BLOCK:
+                     stats.dropped_null_block += 1
+                     continue
+@@ -714,14 +1074,19 @@
+                 if admission is _StoreAdmission.ALREADY_CACHED:
+                     stats.skipped_already_cached += 1
+                     continue
+-                if num_free <= 0:
++                if num_free <= 0 or self._mori_store_capacity(req_id) <= 0:
+                     stats.dropped_cpu_full += 1
+                     logger.warning_once(
+                         "SimpleCPU dropped a boundary-state handoff because "
+                         "the CPU block pool is full; this boundary will not be retried."
+                     )
+                     continue
+-                cpu_block = cpu_block_pool.get_new_blocks(1)[0]
++                destinations = self._allocate_store_blocks(1, req_id)
++                if not destinations:
++                    stats.dropped_cpu_full += 1
++                    continue
++                cpu_block = destinations[0]
++                self._observe_mori_owner(req_id, (cpu_block,))
+                 merged_gpu_block_ids.append(gpu_block_id)
+                 merged_cpu_block_ids.append(cpu_block.block_id)
+                 if merged_block_meta is not None:
+@@ -767,7 +1132,10 @@
+             # Batch allocate the CPU destinations.
+             n_to_alloc = len(gpu_block_ids)
+             if n_to_alloc > 0:
+-                cpu_blocks_alloc = cpu_block_pool.get_new_blocks(n_to_alloc)
++                cpu_blocks_alloc = self._allocate_store_blocks(n_to_alloc, req_id)
++                if not cpu_blocks_alloc:
++                    continue  # Do not advance cursors for a rejected store.
++                self._observe_mori_owner(req_id, cpu_blocks_alloc)
+                 cpu_block_ids = [blk.block_id for blk in cpu_blocks_alloc]
+             else:
+                 cpu_block_ids = []
+@@ -845,7 +1213,7 @@
+             else self.block_size
+         )
+         aligned_tokens = confirmed_tokens // store_alignment * store_alignment
+-        num_free = self.cpu_block_pool.get_num_free_blocks()
++        num_free = self._mori_store_capacity(request.request_id)
+ 
+         for g, group_gpu_ids in enumerate(block_ids_by_group):
+             if g not in self.prefix_cacheable_group_ids:
+@@ -880,7 +1248,7 @@
+                     gpu_block = recovered
+                     gpu_block_id = gpu_block.block_id
+                 if (
+-                    self._classify_store_candidate(gpu_block)
++                    self._classify_store_candidate(gpu_block, request.request_id)
+                     is not _StoreAdmission.READY
+                 ):
+                     advanced_per_group[g] += 1
+@@ -950,19 +1318,23 @@
+ 
+         return gpu_block_ids, advanced_per_group, block_meta
+ 
+-    def _classify_store_candidate(self, gpu_block: "KVCacheBlock") -> _StoreAdmission:
++    def _classify_store_candidate(
++        self,
++        gpu_block: "KVCacheBlock",
++        owner_request_id: object | None = None,
++    ) -> _StoreAdmission:
+         if gpu_block.is_null:
+             return _StoreAdmission.NULL_BLOCK
+         if gpu_block.block_hash is None:
+             return _StoreAdmission.NOT_HASHED
+         if gpu_block.block_id in self._in_flight_store_gpu_blocks:
+             return _StoreAdmission.IN_FLIGHT
+-        if (
+-            self.cpu_block_pool.cached_block_hash_to_block.get_one_block(
+-                gpu_block.block_hash
+-            )
+-            is not None
+-        ):
++        cached = self.cpu_block_pool.cached_block_hash_to_block.get_one_block(
++            gpu_block.block_hash
++        )
++        if cached is not None:
++            if owner_request_id is not None:
++                self._observe_mori_owner(owner_request_id, (cached,))
+             return _StoreAdmission.ALREADY_CACHED
+         return _StoreAdmission.READY
+ 
+@@ -1087,6 +1459,8 @@
+                 cpu_block,
+                 num_tokens=gpu_block.block_hash_num_tokens,
+             )
++            if self._mori_offload_tier_bridge is not None:
++                self._mori_resident_block_ids.add(cpu_block.block_id)
+             secondary_hashes = self._gpu_block_pool.cached_block_hashes_by_block.get(
+                 gpu_block_id, ()
+             )
+@@ -1166,6 +1540,7 @@
+ 
+     def _release_transfer_refs(self, transfer: TransferMeta) -> None:
+         """Release transfer refs without making copied data cacheable."""
++        self._discard_mori_entries(transfer.cpu_block_ids)
+         cpu_blocks = [self.cpu_block_pool.blocks[bid] for bid in transfer.cpu_block_ids]
+         self.cpu_block_pool.free_blocks(cpu_blocks)
+         assert self._gpu_block_pool is not None
+@@ -1176,7 +1551,8 @@
+     def has_pending_stores(self) -> bool:
+         """Return True if a store transfer is queued or in flight."""
+         return bool(
+-            self._pending_finished_stores
++            self._mori_pending_store_retries
++            or self._pending_finished_stores
+             or self._store_event_to_blocks
+             or self._abandoned_store_event_to_blocks
+         )
+@@ -1220,6 +1596,7 @@
+         request: "Request",
+         block_ids: tuple[list[int], ...],
+     ) -> tuple[bool, dict[str, Any] | None]:
++        self._mori_capture_finished_store(request, block_ids)
+         self._queue_finished_eager_store(request, block_ids)
+         return self.request_finished(request, block_ids=[])
+ 
+@@ -1239,7 +1616,7 @@
+             # positional scan above already selected it. Appending again would
+             # allocate two CPU blocks for one GPU block.
+             and partial_tail not in gpu_ids
+-            and len(gpu_ids) < self.cpu_block_pool.get_num_free_blocks()
++            and len(gpu_ids) < self._mori_store_capacity(request.request_id)
+         ):
+             gpu_ids.append(partial_tail)
+             if block_meta is not None:
+@@ -1249,7 +1626,10 @@
+                 block_meta.append({})
+         if not gpu_ids:
+             return
+-        cpu_blocks = self.cpu_block_pool.get_new_blocks(len(gpu_ids))
++        cpu_blocks = self._allocate_store_blocks(len(gpu_ids), request.request_id)
++        if not cpu_blocks:
++            return
++        self._observe_mori_owner(request.request_id, cpu_blocks)
+         self._pending_finished_stores.append(
+             TransferMeta(gpu_ids, [b.block_id for b in cpu_blocks], block_meta)
+         )
+@@ -1305,7 +1685,11 @@
+             )
+         ):
+             return None
+-        if self.cpu_block_pool.cached_block_hash_to_block.get_one_block(block_hash):
++        cached = self.cpu_block_pool.cached_block_hash_to_block.get_one_block(
++            block_hash
++        )
++        if cached is not None:
++            self._observe_mori_owner(request.request_id, (cached,))
+             return None
+         return gpu_block_id
+ 
+@@ -1395,6 +1779,8 @@
+         the transfer finished, then release refs without caching abandoned
+         store results.
+         """
++        self._mori_store_retries.clear()
++        self._mori_pending_store_retries.clear()
+         self._abandoned_store_event_to_blocks.update(self._store_event_to_blocks)
+         for transfer in self._pending_finished_stores:
+             self._release_transfer_refs(transfer)

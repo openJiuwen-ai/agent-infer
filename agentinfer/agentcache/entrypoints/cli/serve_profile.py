@@ -22,6 +22,7 @@ ASYNC_SCHEDULER_CLS = "agentinfer.agentcache.core.scheduler.AgentCacheAsyncSched
 SYNC_SCHEDULER_CLS = "agentinfer.agentcache.core.scheduler.AgentCacheSyncSchedulerBridge"
 IDENTITY_MIDDLEWARE = "agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware"
 LIFECYCLE_MIDDLEWARE = "agentinfer.agentcache.core.api_adapter.AgentCacheLifecycleMiddleware"
+SSE_FRAMING_MIDDLEWARE = "agentinfer.agentcache.core.sse_framing.SSEJsonFramingMiddleware"
 
 LIFECYCLE_SOCKET_ENV = "AGENTCACHE_VLLM_LIFECYCLE_SOCKET"
 DEFAULT_LIFECYCLE_SOCKET = "/tmp/agentinfer-vllm-lifecycle.sock"
@@ -65,9 +66,9 @@ def add_agentinfer_arguments(parser: argparse.ArgumentParser) -> None:
         "--agentinfer",
         action="store_true",
         default=False,
-        help="Enable the AgentInfer Progress-TTL serving path: injects the AgentCache scheduler bridge "
+        help="Enable the AgentInfer agent-aware serving path: injects the AgentCache scheduler bridge "
         "(async or sync, following --async-scheduling/--no-async-scheduling), the identity and lifecycle "
-        "middleware, and the embedded Progress-TTL controller.",
+        "middleware, and the explicitly selected embedded scheduling controller.",
     )
 
 
@@ -183,10 +184,16 @@ def inject_profile(
     setattr(namespace, SCHEDULER_CLS_DEST, scheduler_cls)
     injected[SCHEDULER_CLS_DEST] = scheduler_cls
 
+    merged_config = _merge_additional_config(getattr(namespace, ADDITIONAL_CONFIG_DEST, None), resolved)
+    configured_middlewares = resolved.middlewares
+    agentcache_config = merged_config.get("agentcache")
+    # Framing follows the effective strategy, including copied or custom profiles.
+    if isinstance(agentcache_config, dict) and agentcache_config.get("strategy") == "mori":
+        configured_middlewares = (*configured_middlewares, SSE_FRAMING_MIDDLEWARE)
     user_middleware = list(getattr(namespace, MIDDLEWARE_DEST, None) or [])
     merged_middleware = list(user_middleware)
     appended: list[str] = []
-    for middleware in resolved.middlewares:
+    for middleware in configured_middlewares:
         if middleware not in merged_middleware:
             merged_middleware.append(middleware)
             appended.append(middleware)
@@ -195,7 +202,6 @@ def inject_profile(
         injected[MIDDLEWARE_DEST] = appended
 
     if hasattr(namespace, ADDITIONAL_CONFIG_DEST):
-        merged_config = _merge_additional_config(getattr(namespace, ADDITIONAL_CONFIG_DEST, None), resolved)
         setattr(namespace, ADDITIONAL_CONFIG_DEST, merged_config)
         injected[ADDITIONAL_CONFIG_DEST] = merged_config
 

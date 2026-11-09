@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentCache project
-"""Embedded Progress-TTL controller construction from vLLM ``additional_config``."""
+"""Embedded controller construction from vLLM ``additional_config``."""
 
 from __future__ import annotations
 
@@ -10,6 +10,13 @@ from vllm.v1.request import Request
 
 from agentinfer.scheduling.backend import BackendPoolInfo
 from agentinfer.scheduling.identity import JsonMapping
+from agentinfer.scheduling.mori import (
+    MORIConfig,
+    MORIGlobalFactors,
+    MORIMode,
+    MORIProgramFactors,
+    build_mori_strategy,
+)
 from agentinfer.scheduling.observability import SchedulerObservabilityConfig
 from agentinfer.scheduling.progress_ttl import (
     ProgressTTLConfig,
@@ -71,6 +78,87 @@ _REMOVED_PROGRESS_TTL_SETTINGS = frozenset(
         "force_resume_timeout_seconds",
     }
 )
+
+_CONFIGURABLE_MORI_SETTINGS = frozenset(
+    {
+        "enable_wait_credit",
+        "mode",
+        "window_size",
+        "ready_wait_limit_seconds",
+        "gpu_service_requests",
+        "history_gated_gpu_service",
+        "decode_batch_tokens",
+        "audit_writeback_sources",
+        "repair_writeback_endpoints",
+        "fast_capacity_accounting",
+        "slow_request_threshold_seconds",
+        "slow_request_repeat_seconds",
+    }
+)
+_FIXED_MORI_SETTINGS = frozenset({"decode_buffer_tokens"})
+
+
+def build_controller(
+    backend_pool_info: BackendPoolInfo,
+    settings: JsonMapping,
+) -> ProgramScheduler[Request, object, object]:
+    """Build the explicitly selected embedded strategy without dynamic imports."""
+    selected = settings.get("strategy", "progress_ttl")
+    if not isinstance(selected, str):
+        raise ValueError("additional_config.agentcache.strategy must be a string")
+    if selected == "progress_ttl":
+        return build_progress_ttl_controller(backend_pool_info, settings)  # type: ignore[return-value]
+    if selected == "mori":
+        return build_mori_controller(backend_pool_info, settings)  # type: ignore[return-value]
+    raise ValueError("additional_config.agentcache.strategy must be one of: progress_ttl, mori")
+
+
+def build_mori_controller(
+    backend_pool_info: BackendPoolInfo,
+    settings: JsonMapping,
+) -> ProgramScheduler[Request, MORIGlobalFactors, MORIProgramFactors]:
+    """Build MORI through the same explicit construction path as Progress-TTL."""
+    raw = settings.get("mori", {})
+    if not isinstance(raw, dict):
+        raise ValueError("additional_config.agentcache.mori must be an object")
+    fixed = sorted(_FIXED_MORI_SETTINGS.intersection(raw))
+    if fixed:
+        raise ValueError(f"mori settings are fixed implementation values and cannot be configured: {', '.join(fixed)}")
+    unknown = sorted(set(raw).difference(_CONFIGURABLE_MORI_SETTINGS))
+    if unknown:
+        raise ValueError(f"mori settings are not supported: {', '.join(unknown)}")
+    config = MORIConfig(
+        mode=_mori_mode_setting(raw, "mode", MORIMode.FULL),
+        window_size=_int_setting(raw, "window_size", 5, scope="mori"),
+        enable_wait_credit=_bool_setting(raw, "enable_wait_credit", True, scope="mori"),
+        ready_wait_limit_seconds=_float_setting(raw, "ready_wait_limit_seconds", 0.0, scope="mori"),
+        gpu_service_requests=_int_setting(raw, "gpu_service_requests", 0, scope="mori"),
+        history_gated_gpu_service=_bool_setting(raw, "history_gated_gpu_service", False, scope="mori"),
+        decode_batch_tokens=_int_setting(raw, "decode_batch_tokens", 0, scope="mori"),
+        audit_writeback_sources=_bool_setting(raw, "audit_writeback_sources", False, scope="mori"),
+        repair_writeback_endpoints=_bool_setting(raw, "repair_writeback_endpoints", False, scope="mori"),
+        fast_capacity_accounting=_bool_setting(raw, "fast_capacity_accounting", False, scope="mori"),
+        slow_request_threshold_seconds=_float_setting(raw, "slow_request_threshold_seconds", 30.0, scope="mori"),
+        slow_request_repeat_seconds=_float_setting(raw, "slow_request_repeat_seconds", 60.0, scope="mori"),
+    )
+    if len(backend_pool_info.backends) != 1 or len(backend_pool_info.backends[0].dp_ranks) != 1:
+        raise ValueError("full MORI requires exactly one embedded backend rank")
+    rank = backend_pool_info.backends[0].dp_ranks[0]
+    if rank.total_dram_kv_tokens is None or rank.dram_chunk_size_tokens is None:
+        raise ValueError("full MORI requires a rank-local DRAM quota and chunk size")
+    components = build_mori_strategy(config)
+    return ProgramScheduler(
+        components.strategy,
+        components.initial_factors,
+        backend_pool_info,
+        schedule_interval_seconds=_float_setting(
+            settings,
+            "schedule_interval_seconds",
+            5.0,
+            scope="agentcache",
+        ),
+        observability=_observability_setting(settings),
+    )
 
 
 def build_progress_ttl_controller(
@@ -226,23 +314,7 @@ def build_progress_ttl_controller(
         ),
     )
     components = build_progress_ttl_strategy(config)
-    observability_raw = settings.get("observability", {})
-    if not isinstance(observability_raw, dict):
-        raise ValueError("additional_config.agentcache.observability must be an object")
-    observability = SchedulerObservabilityConfig(
-        enabled=_bool_setting(
-            observability_raw,
-            "enabled",
-            False,
-            scope="agentcache.observability",
-        ),
-        log_interval_seconds=_float_setting(
-            observability_raw,
-            "log_interval_seconds",
-            5.0,
-            scope="agentcache.observability",
-        ),
-    )
+    observability = _observability_setting(settings)
     schedule_interval_seconds = _float_setting(
         settings,
         "schedule_interval_seconds",
@@ -258,11 +330,32 @@ def build_progress_ttl_controller(
     )
 
 
-def _int_setting(settings: JsonMapping, name: str, default: int) -> int:
+def _observability_setting(settings: JsonMapping) -> SchedulerObservabilityConfig:
+    """Parse the common controller observability object once."""
+    observability_raw = settings.get("observability", {})
+    if not isinstance(observability_raw, dict):
+        raise ValueError("additional_config.agentcache.observability must be an object")
+    return SchedulerObservabilityConfig(
+        enabled=_bool_setting(
+            observability_raw,
+            "enabled",
+            False,
+            scope="agentcache.observability",
+        ),
+        log_interval_seconds=_float_setting(
+            observability_raw,
+            "log_interval_seconds",
+            5.0,
+            scope="agentcache.observability",
+        ),
+    )
+
+
+def _int_setting(settings: JsonMapping, name: str, default: int, *, scope: str = "progress_ttl") -> int:
     """Read an exact integer policy value without accepting booleans."""
     value = settings.get(name, default)
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"progress_ttl.{name} must be an integer")
+        raise ValueError(f"{scope}.{name} must be an integer")
     return value
 
 
@@ -289,6 +382,17 @@ def _mode_setting(settings: JsonMapping, name: str, default: ProgressTTLMode) ->
         return ProgressTTLMode(value)
     except ValueError as exc:
         raise ValueError(f"progress_ttl.{name} must be one of: on, off, auto") from exc
+
+
+def _mori_mode_setting(settings: JsonMapping, name: str, default: MORIMode) -> MORIMode:
+    """Accept the full MORI mode, including the existing explicit configuration."""
+    value = settings.get(name, default.value)
+    if not isinstance(value, str):
+        raise ValueError(f"mori.{name} must be: full")
+    try:
+        return MORIMode(value)
+    except ValueError as exc:
+        raise ValueError(f"mori.{name} must be: full") from exc
 
 
 def _resume_order_setting(

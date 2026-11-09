@@ -39,6 +39,7 @@ class AgentIdentity:
         agent_role: Optional explicit or inferred lead/subagent role.
         spawn_reason: Optional open-ended agent type or spawn reason.
         request_id: Optional upstream correlation id; not part of Program identity.
+        lifecycle_token: Server-issued attempt receipt; API middleware replaces caller values.
     """
 
     program_id: str
@@ -51,6 +52,7 @@ class AgentIdentity:
     agent_role: str | None = None
     spawn_reason: str | None = None
     request_id: str | None = None
+    lifecycle_token: str | None = None
 
     def __post_init__(self) -> None:
         """Reject empty identities and incomplete blocking edges."""
@@ -61,6 +63,7 @@ class AgentIdentity:
             "agent_id": self.agent_id,
             "parent_program_id": self.parent_program_id,
             "request_id": self.request_id,
+            "lifecycle_token": self.lifecycle_token,
         }
         for name, value in identifiers.items():
             if value is not None and not value.strip():
@@ -83,6 +86,7 @@ class AgentIdentity:
             "agent_role": self.agent_role,
             "spawn_reason": self.spawn_reason,
             "request_id": self.request_id,
+            "lifecycle_token": self.lifecycle_token,
         }
         return {key: value for key, value in values.items() if value is not None}
 
@@ -171,6 +175,7 @@ def parse_agent_identity(
         agent_role=agent_role,
         spawn_reason=_context_string(context, "spawn_reason", "subagent_type", "agent_type"),
         request_id=_context_string(context, "request_id"),
+        lifecycle_token=_context_string(context, "lifecycle_token"),
     )
 
 

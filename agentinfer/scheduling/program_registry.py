@@ -11,7 +11,7 @@ protects each mutation from stale responses and reused external ids.
 from __future__ import annotations
 
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from agentinfer.scheduling.domain import (
     ProgramRef,
@@ -19,6 +19,7 @@ from agentinfer.scheduling.domain import (
     ProgramStatus,
     ProgramTokenObservation,
     ProgramView,
+    TokenObservationSource,
 )
 from agentinfer.scheduling.identity import AgentIdentity
 from agentinfer.scheduling.program_runtime import RuntimeProgram
@@ -26,6 +27,14 @@ from agentinfer.scheduling.program_runtime import RuntimeProgram
 
 class StaleProgramReferenceError(LookupError):
     """Raised when a mutation targets a missing or superseded Program generation."""
+
+
+@dataclass(frozen=True)
+class _RetiredProgramMetadata:
+    """Business hints surviving cache-owner retirement, without scheduling history."""
+
+    ref: ProgramRef
+    identity: AgentIdentity
 
 
 class ProgramRegistry:
@@ -41,6 +50,7 @@ class ProgramRegistry:
         self._last_generations: dict[str, int] = {}
         self._task_programs: dict[str, set[ProgramRef]] = {}
         self._children_by_parent_id: dict[str, set[ProgramRef]] = {}
+        self._retired_metadata: dict[str, _RetiredProgramMetadata] = {}
 
     def __bool__(self) -> bool:
         """Return whether the registry owns any live Program generation."""
@@ -70,6 +80,23 @@ class ProgramRegistry:
         if current is not None:
             self._apply_metadata(current, metadata)
             return current, False
+        retired = self._retired_metadata.get(metadata.program_id)
+        if retired is not None:
+            # Missing endpoint hints do not terminate an existing business
+            # relationship merely because its cache owner was evicted.
+            previous = retired.identity
+            metadata = replace(
+                metadata,
+                task_id=metadata.task_id if metadata.task_id is not None else previous.task_id,
+                parent_program_id=(
+                    metadata.parent_program_id if metadata.parent_program_id is not None else previous.parent_program_id
+                ),
+                blocks_parent=(
+                    metadata.blocks_parent if metadata.parent_program_id is not None else previous.blocks_parent
+                ),
+                agent_role=metadata.agent_role if metadata.agent_role is not None else previous.agent_role,
+                spawn_reason=metadata.spawn_reason if metadata.spawn_reason is not None else previous.spawn_reason,
+            )
         generation = self._last_generations.get(metadata.program_id, -1) + 1
         program = RuntimeProgram(
             ref=ProgramRef(metadata.program_id, generation),
@@ -85,6 +112,16 @@ class ProgramRegistry:
         )
         self._programs[metadata.program_id] = program
         self._last_generations[metadata.program_id] = generation
+        if retired is not None:
+            self._retired_metadata.pop(metadata.program_id)
+            parent_id = retired.identity.parent_program_id
+            if parent_id is not None:
+                refs = self._children_by_parent_id.get(parent_id)
+                if refs is not None:
+                    refs.discard(retired.ref)
+                    if not refs:
+                        self._children_by_parent_id.pop(parent_id)
+                self._refresh_parent(parent_id)
         self._attach_task(program)
         self._attach_parent_edge(program)
         self._refresh_parent(metadata.program_id)
@@ -117,7 +154,7 @@ class ProgramRegistry:
         return tuple(sorted(ref for ref in refs if self.get(ref) is not None))
 
     def children(self, parent: ProgramRef) -> tuple[ProgramRef, ...]:
-        """Return current blocking children for one exact live parent."""
+        """Return blocking child owners, including retired children still doing business work."""
         self.require(parent)
         refs = self._children_by_parent_id.get(parent.program_id, set())
         return tuple(sorted(ref for ref in refs if self._is_live_child_of(ref, parent.program_id)))
@@ -155,6 +192,7 @@ class ProgramRegistry:
             estimated_context_tokens=previous.estimated_context_tokens
             if total_tokens is None
             else max(0, total_tokens),
+            source=(TokenObservationSource.BACKEND_USAGE if total_tokens is not None else previous.source),
             observed_at_monotonic_s=(time.monotonic() if observed_at_monotonic_s is None else observed_at_monotonic_s),
         )
         program.step_count += 1
@@ -168,19 +206,80 @@ class ProgramRegistry:
             return None
         self._detach_task(program)
         self._detach_parent_edge(program)
-        child_refs = self._children_by_parent_id.pop(ref.program_id, set())
-        for child_ref in child_refs:
-            child = self.get(child_ref)
-            if child is None or child.parent_program_id != ref.program_id:
-                continue
-            child.parent_program_id = None
-            child.blocks_parent = False
+        self._clear_children(ref.program_id)
         program.blocking_children.clear()
         program.blocked_on_child = False
         program.state = ProgramState.TERMINATED
         program.backend_id = None
         self._programs.pop(ref.program_id)
         return program
+
+    def retire(self, ref: ProgramRef, *, lifecycle_token: str | None = None) -> RuntimeProgram | None:
+        """Remove scheduling ownership while retaining only business relationships.
+
+        The runtime validates that accepted inference has finished before using
+        this boundary. The old exact ref becomes stale immediately; no KV observations,
+        counters, backend assignment, or timers survive the next materialization.
+        """
+        program = self.get(ref)
+        if program is None:
+            return None
+        self._retired_metadata[ref.program_id] = _RetiredProgramMetadata(
+            ref,
+            AgentIdentity(
+                program_id=ref.program_id,
+                task_id=program.task_id,
+                parent_program_id=program.parent_program_id,
+                blocks_parent=program.blocks_parent,
+                expected_resume=program.expected_resume,
+                agent_role=program.agent_role,
+                spawn_reason=program.spawn_reason,
+                # This receipt can end only the retired business metadata;
+                # materialize deliberately never carries it into a new owner.
+                lifecycle_token=lifecycle_token,
+            ),
+        )
+        self._detach_task(program)
+        program.state = ProgramState.TERMINATED
+        program.backend_id = None
+        self._programs.pop(ref.program_id)
+        # Keep the parent edge: an evicted child's tool work still blocks its
+        # business parent, even though the child no longer owns cache capacity.
+        return program
+
+    def release_retired(self, program_id: str, *, lifecycle_token: str | None = None) -> bool:
+        """End retired business metadata, optionally requiring its latest receipt."""
+        if program_id in self._programs:
+            return False
+        retired = self._retired_metadata.get(program_id)
+        if retired is None:
+            return False
+        if lifecycle_token is not None and retired.identity.lifecycle_token != lifecycle_token:
+            return False
+        self._retired_metadata.pop(program_id)
+        parent_id = retired.identity.parent_program_id
+        if parent_id is not None:
+            refs = self._children_by_parent_id.get(parent_id)
+            if refs is not None:
+                refs.discard(retired.ref)
+                if not refs:
+                    self._children_by_parent_id.pop(parent_id)
+            self._refresh_parent(parent_id)
+        self._clear_children(program_id)
+        return True
+
+    def _clear_children(self, parent_id: str) -> None:
+        child_refs = self._children_by_parent_id.pop(parent_id, set())
+        for child_ref in child_refs:
+            child = self.get(child_ref)
+            if child is not None and child.parent_program_id == parent_id:
+                child.parent_program_id = None
+                child.blocks_parent = False
+            retired = self._retired_metadata.get(child_ref.program_id)
+            if retired is not None and retired.ref == child_ref and retired.identity.parent_program_id == parent_id:
+                self._retired_metadata[child_ref.program_id] = replace(
+                    retired, identity=replace(retired.identity, parent_program_id=None, blocks_parent=False)
+                )
 
     def _apply_metadata(self, program: RuntimeProgram, metadata: AgentIdentity) -> None:
         """Apply compatible hints without changing stable Program or task identity."""
@@ -252,4 +351,12 @@ class ProgramRegistry:
 
     def _is_live_child_of(self, child_ref: ProgramRef, parent_id: str) -> bool:
         child = self.get(child_ref)
-        return child is not None and child.blocks_parent and child.parent_program_id == parent_id
+        if child is not None:
+            return child.blocks_parent and child.parent_program_id == parent_id
+        retired = self._retired_metadata.get(child_ref.program_id)
+        return (
+            retired is not None
+            and retired.ref == child_ref
+            and retired.identity.blocks_parent
+            and retired.identity.parent_program_id == parent_id
+        )

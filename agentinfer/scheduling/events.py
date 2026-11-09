@@ -31,6 +31,7 @@ class SchedulingEventKind(str, Enum):
     PROGRAM_STATUS_CHANGED = "program_status_changed"
     PROGRAM_PAUSED = "program_paused"
     PROGRAM_MARKED_FOR_PAUSE = "program_marked_for_pause"
+    PROGRAM_PAUSE_CANCELLED = "program_pause_cancelled"
     PROGRAM_RESUMED = "program_resumed"
     PROGRAM_RELEASED = "program_released"
     CAPACITY_OBSERVED = "capacity_observed"
@@ -45,6 +46,7 @@ PROGRAM_SCOPED_EVENT_KINDS = frozenset(
         SchedulingEventKind.PROGRAM_STATUS_CHANGED,
         SchedulingEventKind.PROGRAM_PAUSED,
         SchedulingEventKind.PROGRAM_MARKED_FOR_PAUSE,
+        SchedulingEventKind.PROGRAM_PAUSE_CANCELLED,
         SchedulingEventKind.PROGRAM_RESUMED,
         SchedulingEventKind.PROGRAM_RELEASED,
     }
