@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -18,7 +19,7 @@ from agentinfer.agentbench.benchkit.evaluation import runner
 from agentinfer.agentbench.benchkit.evaluation.compare import compare_correctness, load_evaluation
 from agentinfer.agentbench.benchkit.evaluation.config import EvaluationConfig, load_evaluation_config
 from agentinfer.agentbench.benchkit.evaluation.inputs import digest, prepare_inputs
-from agentinfer.agentcache.entrypoints.bench import _normalize_delegated_argv
+from agentinfer.agentcache.entrypoints.bench import _normalize_delegated_argv, main as benchmark_main
 from tests.agentbench.test_compare import write_run
 
 
@@ -494,6 +495,48 @@ def test_cli_evaluation_without_config_uses_current_python(source, fake_harness,
     assert seen[0].harness_python == Path(sys.executable)
     assert seen[0].expected_harness_version == "4.1.0"
     assert seen[0].max_workers == 2
+
+
+@pytest.mark.parametrize("outcome", ["unresolved", "report_error", "no_completed"])
+def test_run_with_correctness_preserves_source_and_completed_scope(
+    source, fake_harness, monkeypatch, capsys, caplog, outcome
+):
+    update(source / "manifest.json", lambda d: d.update(status="completed"))
+    update(source / "summary.json", lambda d: d["lifecycle"].update(status="completed"))
+    fake_harness["astropy__astropy-0"] = "missing" if outcome == "report_error" else False
+    if outcome == "no_completed":
+        for path in (source / "tasks").glob("*/result.json"):
+            update(path, lambda d: d.update(outcome="failed"))
+        index = json.loads((source / "task_index.json").read_bytes())
+        for task in index["tasks"]:
+            task["outcome"] = "failed"
+        atomic_write_json(source / "task_index.json", index)
+        update(source / "summary.json", lambda d: d["tasks"].update(completed=0, failed=3))
+    originals = {path: path.read_bytes() for path in source.rglob("*") if path.is_file()}
+    run = AsyncMock(return_value=source)
+    monkeypatch.setattr("agentinfer.agentbench.benchkit.runner.run_benchmark", run)
+
+    code = benchmark_main(["vllm", "bench", "serve", "--agentinfer", "run", "--with-correctness"])
+
+    run.assert_awaited_once()
+    assert code == (0 if outcome == "unresolved" else 1)
+    assert all(path.read_bytes() == data for path, data in originals.items())
+    if outcome == "no_completed":
+        assert not (source / "evaluations").exists()
+        assert "no_completed_tasks" in caplog.text
+        return
+    outputs = list((source / "evaluations").glob("*/correctness.json"))
+    assert len(outputs) == 1
+    summary, manifest, results = load_evaluation(outputs[0])
+    assert json.loads(capsys.readouterr().out) == summary.model_dump()
+    assert summary.counts.model_dump() == {
+        "total": 2,
+        "resolved": 0,
+        "unresolved": 1 if outcome == "report_error" else 2,
+        "empty_patch": 0,
+        "error": 1 if outcome == "report_error" else 0,
+    }
+    assert set(results) == set(manifest["instance_ids"]) == {"astropy__astropy-0", "astropy__astropy-1"}
 
 
 def test_optional_config_defaults_and_relative_interpreter(tmp_path):

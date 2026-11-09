@@ -13,7 +13,7 @@ For post-run correctness, use `evaluate --result-path RUN_DIR [--config YAML] [-
 and `compare-correctness --baseline JSON --candidate JSON`.
 Omitting `--output-dir` creates a unique directory under the source run's `evaluations/`;
 existing output directories are not overwritten.
-See [Evaluate SWE-bench](../how-to/evaluate-swebench.md) for configuration,
+See [Evaluate SWE-bench](../how-to/run-benchmark.md#evaluate-swe-bench-verified-correctness) for configuration,
 artifacts and exit codes.
 
 ## `prepare`
@@ -40,6 +40,8 @@ vllm bench serve --agentinfer run --config PATH [OVERRIDES]
 | Argument | Type or value | Configuration field |
 | --- | --- | --- |
 | `--config PATH` | Optional file path | Configuration file |
+| `--with-correctness` | Disabled by default | Evaluate completed tasks after the run finalizes successfully |
+| `--evaluation-config PATH` | Optional file path | Evaluation configuration; requires `--with-correctness` |
 | `--task-num INT` | `>= 1` | `experiment.task_num` |
 | `--result-dir PATH` | Directory path | `experiment.result_dir` |
 | `--max-concurrency INT` | `>= 1` | `experiment.max_concurrency` |
@@ -57,6 +59,15 @@ vllm bench serve --agentinfer run --config PATH [OVERRIDES]
 Precedence is built-in defaults, YAML, then explicit CLI overrides. Relative YAML paths resolve from the YAML file;
 CLI paths resolve from the current directory. Unknown YAML fields are rejected. For Router runs, use `--base-url`
 for the transparent upstream and `--metrics-url` for vLLM metrics.
+
+With `--with-correctness`, evaluation configuration is validated before the run, defaulting to the current Python
+environment and standard evaluation settings. Run and evaluation configurations are separate. After successful
+finalization, the actual run directory is evaluated, with results in a unique directory under its `evaluations/`.
+Run exceptions or interruption skip evaluation and propagate the original failure. Evaluation returns 0 for normal
+scoring (including unresolved), 1 for evaluation errors, 2 for configuration errors, and 130 for evaluation interruption.
+Failed tasks do not prevent completed tasks from being evaluated; no completed tasks yields exit 1.
+See [Evaluate SWE-bench](../how-to/run-benchmark.md#evaluate-swe-bench-verified-correctness)
+for examples and environment requirements.
 
 ## `summarize`
 
