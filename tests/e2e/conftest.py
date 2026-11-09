@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
-"""Pytest options shared by perf, AgentBench, and Trace Replay E2E."""
+"""Shared pytest options for functional and performance E2E tests."""
 
 from __future__ import annotations
 
@@ -8,13 +8,13 @@ import pytest
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    group = parser.getgroup("e2e", "Shared E2E options")
+    group = parser.getgroup("e2e_shared", "Shared E2E options")
     group.addoption(
         "--test-config-file",
         action="store",
         default=None,
         metavar="PATH",
-        help=("Case JSON path. Perf scenario comes from the JSON (or a cases/baseline|agentinfer path)."),
+        help="Case JSON path for functional or performance E2E tests",
     )
     group.addoption(
         "--task-num",
