@@ -9,8 +9,10 @@ vllm bench serve --agentinfer
 
 Other `vllm` commands are delegated unchanged to the upstream vLLM CLI.
 
-For post-run correctness, use `evaluate --result-path RUN_DIR [--config YAML]`
+For post-run correctness, use `evaluate --result-path RUN_DIR [--config YAML] [--output-dir DIR]`
 and `compare-correctness --baseline JSON --candidate JSON`.
+Omitting `--output-dir` creates a unique directory under the source run's `evaluations/`;
+existing output directories are not overwritten.
 See [Evaluate SWE-bench](../how-to/evaluate-swebench.md) for configuration,
 artifacts and exit codes.
 

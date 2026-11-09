@@ -8,8 +8,9 @@ vllm bench serve --agentinfer
 
 未列出的 `vllm` 命令会原样委托给上游 vLLM CLI。
 
-运行后的精度评测使用 `evaluate --result-path RUN_DIR [--config YAML]`；
+运行后的精度评测使用 `evaluate --result-path RUN_DIR [--config YAML] [--output-dir DIR]`；
 逐题回归比较使用 `compare-correctness --baseline JSON --candidate JSON`，不允许任务退化。
+省略 `--output-dir` 时，在源运行的 `evaluations/` 下创建唯一目录；已有目标目录不覆盖。
 配置文件可选，默认使用当前 Python 环境；该环境需要安装 `swebench==4.1.0`。
 配置、产物和退出码见[验证 SWE-bench 精度](../how-to/evaluate-swebench.md)。
 
