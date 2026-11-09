@@ -13,9 +13,20 @@ The workflow requires:
 - Claude Code, tmux, and Git, with Claude Code authentication completed.
 - A model that supports Anthropic `POST /v1/messages`.
 
+Run Claude's `plan-subagent` profile as a non-root user (`id -u` must not be `0`). This profile uses
+`--permission-mode bypassPermissions`; Claude rejects root/sudo execution with
+`--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons`.
+Use an account that can read the code and dataset and write the workspace and results. With `--with-correctness`,
+the same account also needs Docker access; verify it with `docker info`. Otherwise, run standalone `evaluate`
+after generation in an environment with Docker access.
+
 At startup, the framework selects `Yes, I trust this folder` in Claude's workspace trust dialog and confirms only
 once that option is highlighted, including when `No, exit` is the default. Unrecognized selections are not confirmed.
 While `esc to interrupt` is visible, Claude is treated as busy even if its input prompt is also shown.
+Plan approval recognizes wrapped text and case changes, including `Yes, and switch to BYPASS PERMISSIONS`.
+If the same approval prompt remains visible for 5 seconds, confirmation is retried once to handle an ignored initial key.
+File edits and other highlighted Yes confirmations use the same bounded retry. It resets when the prompt clears;
+confirmation is not retried when Yes is no longer selected.
 
 Create an environment and install AgentInfer from the repository root:
 

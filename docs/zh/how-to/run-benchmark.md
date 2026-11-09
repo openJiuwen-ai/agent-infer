@@ -13,9 +13,18 @@ Progress-TTL Agent 感知调度器。BenchKit 通过相同的 Request Proxy 记�
 - Claude Code、tmux 和 Git，并已完成 Claude Code 身份验证。
 - 支持 Anthropic `POST /v1/messages` 的模型。
 
+Claude 的 `plan-subagent` 模式必须使用非 root 账号运行（`id -u` 不为 `0`）。该模式使用
+`--permission-mode bypassPermissions`，以 root/sudo 身份启动会被 Claude 拒绝，并提示
+`--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons`。
+请切换到有代码、数据读取权限及工作区、结果目录写入权限的普通账号。使用 `--with-correctness` 时，
+同一账号还必须能访问 Docker，可先运行 `docker info` 验证；否则生成结束后，在有 Docker 权限的环境单独运行 `evaluate`。
+
 Claude 启动时，框架会在工作区信任提示中选择 `Yes, I trust this folder`，确认选中后再继续，
 兼容默认选中 `No, exit` 的界面。无法识别选项时不自动确认。
 终端显示 `esc to interrupt` 时视为仍在执行，不因同时显示输入框而触发空闲终止。
+计划审批提示兼容终端换行与大小写变化，包括 `Yes, and switch to BYPASS PERMISSIONS` 选项。
+同一审批提示在确认后持续显示 5 秒时，最多重试一次，避免界面尚未就绪时丢失按键导致停滞。
+文件编辑等已高亮 Yes 的确认框也采用相同的受限重试；提示消失后重置，未选中 Yes 时不重试确认。
 
 在仓库根目录创建环境并安装 AgentInfer：
 

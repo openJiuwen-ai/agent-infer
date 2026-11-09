@@ -121,6 +121,39 @@ def test_controller_suppresses_same_yes_prompt_across_dynamic_updates() -> None:
     assert controller.process(InteractionContext("❯ 1. Yes", None, 2.5, state)).kind == "send_keys"
 
 
+@pytest.mark.parametrize("profile", ["single", "plan-subagent"])
+def test_edit_confirmation_retries_once_and_resets_after_prompt_clears(profile: str) -> None:
+    controller = InteractionController(handler_types_for_profile(profile), enable_idle_detection=profile == "single")
+    state = InteractionState(startup_dismissed=True)
+    terminal = (
+        "Do you want to make this edit to separable.py?\n"
+        "❯ 1. Yes\n  2. Yes, and switch to accept edits\n  3. No\nEsc to cancel · Tab to amend"
+    )
+
+    assert controller.process(InteractionContext(terminal, None, 10.0, state)).keys == "Enter"
+    assert controller.process(InteractionContext(terminal, None, 14.9, state)).kind == "none"
+    assert controller.process(InteractionContext(terminal, None, 15.0, state)).keys == "Enter"
+    assert controller.process(InteractionContext(terminal, None, 20.0, state)).kind == "none"
+    assert controller.process(InteractionContext(terminal, None, 300.0, state)).kind == "none"
+    assert state.auto_yes_confirmations == 2
+    assert state.auto_generic_selections == 0
+    controller.process(InteractionContext("Working", None, 301.0, state))
+    assert state.yes_confirmation_attempts == 0
+    assert state.yes_confirmation_sent_at is None
+    assert controller.process(InteractionContext(terminal, None, 302.0, state)).keys == "Enter"
+
+
+def test_yes_confirmation_does_not_retry_when_selection_changes_to_no() -> None:
+    controller = InteractionController((YesConfirmationHandler,), enable_idle_detection=False)
+    state = InteractionState(startup_dismissed=True)
+    yes = "Do you want to make this edit?\n❯ 1. Yes\n  2. No"
+    no = "Do you want to make this edit?\n  1. Yes\n❯ 2. No"
+    assert controller.process(InteractionContext(yes, None, 0.0, state)).keys == "Enter"
+    assert controller.process(InteractionContext(no, None, 5.0, state)).kind == "none"
+    assert state.yes_confirmation_attempts == 0
+    assert state.auto_yes_confirmations == 1
+
+
 def test_no_progress_handler_requests_one_check_per_idle_period() -> None:
     handler = NoProgressHandler()
     state = InteractionState()
@@ -170,6 +203,40 @@ def test_plan_prompt_suppression_ignores_dynamic_updates_and_resets_after_disapp
 
     exit_plan = "Exit plan mode?\nClaude wants to exit plan mode\n❯ Yes"
     assert controller.process(InteractionContext(exit_plan, None, 2.5, state)).kind == "send_keys"
+
+
+@pytest.mark.parametrize(
+    "option",
+    ["Yes, and bypass permissions", "Yes, and switch to BYPASS PERMISSIONS (no further prompts)"],
+)
+def test_plan_approval_handles_wrapping_and_does_not_depend_on_generic_yes_state(option: str) -> None:
+    controller = InteractionController(handler_types_for_profile("plan-subagent"), enable_idle_detection=False)
+    state = InteractionState(startup_dismissed=True, yes_confirmation_visible=True)
+    terminal = (
+        "Ready to code?\nClaude has written up a plan and is ready to\nexecute. Would you like to proceed?\n"
+        f"❯ 1. {option}\n  2. Yes, manually approve edits\n  3. Tell Claude what to change"
+    )
+    action = controller.process(InteractionContext(terminal, None, 1.0, state))
+    assert (action.kind, action.keys) == ("send_keys", "Enter")
+    assert state.auto_plan_approvals == 1
+    assert state.auto_yes_confirmations == 0
+    assert controller.process(InteractionContext(terminal, None, 1.5, state)).kind == "none"
+
+
+def test_plan_approval_retries_once_and_resets_after_prompt_clears() -> None:
+    controller = InteractionController(handler_types_for_profile("plan-subagent"), enable_idle_detection=False)
+    state = InteractionState(startup_dismissed=True)
+    terminal = "Claude has written up a plan and is ready to execute.\n❯ 1. Yes, and switch to BYPASS PERMISSIONS"
+
+    assert controller.process(InteractionContext(terminal, None, 10.0, state)).keys == "Enter"
+    assert controller.process(InteractionContext(terminal, None, 14.9, state)).kind == "none"
+    assert controller.process(InteractionContext(terminal, None, 15.0, state)).keys == "Enter"
+    assert controller.process(InteractionContext(terminal, None, 20.0, state)).kind == "none"
+    assert state.auto_plan_approvals == 2
+    controller.process(InteractionContext("Working", None, 21.0, state))
+    assert state.plan_approval_attempts == 0
+    assert controller.process(InteractionContext(terminal, None, 22.0, state)).keys == "Enter"
+    assert state.plan_approval_attempts == 1
 
 
 def test_generic_selection_handles_non_yes_ask_user_question() -> None:

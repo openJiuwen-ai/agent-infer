@@ -14,7 +14,11 @@ class InteractionState:
 
     startup_dismissed: bool = False
     yes_confirmation_visible: bool = False
+    yes_confirmation_attempts: int = 0
+    yes_confirmation_sent_at: float | None = None
     plan_approval_visible: bool = False
+    plan_approval_attempts: int = 0
+    plan_approval_sent_at: float | None = None
     generic_selection_visible: bool = False
     auto_yes_confirmations: int = 0
     auto_plan_approvals: int = 0
@@ -99,17 +103,26 @@ class StartupDialogHandler:
 def _plan_approval_visible(terminal: str) -> bool:
     """Return whether either supported plan approval prompt is visible."""
 
+    text = " ".join(terminal.lower().split())
     return (
-        "Claude has written up a plan and is ready to execute." in terminal
-        and "Yes, and bypass permissions" in terminal
-    ) or ("Exit plan mode?" in terminal and "Claude wants to exit plan mode" in terminal and "Yes" in terminal)
+        "claude has written up a plan and is ready to execute." in text
+        and ("yes, and bypass permissions" in text or "yes, and switch to bypass permissions" in text)
+    ) or ("exit plan mode?" in text and "claude wants to exit plan mode" in text and "yes" in text)
 
 
 class PlanApprovalHandler:
-    """Accept supported plan-approval prompts once per appearance."""
+    """Confirm supported plan approvals, retrying once if the prompt persists."""
 
     def recognize(self, ctx: InteractionContext) -> bool:
-        return not ctx.state.plan_approval_visible and _plan_approval_visible(ctx.terminal)
+        if not _plan_approval_visible(ctx.terminal):
+            return False
+        state = ctx.state
+        # A newly rendered dialog may ignore the first key; retry once after it settles.
+        return not state.plan_approval_visible or (
+            state.plan_approval_attempts < 2
+            and state.plan_approval_sent_at is not None
+            and ctx.elapsed_seconds - state.plan_approval_sent_at >= 5.0
+        )
 
     def act(self, ctx: InteractionContext) -> InteractionAction:
         return _approve_plan(ctx)
@@ -117,6 +130,8 @@ class PlanApprovalHandler:
 
 def _approve_plan(ctx: InteractionContext) -> InteractionAction:
     ctx.state.plan_approval_visible = True
+    ctx.state.plan_approval_attempts += 1
+    ctx.state.plan_approval_sent_at = ctx.elapsed_seconds
     ctx.state.auto_plan_approvals += 1
     return InteractionAction(kind="send_keys", keys="Enter")
 
@@ -147,15 +162,22 @@ def _yes_confirmation_visible(terminal: str) -> bool:
 
 
 class YesConfirmationHandler:
-    """Select a Yes confirmation once per prompt appearance."""
+    """Confirm a selected Yes, retrying once if the prompt persists."""
 
     def recognize(self, ctx: InteractionContext) -> bool:
-        if ctx.state.yes_confirmation_visible or _plan_approval_visible(ctx.terminal):
+        if _plan_approval_visible(ctx.terminal) or not _yes_confirmation_visible(ctx.terminal):
             return False
-        return _yes_confirmation_visible(ctx.terminal)
+        state = ctx.state
+        return not state.yes_confirmation_visible or (
+            state.yes_confirmation_attempts < 2
+            and state.yes_confirmation_sent_at is not None
+            and ctx.elapsed_seconds - state.yes_confirmation_sent_at >= 5.0
+        )
 
     def act(self, ctx: InteractionContext) -> InteractionAction:
         ctx.state.yes_confirmation_visible = True
+        ctx.state.yes_confirmation_attempts += 1
+        ctx.state.yes_confirmation_sent_at = ctx.elapsed_seconds
         ctx.state.auto_yes_confirmations += 1
         return InteractionAction(kind="send_keys", keys="Enter")
 
@@ -271,8 +293,12 @@ class InteractionController:
     def process(self, ctx: InteractionContext) -> InteractionAction:
         if ctx.state.yes_confirmation_visible and not _yes_confirmation_visible(ctx.terminal):
             ctx.state.yes_confirmation_visible = False
+            ctx.state.yes_confirmation_attempts = 0
+            ctx.state.yes_confirmation_sent_at = None
         if ctx.state.plan_approval_visible and not _plan_approval_visible(ctx.terminal):
             ctx.state.plan_approval_visible = False
+            ctx.state.plan_approval_attempts = 0
+            ctx.state.plan_approval_sent_at = None
         if ctx.state.generic_selection_visible and not _generic_selection_visible(ctx.terminal):
             ctx.state.generic_selection_visible = False
             ctx.state.generic_selection_attempts = 0
