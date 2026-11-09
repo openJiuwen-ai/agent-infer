@@ -14,5 +14,4 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         parser,
         group_name="tracereplay_e2e",
         group_description="Trace Replay functional E2E options (inferact, tracelab, agentx)",
-        cases_help="Replay case JSON under tests/e2e/function/tracereplay/<suite>/cases/",
     )

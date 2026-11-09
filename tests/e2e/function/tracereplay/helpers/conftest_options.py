@@ -12,30 +12,10 @@ def register_replay_e2e_options(
     *,
     group_name: str,
     group_description: str,
-    cases_help: str,
 ) -> None:
+    """Register Trace Replay options. Shared E2E flags live in tests/e2e/conftest.py."""
+
     group = parser.getgroup(group_name, group_description)
-    group.addoption(
-        "--test-config-file",
-        action="store",
-        default=None,
-        metavar="PATH",
-        help=cases_help,
-    )
-    group.addoption(
-        "--task-num",
-        action="store",
-        type=int,
-        default=None,
-        help="Override benchmark_params task-num",
-    )
-    group.addoption(
-        "--max-concurrency",
-        action="store",
-        type=int,
-        default=None,
-        help="Override benchmark_params max-concurrency",
-    )
     group.addoption(
         "--bench-config",
         action="store",
