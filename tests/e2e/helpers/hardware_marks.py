@@ -136,8 +136,17 @@ def resolve_pytest_marks(mark_field: Any) -> list[pytest.MarkDecorator]:
             hardware = item["hardware_marks"]
             if not isinstance(hardware, dict):
                 raise ValueError(f"mark.hardware_marks must be a dict, got {type(hardware).__name__}")
-            res = hardware.get("res")
+            res_raw = hardware.get("res")
+            if not isinstance(res_raw, dict) or not res_raw:
+                raise ValueError(f"hardware_marks res must be a non-empty dict, got {res_raw!r}")
+            res: dict[str, str] = {}
+            for platform, resource in res_raw.items():
+                if not isinstance(platform, str) or not isinstance(resource, str):
+                    raise ValueError(f"hardware_marks res entries must be strings, got {platform!r}: {resource!r}")
+                res[platform] = resource
             num_cards = hardware.get("num_cards", 1)
+            if isinstance(num_cards, bool) or not isinstance(num_cards, int):
+                raise ValueError(f"num_cards must be a positive int, got {num_cards!r}")
             marks.extend(hardware_marks(res=res, num_cards=num_cards))
         elif isinstance(item, str) and item.strip():
             marks.append(getattr(pytest.mark, item.strip()))
