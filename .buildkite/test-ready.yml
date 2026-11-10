@@ -14,18 +14,18 @@ steps:
       - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose -f docker/docker-compose.yml build --pull agentinfer-ci
       - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-ci-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu"
 
-  - group: ":card_index_dividers: GPU Tests"
+  # GPU smoke for the AgentInfer serve flag. Not the tests/e2e suite.
+  - label: "smoke: agentinfer serve"
     depends_on: ci-image
-    steps:
-      - label: "e2e · serve-flag"
-        commands:
-          - AGENTINFER_E2E_MODEL=Qwen/Qwen3-0.6B pytest -sv -m gpu_test tests/agentcache/entrypoints/test_serve_flag_e2e.py
-        timeout_in_minutes: 25
-        mirror_hardwares: l20_1
+    commands:
+      - AGENTINFER_E2E_MODEL=Qwen/Qwen3-0.6B pytest -sv -m gpu_test tests/agentcache/entrypoints/test_serve_flag_e2e.py
+    timeout_in_minutes: 25
+    mirror_hardwares: l20_1
 
-  # l20_1 and l20_2 are the same machine / Docker daemon, so reuse ci-image.
+  # Functional E2E. l20_1 and l20_2 share one Docker daemon, so reuse ci-image.
   # DSH still runs on the l20_2 queue to reserve both GPUs.
-  - group: ":card_index_dividers: DSH functional"
+  # e2e accuracy has no ready step yet, so that group is omitted.
+  - group: ":card_index_dividers: e2e function"
     depends_on: ci-image
     steps:
       # One step on the 2-GPU queue: test-user, then both 8x4 profiles.
@@ -33,7 +33,7 @@ steps:
       # (/home/models). Skip useradd when test-user exists. The step stays
       # root so plan-subagent can sudo -u test-user. single stays root.
       # DSH is /usr/local/bin/dsh.
-      - label: "e2e · dsh swebench"
+      - label: "dsh swebench"
         mirror_hardwares: l20_2
         env:
           AGENTINFER_CI_AS_ROOT: "1"
@@ -64,7 +64,7 @@ steps:
       - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose -f docker/docker-compose.yml build --pull agentinfer-cpu
       - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-cpu-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-cpu"
 
-  - group: ":card_index_dividers: Unit Tests"
+  - group: ":card_index_dividers: ut"
     depends_on: ci-image-cpu
     steps:
       - label: "ut"
