@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
-"""Post-run functional checks for AgentBench E2E cases (DSH on SWE-bench)."""
+"""Post-run artifact validation for DSH SWE-bench functional E2E cases."""
 
 from __future__ import annotations
 

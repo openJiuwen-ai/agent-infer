@@ -20,6 +20,15 @@ dev = [
 addopts = ["--import-mode=importlib"]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    # Same tags as vllm-omni tests.helpers.mark. res keys are accelerator
+    # platforms, not the device-class mark "gpu".
+    "gpu: [hardware-platform] Tests that run on GPU (auto-added)",
+    "cuda: [hardware-platform] [gpu] Tests that run on CUDA (auto-added)",
+    "L20: [hardware-resource] [cuda] Tests that require L20 GPU",
+    "cards_1: [hardware-cards] Tests that require 1 accelerator card",
+    "cards_2: [hardware-cards] Tests that require 2 accelerator cards",
+]
 
 [tool.setuptools.packages.find]
 include = ["agentinfer*"]

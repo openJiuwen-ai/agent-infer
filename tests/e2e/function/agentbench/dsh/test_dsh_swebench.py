@@ -12,7 +12,8 @@ from tests.e2e.helpers.benchmark import run_benchmark, validate_completed_run
 from tests.e2e.helpers.case_loader import E2EConfig, load_case_file
 
 
-@pytest.mark.e2e_functional
+@pytest.mark.e2e_function
+@pytest.mark.gpu_test
 def test_dsh_swebench(pytestconfig: pytest.Config) -> None:
     """Run one DSH SWE-bench case and assert standard artifacts plus DSH-specific checks."""
 

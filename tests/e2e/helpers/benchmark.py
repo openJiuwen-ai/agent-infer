@@ -21,7 +21,7 @@ from .case_loader import (
     prepare_runs_as_root,
     resolve_benchmark_run_as_user,
 )
-from .functional import validate_dsh_swebench_run
+from .dsh_swebench_validation import validate_dsh_swebench_run
 from .server import managed_vllm
 
 

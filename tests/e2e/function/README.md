@@ -38,8 +38,8 @@ The `single` case uses the same pytest entry with `cases/glm52_dsh_8x4.json`.
 `plan-subagent` on root should pass `--benchmark-run-as-user` (or edit `benchmark-run-as-user` in the case JSON).
 
 Case JSON sets `"functional_validation": "dsh_swebench"`; post-run checks live in
-[`../helpers/functional.py`](../helpers/functional.py) (summary/manifest, no HMR startup failure, DSH trace,
-`dsh-home` confinement).
+[`../helpers/dsh_swebench_validation.py`](../helpers/dsh_swebench_validation.py)
+(summary/manifest, no HMR startup failure, DSH trace, `dsh-home` confinement).
 
 | Concern | `perf/` | `function/agentbench/dsh` | `function/tracereplay` |
 | ------- | ------- | ------------------------- | ---------------------- |
