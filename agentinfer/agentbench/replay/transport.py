@@ -70,19 +70,29 @@ class ReplayTransport:
             raise ValueError("Backend cannot replay zero output tokens exactly")
         return node.planned_output_tokens
 
+    async def _models(self, base_url: str) -> list[dict[str, object]]:
+        response = await self.client.get(f"{base_url}/v1/models", headers=self._auth_headers())
+        response.raise_for_status()
+        models = response.json().get("data", [])
+        return [item for item in models if isinstance(item, dict)]
+
     async def validate_tracelab_context(self, plan: ReplayPlan, warmup_tokens: int) -> None:
         """Reject an impossible token-exact plan before filling the Backend cache."""
 
-        response = await self.client.get(f"{self.upstream}/v1/models", headers=self._auth_headers())
-        response.raise_for_status()
-        models = response.json().get("data", [])
-        model = next(
-            (item for item in models if isinstance(item, dict) and item.get("id") == self.config.backend.model),
-            None,
-        )
+        models = await self._models(self.upstream)
+        model = next((item for item in models if item.get("id") == self.config.backend.model), None)
         if model is None:
             raise ValueError(f"TraceLab model {self.config.backend.model!r} is not served by the Backend")
         limit = model.get("max_model_len")
+        tokenizer_url = self.config.backend.resolved_tokenizer_base_url.rstrip("/")
+        if (not isinstance(limit, int) or limit <= 0) and tokenizer_url != self.upstream:
+            # A gRPC router in front of the workers serves a /v1/models list built from GetModelInfo, which has no
+            # max_model_len; the worker named by tokenizer_base_url is the one that reports and enforces it.
+            served = next(
+                (item for item in await self._models(tokenizer_url) if item.get("id") == self.config.backend.model),
+                None,
+            )
+            limit = served.get("max_model_len") if served is not None else None
         if not isinstance(limit, int) or limit <= 0:
             raise ValueError("Backend /v1/models did not report a positive max_model_len")
         if warmup_tokens + 1 > limit:
