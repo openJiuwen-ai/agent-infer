@@ -5,6 +5,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 from ..artifacts.correctness import EvaluationSummary, TaskCorrectness
 from ..metrics.correctness import correctness_metrics
@@ -65,7 +66,7 @@ def load_evaluation(path: Path) -> tuple[EvaluationSummary, dict, dict[str, dict
 
 
 def compare_correctness(baseline: Path, candidate: Path) -> dict:
-    report = {"status": "insufficient_evidence", "reasons": []}
+    report: dict[str, Any] = {"status": "insufficient_evidence", "reasons": []}
     try:
         base, bm, bt = load_evaluation(baseline)
         cand, cm, ct = load_evaluation(candidate)
