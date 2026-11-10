@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.e2e.function.agentbench.dsh.dsh_swebench_validation import validate_dsh_swebench_run
 from tests.e2e.helpers.benchmark import run_benchmark, validate_completed_run
 from tests.e2e.helpers.case_loader import E2EConfig, load_case_file
 
@@ -33,7 +34,8 @@ def test_dsh_swebench(pytestconfig: pytest.Config) -> None:
             benchmark_run_as_user_set=True,
         )
     run_dir = run_benchmark(config)
-    summary = validate_completed_run(run_dir, functional_validation=config.case.functional_validation)
+    summary = validate_completed_run(run_dir)
+    validate_dsh_swebench_run(run_dir)
     print(
         f"[dsh-swebench:{config.scenario.value}] completed: "
         f"tasks={summary['tasks']['completed']} requests={summary['requests']['requests']} "

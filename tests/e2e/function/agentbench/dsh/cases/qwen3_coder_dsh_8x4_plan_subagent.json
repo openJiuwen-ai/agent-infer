@@ -1,7 +1,6 @@
 {
   "test_name": "qwen3_coder_dsh_8x4_plan_subagent",
   "scenario": "baseline",
-  "functional_validation": "dsh_swebench",
   "mark": [
     {
       "hardware_marks": {

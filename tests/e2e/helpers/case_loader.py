@@ -87,7 +87,6 @@ class BenchmarkCase:
     deploy: VllmDeployConfig
     benchmark_params: dict[str, Any]
     wait_for_vllm_ready: bool
-    functional_validation: str | None
 
 
 @dataclass(frozen=True)
@@ -349,11 +348,6 @@ def _parse_case(payload: dict[str, Any], *, scenario: PerfScenario) -> Benchmark
         case_label=f"{scenario.value} case {test_name!r}",
     )
 
-    functional_raw = payload.get("functional_validation")
-    functional_validation = (
-        str(functional_raw).strip() if isinstance(functional_raw, str) and str(functional_raw).strip() else None
-    )
-
     return BenchmarkCase(
         test_name=test_name,
         scenario=scenario,
@@ -362,7 +356,6 @@ def _parse_case(payload: dict[str, Any], *, scenario: PerfScenario) -> Benchmark
         deploy=deploy,
         benchmark_params=dict(benchmark_params),
         wait_for_vllm_ready=wait_for_vllm_ready,
-        functional_validation=functional_validation,
     )
 
 
