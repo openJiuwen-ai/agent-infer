@@ -179,7 +179,7 @@ def test_no_progress_handler_disabled_in_plan_subagent() -> None:
 def test_no_progress_handler_resets_idle_timer_while_claude_is_busy() -> None:
     handler = NoProgressHandler()
     state = InteractionState()
-    transcript = [{"type": "assistant"} for _ in range(20)]
+    transcript: list[dict[str, object]] = [{"type": "assistant"} for _ in range(20)]
     busy = "✽ Working… (25s)\n❯\n⏵⏵ accept edits on · esc to interrupt"
 
     assert handler.recognize(InteractionContext("❯", transcript, 100.0, state)) is False
@@ -290,3 +290,58 @@ def test_generic_selection_does_not_claim_yes_prompt() -> None:
     assert action.kind == "send_keys"
     assert state.auto_yes_confirmations == 1
     assert state.auto_generic_selections == 0
+
+
+@pytest.mark.parametrize(
+    "terminal",
+    [
+        "Do you want to make this edit to a.py?\n❯ 1. Yes\n  2. No\nEsc to cancel",
+        "Plan A\nClaude has written up a plan and is ready to execute.\n❯ 1. Yes, and bypass permissions",
+        "Question A\n❯ 1. Option A\n  2. Option B\nEnter to select",
+    ],
+)
+def test_new_confirmation_without_blank_frame_gets_its_own_retries(terminal: str) -> None:
+    controller = _selection_controller()
+    state = InteractionState(startup_dismissed=True)
+    for elapsed in (0, 5):
+        assert controller.process(InteractionContext(terminal, None, elapsed, state)).keys == "Enter"
+    changed = terminal.replace("a.py", "b.py").replace("Plan A", "Plan B").replace("Question A", "Question B")
+    assert controller.process(InteractionContext(changed, None, 6, state)).keys == "Enter"
+    assert controller.process(InteractionContext(changed, None, 10.9, state)).kind == "none"
+    assert controller.process(InteractionContext(changed, None, 11, state)).keys == "Enter"
+    assert controller.process(InteractionContext(changed, None, 60, state)).kind == "none"
+
+
+@pytest.mark.parametrize("profile", ["single", "plan-subagent"])
+def test_consecutive_tool_calls_with_same_dialog_have_separate_retries(profile: str) -> None:
+    controller = InteractionController(handler_types_for_profile(profile), enable_idle_detection=False)
+    state = InteractionState(startup_dismissed=True)
+    terminal = "Do you want to make this edit to a.py?\n❯ 1. Yes\n  2. No"
+    first: dict[str, object] = {
+        "type": "assistant",
+        "message": {"content": [{"type": "tool_use", "id": "edit-1", "name": "Edit"}]},
+    }
+    transcript: list[dict[str, object]] = [first]
+    for elapsed in (0, 5):
+        assert controller.process(InteractionContext(terminal, transcript, elapsed, state)).keys == "Enter"
+    transcript += [
+        {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "edit-1"}]}},
+        first,  # Claude may repeat an assistant tool-use record after its result.
+        {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "edit-2", "name": "Edit"}]}},
+    ]
+    assert controller.process(InteractionContext(terminal, transcript, 6, state)).keys == "Enter"
+    assert controller.process(InteractionContext(terminal + "\n⠋ Working (10s)", transcript, 7, state)).kind == "none"
+
+
+def test_transcript_arrival_and_tool_result_do_not_reset_same_dialog() -> None:
+    controller = _selection_controller()
+    state = InteractionState(startup_dismissed=True)
+    terminal = "Do you want to make this edit to a.py?\n❯ 1. Yes\n  2. No"
+    assert controller.process(InteractionContext(terminal, None, 0, state)).keys == "Enter"
+    transcript: list[dict[str, object]] = [
+        {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "edit-1"}]}}
+    ]
+    assert controller.process(InteractionContext(terminal, transcript, 1, state)).kind == "none"
+    assert controller.process(InteractionContext(terminal, transcript, 5, state)).keys == "Enter"
+    transcript.append({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "edit-1"}]}})
+    assert controller.process(InteractionContext(terminal, transcript, 6, state)).kind == "none"

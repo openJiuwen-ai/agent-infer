@@ -11,6 +11,8 @@ from ..artifacts.correctness import EvaluationSummary, TaskCorrectness
 from ..metrics.correctness import correctness_metrics
 from .inputs import digest, json_digest, read_object
 
+_COMPARISON_CONFIG_KEYS = ("max_workers", "timeout_seconds", "overall_timeout_seconds", "cleanup_timeout_seconds")
+
 
 def _artifact(root: Path, relative: str) -> Path:
     path = (root / relative).resolve()
@@ -26,6 +28,19 @@ def load_evaluation(path: Path) -> tuple[EvaluationSummary, dict, dict[str, dict
     manifest = read_object(root / summary.manifest_path)
     if manifest.get("schema_version") != "1" or manifest.get("adapter_version") != "1":
         raise ValueError("unsupported evaluation schema/adapter")
+    for field, expected_type in (
+        ("config", dict),
+        ("images", dict),
+        ("errors", list),
+        ("input_hashes", dict),
+        ("output_hashes", dict),
+    ):
+        if not isinstance(manifest.get(field), expected_type):
+            raise ValueError(f"invalid or missing evaluation manifest field: {field}")
+    if missing := set(_COMPARISON_CONFIG_KEYS) - manifest["config"].keys():
+        raise ValueError(f"missing evaluation config fields: {', '.join(sorted(missing))}")
+    if any(not isinstance(value, dict) for value in manifest["images"].values()):
+        raise ValueError("invalid evaluation manifest field: images entries must be objects")
     if manifest.get("status") not in {"completed", "failed"} or not manifest.get("finished_at"):
         raise ValueError("evaluation is not finalized")
     if (manifest["source_run_id"], manifest["evaluation_id"]) != (summary.source_run_id, summary.evaluation_id):
@@ -35,9 +50,10 @@ def load_evaluation(path: Path) -> tuple[EvaluationSummary, dict, dict[str, dict
         raise ValueError("missing output hashes")
     if not {"inputs/dataset.json", "inputs/task_plan.json", "inputs/predictions.jsonl"} <= inputs.keys():
         raise ValueError("missing input hashes")
-    for relative, expected in {**inputs, **outputs}.items():
-        if digest(_artifact(root, relative).read_bytes()) != expected:
-            raise ValueError(f"artifact hash mismatch: {relative}")
+    for hashes in (inputs, outputs):
+        for relative, expected in hashes.items():
+            if digest(_artifact(root, relative).read_bytes()) != expected:
+                raise ValueError(f"artifact hash mismatch: {relative}")
     ids = json.loads((root / "inputs/task_plan.json").read_bytes())
     if not ids or len(ids) != len(set(ids)) or ids != manifest["instance_ids"]:
         raise ValueError("task plan mismatch")
@@ -62,6 +78,15 @@ def load_evaluation(path: Path) -> tuple[EvaluationSummary, dict, dict[str, dict
         for key in ("report_path", "log_path"):
             if result[key] is not None and result[key] not in outputs:
                 raise ValueError("result references unhashed evidence")
+        if result["status"] in {"resolved", "unresolved"}:
+            if not result["report_path"] or not result["patch_sha256"]:
+                raise ValueError("scored result lacks report or patch identity")
+            directory = Path(result["report_path"]).parent
+            patch = str(directory / "patch.diff")
+            if not {patch, str(directory / "test_output.txt")} <= outputs.keys():
+                raise ValueError("scored result lacks hashed patch or test output")
+            if outputs[patch] != result["patch_sha256"]:
+                raise ValueError("report patch does not match submitted patch")
     return summary, manifest, {r["instance_id"]: r for r in results}
 
 
@@ -79,7 +104,7 @@ def compare_correctness(baseline: Path, candidate: Path) -> dict:
     for key in ("dataset_sha256", "generation", "harness", "adapter_version"):
         if not bm.get(key) or not cm.get(key) or bm[key] != cm[key]:
             report["reasons"].append(f"incompatible or missing {key}")
-    for key in ("max_workers", "timeout_seconds", "overall_timeout_seconds", "cleanup_timeout_seconds"):
+    for key in _COMPARISON_CONFIG_KEYS:
         if bm["config"].get(key) != cm["config"].get(key):
             report["reasons"].append(f"evaluation configuration differs: {key}")
     for label, summary, manifest, tasks in (("baseline", base, bm, bt), ("candidate", cand, cm, ct)):

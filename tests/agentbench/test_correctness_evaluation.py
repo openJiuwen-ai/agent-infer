@@ -3,10 +3,14 @@
 
 """Correctness contracts, fault handling and CLI integration without Docker."""
 
+import ctypes
 import hashlib
 import json
+import os
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -364,6 +368,118 @@ def test_compare_rejects_incomplete_or_incompatible_evidence(source, fake_harnes
     )
 
 
+@pytest.mark.parametrize("side", ["baseline", "candidate"])
+@pytest.mark.parametrize("field", ["config", "images", "errors", "input_hashes", "output_hashes"])
+@pytest.mark.parametrize("fault", ["missing", "null", "wrong_type"])
+def test_compare_rejects_invalid_manifest_structure(source, fake_harness, tmp_path, capsys, side, field, fault):
+    outputs = {name: runner.evaluate(source, config(), tmp_path / name)[0] for name in ("baseline", "candidate")}
+
+    def alter(manifest):
+        if fault == "missing":
+            manifest.pop(field)
+        else:
+            manifest[field] = None if fault == "null" else ({} if field == "errors" else [])
+
+    update(outputs[side] / "evaluation_manifest.json", alter)
+    with pytest.raises(ValueError, match=field):
+        load_evaluation(outputs[side] / "correctness.json")
+    baseline, candidate = (outputs[name] / "correctness.json" for name in ("baseline", "candidate"))
+    report = compare_correctness(baseline, candidate)
+    assert report["status"] == "insufficient_evidence" and field in report["reasons"][0]
+    assert main(["compare-correctness", "--baseline", str(baseline), "--candidate", str(candidate)]) == 2
+    assert json.loads(capsys.readouterr().out) == report
+
+
+@pytest.mark.parametrize(
+    "field", ["max_workers", "timeout_seconds", "overall_timeout_seconds", "cleanup_timeout_seconds", None]
+)
+def test_compare_rejects_config_fields_missing_from_both_sides(source, fake_harness, tmp_path, field):
+    outputs = [runner.evaluate(source, config(), tmp_path / name)[0] for name in ("baseline", "candidate")]
+
+    def alter(manifest):
+        if field is None:
+            manifest["config"] = {}
+        else:
+            manifest["config"].pop(field)
+
+    for output in outputs:
+        update(output / "evaluation_manifest.json", alter)
+        with pytest.raises(ValueError, match="missing evaluation config fields"):
+            load_evaluation(output / "correctness.json")
+    assert (
+        compare_correctness(*(output / "correctness.json" for output in outputs))["status"] == "insufficient_evidence"
+    )
+
+
+@pytest.mark.parametrize("value", [None, [], "invalid"])
+def test_compare_rejects_invalid_image_entry(source, fake_harness, tmp_path, value):
+    baseline, _ = runner.evaluate(source, config(), tmp_path / "baseline")
+    candidate, _ = runner.evaluate(source, config(), tmp_path / "candidate")
+    update(candidate / "evaluation_manifest.json", lambda m: m["images"].update({"astropy__astropy-0": value}))
+    with pytest.raises(ValueError, match="images"):
+        load_evaluation(candidate / "correctness.json")
+    assert (
+        compare_correctness(baseline / "correctness.json", candidate / "correctness.json")["status"]
+        == "insufficient_evidence"
+    )
+
+
+def test_compare_does_not_override_input_hash_with_output_hash(source, fake_harness, tmp_path):
+    baseline, _ = runner.evaluate(source, config(), tmp_path / "baseline")
+    candidate, _ = runner.evaluate(source, config(), tmp_path / "candidate")
+    relative = "inputs/patches/astropy__astropy-0.patch"
+    patch = candidate / relative
+    patch.write_bytes(patch.read_bytes() + b"changed")
+    update(
+        candidate / "evaluation_manifest.json",
+        lambda m: m["output_hashes"].update({relative: digest(patch.read_bytes())}),
+    )
+    report = compare_correctness(baseline / "correctness.json", candidate / "correctness.json")
+    assert report["status"] == "insufficient_evidence"
+    assert "artifact hash mismatch" in report["reasons"][0]
+
+
+@pytest.mark.parametrize("iid", ["astropy__astropy-0", "astropy__astropy-1"])
+@pytest.mark.parametrize("fault", ["patch.diff", "test_output.txt", "report_path", "patch_sha256", "different_patch"])
+def test_compare_requires_original_scoring_evidence(source, fake_harness, tmp_path, iid, fault):
+    baseline, _ = runner.evaluate(source, config(), tmp_path / "baseline")
+    candidate, _ = runner.evaluate(source, config(), tmp_path / "candidate")
+    results_path = candidate / "task_results.jsonl"
+    results = [json.loads(line) for line in results_path.read_text().splitlines()]
+    result = next(r for r in results if r["instance_id"] == iid)
+    manifest_path = candidate / "evaluation_manifest.json"
+    if fault in {"report_path", "patch_sha256"}:
+        result[fault] = None
+        results_path.write_text("".join(json.dumps(r) + "\n" for r in results))
+        update(
+            manifest_path,
+            lambda m: m["output_hashes"].update({"task_results.jsonl": digest(results_path.read_bytes())}),
+        )
+    else:
+        relative = str(Path(result["report_path"]).parent / ("patch.diff" if fault == "different_patch" else fault))
+        path = candidate / relative
+        if fault == "different_patch":
+            path.write_bytes(path.read_bytes() + b"changed")
+            update(manifest_path, lambda m: m["output_hashes"].update({relative: digest(path.read_bytes())}))
+        else:
+            path.unlink()
+            update(manifest_path, lambda m: m["output_hashes"].pop(relative))
+    report = compare_correctness(baseline / "correctness.json", candidate / "correctness.json")
+    assert report["status"] == "insufficient_evidence"
+    assert (
+        main(
+            [
+                "compare-correctness",
+                "--baseline",
+                str(baseline / "correctness.json"),
+                "--candidate",
+                str(candidate / "correctness.json"),
+            ]
+        )
+        == 2
+    )
+
+
 def test_empty_patch_without_no_changes_evidence_is_error(source, fake_harness):
     task = source / "tasks/astropy__astropy-0"
     (task / "model.patch").unlink()
@@ -408,6 +524,43 @@ def test_actual_subprocess_timeout_preserves_logs(tmp_path):
             [sys.executable, "-c", "import time; print('started', flush=True); time.sleep(10)"], tmp_path, 0.5, 1
         )
     assert "started" in (tmp_path / "harness.stdout.log").read_text()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux process-group and /proc checks")
+def test_timeout_kills_child_after_parent_exits(tmp_path):
+    (tmp_path / "raw").mkdir()
+    child_pid = tmp_path / "child.pid"
+    child = (
+        "import os,signal,time; from pathlib import Path; "
+        "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+        f"Path({str(child_pid)!r}).write_text(str(os.getpid())); time.sleep(60)"
+    )
+    parent = f"import subprocess,sys,time; subprocess.Popen([sys.executable,'-c',{child!r}]); time.sleep(60)"
+    # Adopt the orphan only for this test, so even a failing assertion leaves no zombie.
+    libc = ctypes.CDLL(None, use_errno=True)
+    previous = ctypes.c_int()
+    assert libc.prctl(37, ctypes.byref(previous), 0, 0, 0) == 0  # PR_GET_CHILD_SUBREAPER
+    assert libc.prctl(36, 1, 0, 0, 0) == 0  # PR_SET_CHILD_SUBREAPER
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            runner.run_harness([sys.executable, "-c", parent], tmp_path, 1, 1)
+        pid = int(child_pid.read_text())
+        status = Path(f"/proc/{pid}/stat")
+        deadline = time.monotonic() + 2
+        while status.exists() and status.read_text().split()[2] != "Z":
+            assert time.monotonic() < deadline, "child survived process-group cleanup"
+            time.sleep(0.01)
+    finally:
+        try:
+            if child_pid.exists():
+                pid = int(child_pid.read_text())
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                os.waitpid(pid, 0)
+        finally:
+            assert libc.prctl(36, previous.value, 0, 0, 0) == 0
 
 
 @pytest.mark.parametrize("count", [0, 500])

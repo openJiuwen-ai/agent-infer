@@ -9,6 +9,7 @@ import signal
 import subprocess
 import time
 import uuid
+from contextlib import suppress
 from pathlib import Path
 
 from ..artifacts.correctness import EvaluationSummary
@@ -99,13 +100,16 @@ def run_harness(command: list[str], output: Path, timeout: float, cleanup_timeou
         try:
             return process.wait(timeout=timeout)
         except BaseException:
-            if process.poll() is None:
-                os.killpg(process.pid, signal.SIGTERM)
-                try:
+            try:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGTERM)
+                with suppress(subprocess.TimeoutExpired):
                     process.wait(timeout=cleanup_timeout)
-                except subprocess.TimeoutExpired:
+            finally:
+                # The parent can exit before descendants that ignore SIGTERM.
+                with suppress(ProcessLookupError):
                     os.killpg(process.pid, signal.SIGKILL)
-                    process.wait()
+                process.wait()
             raise
 
 
