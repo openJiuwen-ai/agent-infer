@@ -13,7 +13,6 @@
   ],
   "description": "Qwen3-Coder-30B-A3B-Instruct-FP8 on 2x L20 + DSH single, SWE-bench Verified 8 tasks x 4 concurrency",
   "serve_env": {
-    "VLLM_ENABLE_CUDA_COMPATIBILITY": "1",
     "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1"
   },
   "server_params": {
