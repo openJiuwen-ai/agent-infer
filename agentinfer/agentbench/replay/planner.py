@@ -956,6 +956,8 @@ def validate_loaded_plan(plan: ReplayPlan) -> None:
 
     runtime_sessions: set[str] = set()
     task_indexes: set[int] = set()
+    task_ids: set[str] = set()
+    runtime_request_ids: set[str] = set()
     for task in plan.tasks:
         if task.task_index < 0:
             raise ValueError(f"task {task.task_id} task_index must be non-negative")
@@ -965,6 +967,16 @@ def validate_loaded_plan(plan: ReplayPlan) -> None:
         if task.task_index in task_indexes:
             raise ValueError(f"task {task.task_id} task_index {task.task_index} must be unique")
         task_indexes.add(task.task_index)
+        # The builder derives task_id from task_index, but the loader reads the
+        # two fields independently, so an edited artifact can pair a distinct
+        # index with a repeated or empty id. Both land in the result row, so
+        # they are checked in their own right rather than inferred from the
+        # index check above.
+        if not task.task_id:
+            raise ValueError(f"task at index {task.task_index} task_id must be non-empty")
+        if task.task_id in task_ids:
+            raise ValueError(f"task task_id {task.task_id!r} must be unique")
+        task_ids.add(task.task_id)
         if task.runtime_session_id in runtime_sessions:
             raise ValueError("runtime session ids must be unique")
         runtime_sessions.add(task.runtime_session_id)
@@ -983,6 +995,15 @@ def validate_loaded_plan(plan: ReplayPlan) -> None:
             for field in ("source_key", "runtime_request_id"):
                 if not getattr(node, field):
                     raise ValueError(f"node {field} must be non-empty in {task.task_id}")
+            # The per-task check above misses a request id reused by another
+            # task. ``_execution_metadata()`` flattens every task's requests into
+            # one mapping keyed on this id, so the later task silently replaces
+            # the earlier one and first/continuation cache stats are computed
+            # against the wrong node.
+            if node.node_type == "request":
+                if node.runtime_request_id in runtime_request_ids:
+                    raise ValueError(f"request runtime_request_id {node.runtime_request_id} must be unique")
+                runtime_request_ids.add(node.runtime_request_id)
             if node.node_type == "request":
                 # Same reasoning for the actor: an empty actor_id makes the
                 # same-actor context check below compare "" against "" and pass.

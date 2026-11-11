@@ -126,7 +126,13 @@ Every key `to_dict()` writes unconditionally must be present, including the null
 conditionally -- `prompt_ref`, `response_validation`, `effective_output_tokens`, `source_prefix_tokens`
 -- is genuinely optional. An absent key means the artifact was truncated, not that the field is
 null, so it is rejected rather than defaulted. `interval_model.mode` must match its parameters:
-`lognormal` requires both `mu` and `sigma`, and `trace` rejects them.
+`lognormal` requires both `mu` and `sigma`, and `trace` rejects them. Inside `interval_model` the
+presence rule does not apply: every fit field is read through an optional accessor, so an absent
+`anchors` (or any other audit field) loads as null. That is deliberate -- the sampler reads only
+`mode`/`mu`/`sigma`, and rejecting older artifacts over a missing audit field would fail loads that
+still execute correctly. The cost is that a hand-edited artifact can drop recorded fit values
+without a load error, so a plan you intend to audit should be checked with the written file, not
+with what `load()` returns.
 
 ## Replay sampling parameters
 
