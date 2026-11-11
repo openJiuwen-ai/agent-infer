@@ -82,13 +82,23 @@ of every request context and does not subtract shared physical prefix blocks.
 | `--max-kv-fraction` | `0.9` | Maximum fraction of the observed per-rank HBM KV capacity that a candidate case may occupy. Cases above the threshold are skipped before requests are sent. |
 | `--shuffle-seed` | `260901` | Seed used to shuffle valid batch/context/repeat cases and reduce execution-order bias. |
 
-`kv-capacity-tokens` is intentionally not a user parameter. The tool reads `num_gpu_blocks` and `block_size` from the
-common `vllm:cache_config_info` exposed by `/metrics`. For internal DP, that endpoint repeats the deployment-wide block
-count under every engine label, so the tool divides `num_gpu_blocks * block_size` by the homogeneous `engine_count` to
-obtain one EngineCore rank's capacity. It records the result as `observed_kv_capacity_tokens` and applies
-`--max-kv-fraction`. Requiring a second manually entered capacity would duplicate an authoritative backend value and
-could silently filter cases with a stale or TP/DP-confused number. The command fails explicitly if the backend does not
-expose the required fields.
+`kv-capacity-tokens` is intentionally not a user parameter. The tool derives one EngineCore rank's capacity from the
+common `vllm:cache_config_info` exposed by `/metrics`, in this order:
+
+1. `kv_cache_size_tokens`, the backend-reported logical capacity of one EngineCore, used as-is;
+2. `num_gpu_blocks * block_size`, divided by the homogeneous `engine_count` for internal DP, where `/metrics` repeats
+ the deployment-wide block count under every engine label;
+3. the `AGENTINFER_KV_CAPACITY_TOKENS` environment variable, an explicit operator override that takes precedence over
+ both labels.
+
+Step 1 exists because `block_size` is not always a count of logical tokens. Compressed or sparse attention layouts can
+report a per-block token count that makes step 2 an order of magnitude too small; because cases with
+`batch * context > max_kv_fraction * capacity` are skipped, that error silently truncates the decode matrix to short
+contexts and the fitted context coefficient collapses towards zero. Record the resolved value as
+`observed_kv_capacity_tokens` and verify it against the engine's own `GPU KV cache size` log line before trusting the
+Profile. Requiring a second manually entered capacity would duplicate an authoritative backend value and could silently
+filter cases with a stale or TP/DP-confused number. The command fails explicitly if the backend exposes none of the
+supported fields.
 
 The default `2/1` Prefill/Decode repeat counts with 128 Decode tokens target a complete run in roughly ten minutes on
 the reference deployment. Use a reduced matrix with `1/1` repeats for functional smoke validation. Use `3/2` repeats
