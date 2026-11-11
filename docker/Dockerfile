@@ -12,12 +12,14 @@ RUN apt-get update \
 # so the non-root user from ci-entrypoint.sh can execute node and dsh.
 # Node 24 is inside the supported range (^22.19.0 || >=24).
 ARG NODE_VERSION=24.22.1
-RUN curl -fsSL "https://npmmirror.com/mirrors/node/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+# Prefer upstream nodejs.org / registry.npmjs.org over npmmirror so freshly
+# published transitive deps (e.g. @aws-sdk/*) are visible during CI image build.
+RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
       -o /tmp/node.tar.xz \
  && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
  && rm /tmp/node.tar.xz \
  && npm install --global --prefix /usr/local \
-      --registry https://registry.npmmirror.com \
+      --registry https://registry.npmjs.org \
       --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs \
       @deepseek-ai/dsh@0.2.1-rc.2 \
  && node --version \
