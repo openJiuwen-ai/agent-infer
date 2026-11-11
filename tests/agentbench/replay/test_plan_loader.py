@@ -404,6 +404,7 @@ def test_validate_loaded_plan_rejects_runtime_request_id_reused_by_another_task(
     second["task_id"] = "replay-000001"
     second["task_index"] = 1
     second["runtime_session_id"] = "another-session"
+    second["sample_ordinal"] = 1
     second["requests"][0]["source_key"] = "k2"
     second["requests"][0]["prompt_recipe_key"] = "k2"
     # runtime_request_id stays "rid-1"; the per-task check cannot see this.
@@ -1278,3 +1279,268 @@ def test_legacy_timing_node_without_actor_fields_loads(tmp_path: Path) -> None:
     assert node.node_type == "timing_dependency"
     assert node.prompt_kind == "none"
     assert (node.actor_id, node.actor_role, node.parent_actor_id) == ("", "unknown", None)
+
+
+# --- Field contract -------------------------------------------------------
+#
+# Every review round so far found the same shape of defect: a field that
+# ``to_dict`` writes, that a consumer reads, and that the loader therefore has
+# to constrain -- but nobody enumerated the fields, so each round fixed the one
+# the reviewer named. The tables below are that enumeration, and the tests keep
+# them honest in both directions:
+#
+#   * a field added to ``to_dict`` without a classification fails the coverage
+#     test, so it cannot slip in unexamined;
+#   * a field classified as "mutating it must be rejected" that stops being
+#     rejected fails the mutation test, so a check cannot be lost silently.
+#
+# The classification is deliberately not "reject everything". Fields that only
+# annotate the artifact (``planner_version``, ``source``, the ``interval_model``
+# audit values) are listed as unconstrained on purpose, and their reason is
+# recorded -- that is the documented boundary of what loading promises.
+
+_PLAN_FIELDS = {
+    # Rejected when mutated: the loader constrains them.
+    "schema_version": "enum",
+    "plan_kind": "enum",
+    "execution_ready": "paired with execution_unavailable_reason",
+    "execution_unavailable_reason": "paired with execution_ready",
+    "source_sha256": "non-empty",
+    "source_sessions": "non-negative",
+    "replayable_source_sessions": "<= source_sessions",
+    "plan_namespace": "non-empty",
+    "workload_fingerprint": "non-empty",
+    "prompt_calibration": "known status",
+    "interval_model": "per-field typed",
+    "tasks": "non-empty",
+    # Accepted as written: annotation only, no consumer keys off them.
+    "planner_version": "annotation",
+    "source": "annotation",
+    "source_bundle_sha256": "annotation",
+    "sample_seed": "annotation (negative seeds are valid)",
+}
+
+_TASK_FIELDS = {
+    "task_id": "non-empty, unique across the plan",
+    "task_index": "non-negative, unique across the plan",
+    "runtime_session_id": "non-empty, unique across the plan",
+    "source_session_id": "paired with sample_ordinal, unique across the plan",
+    "sample_ordinal": "paired with source_session_id, unique across the plan",
+    "requests": "non-empty",
+    "source_task_id": "annotation",
+}
+
+_REQUEST_NODE_FIELDS = {
+    "runtime_request_id": "non-empty, unique across the plan",
+    "source_key": "non-empty, unique within the task",
+    "node_type": "enum",
+    "send_after": "reference must resolve",
+    "context_after": "reference must resolve to a same-actor request",
+    "effective_interval_seconds": "finite, non-negative",
+    "prompt_recipe_key": "non-empty",
+    "prompt_kind": "enum, not 'none'",
+    "actor_id": "non-empty, must match context_after target",
+    "actor_role": "enum",
+    "context_mode": "enum, paired with context_after",
+    "planned_input_tokens": "positive",
+    "planned_output_tokens": "non-negative",
+    "source_prefix_tokens": "<= planned_input_tokens",
+    "prompt_ref": "parsed; one safe path component",
+    "source_output_tokens": "annotation",
+    "backend_sampling_seed": "annotation",
+    "response_validation": "enum",
+    "parent_actor_id": "annotation",
+    "effective_output_tokens": "annotation; ignored on load",
+}
+
+_TIMING_NODE_FIELDS = {
+    "runtime_request_id": "non-empty, unique across the plan",
+    "source_key": "non-empty, unique within the task",
+    "node_type": "enum",
+    "send_after": "reference must resolve",
+    "effective_interval_seconds": "finite, non-negative",
+    "effective_duration_seconds": "finite, non-negative",
+    "prompt_kind": "must be 'none'",
+    "actor_id": "annotation",
+    "actor_role": "annotation",
+    "parent_actor_id": "annotation",
+}
+
+
+# Fields `to_dict` writes only when they carry a value. They legitimately
+# disappear from an artifact, so the coverage test cannot demand them in a
+# builder-produced sample. Only the names live here; their constraints stay in
+# the table above so a field never carries two classifications.
+_CONDITIONAL_REQUEST_NODE_FIELDS = frozenset(
+    {"prompt_ref", "response_validation", "source_prefix_tokens", "effective_output_tokens"}
+)
+
+
+def _serialized_field_levels(tmp_path: Path) -> dict[str, set[str]]:
+    """Per-level key sets from a builder-produced plan."""
+
+    plan = _build_plan(tmp_path)
+    data = plan.to_dict()
+    requests = [node for task in plan.tasks for node in task.requests]
+    request_node = next(node for node in requests if node.node_type == "request")
+    timing_nodes = [node for node in requests if node.node_type == "timing_dependency"]
+    assert timing_nodes, "the shared fixture must contain a timing node or this level is untested"
+    return {
+        "plan": set(data),
+        "task": set(data["tasks"][0]),
+        "request_node": set(request_node.to_dict()),
+        "timing_node": set(timing_nodes[0].to_dict()),
+    }
+
+
+@pytest.mark.parametrize(
+    ("table", "conditional", "level"),
+    [
+        (_PLAN_FIELDS, set(), "plan"),
+        (_TASK_FIELDS, set(), "task"),
+        (_REQUEST_NODE_FIELDS, set(_CONDITIONAL_REQUEST_NODE_FIELDS), "request_node"),
+        (_TIMING_NODE_FIELDS, set(), "timing_node"),
+    ],
+)
+def test_every_serialized_field_is_classified(tmp_path: Path, table: dict, conditional: set[str], level: str) -> None:
+    """``to_dict`` output and the contract table must name the same fields.
+
+    Adding a field to ``to_dict`` without deciding what loading guarantees
+    about it fails here. That is the point: the previous rounds of review each
+    found one such field, and the cost was a review round apiece.
+    """
+
+    serialized = _serialized_field_levels(tmp_path)[level]
+    classified = set(table) | conditional
+    assert serialized - classified == set(), (
+        f"{level}: to_dict writes {sorted(serialized - classified)} but the contract table does not classify them"
+    )
+    assert classified - conditional - serialized == set(), (
+        f"{level}: the contract table classifies {sorted(classified - conditional - serialized)}"
+        " which to_dict never writes"
+    )
+
+
+# --- Field contract, second half: the constraint must actually fire ----------
+#
+# The coverage test above says every serialized field has a stated constraint.
+# This one says the constraint is real: a well-formed but wrong value must be
+# rejected, and a field classified as pure annotation must still load with any
+# well-formed value, so the documented boundary is pinned in both directions
+# rather than asserted in a comment.
+
+_FIELD_TABLES = {
+    "plan": _PLAN_FIELDS,
+    "task": _TASK_FIELDS,
+    "request_node": _REQUEST_NODE_FIELDS,
+    "timing_node": _TIMING_NODE_FIELDS,
+}
+
+# (level, field, mutated value). Values are chosen to be *well-formed* wherever
+# the classification is "annotation" -- the question there is whether load
+# accepts an arbitrary legal value, not whether it type-checks. Every table field
+# must appear here exactly once; the coverage test below enforces that, so a new
+# classification cannot be added without a mutation that proves it fires.
+# ``effective_output_tokens`` is the one field with no constraint to fire: load
+# deliberately ignores it (``planned_output_tokens`` is authoritative), which is
+# what "annotation" means here.
+_FIELD_MUTATIONS = [
+    ("plan", "schema_version", "3"),
+    ("plan", "plan_kind", "adaptive"),
+    ("plan", "execution_ready", True),
+    ("plan", "execution_unavailable_reason", None),
+    ("plan", "source_sha256", ""),
+    ("plan", "source_sessions", -1),
+    ("plan", "replayable_source_sessions", 2),
+    ("plan", "plan_namespace", ""),
+    ("plan", "workload_fingerprint", ""),
+    ("plan", "prompt_calibration", {"status": "half-done"}),
+    ("plan", "interval_model", {"mode": "lognormal", "fit_version": "agentinfer-replay-lognormal"}),
+    ("plan", "tasks", []),
+    ("plan", "planner_version", "agentinfer-replay-other"),
+    ("plan", "source", "/somewhere/else.jsonl"),
+    ("plan", "source_bundle_sha256", "b" * 64),
+    ("plan", "sample_seed", -7),
+    ("task", "task_id", ""),
+    ("task", "task_index", -1),
+    ("task", "runtime_session_id", ""),
+    ("task", "source_session_id", ""),
+    ("task", "sample_ordinal", -1),
+    ("task", "requests", []),
+    ("task", "source_task_id", "another-task"),
+    ("request_node", "runtime_request_id", ""),
+    ("request_node", "source_key", ""),
+    ("request_node", "node_type", "sleep"),
+    ("request_node", "send_after", "missing"),
+    ("request_node", "context_after", "missing"),
+    ("request_node", "effective_interval_seconds", -1.0),
+    ("request_node", "prompt_recipe_key", ""),
+    ("request_node", "prompt_kind", "none"),
+    ("request_node", "actor_id", ""),
+    ("request_node", "actor_role", "worker"),
+    ("request_node", "context_mode", "none"),
+    ("request_node", "planned_input_tokens", 0),
+    ("request_node", "planned_output_tokens", -1),
+    ("request_node", "source_prefix_tokens", 11),
+    ("request_node", "prompt_ref", {"session_id": "../escape", "turn_index": 0}),
+    ("request_node", "source_output_tokens", 999),
+    ("request_node", "backend_sampling_seed", 999),
+    ("request_node", "response_validation", "fuzzy"),
+    ("request_node", "parent_actor_id", "someone-else"),
+    ("request_node", "effective_output_tokens", 5),
+    ("timing_node", "runtime_request_id", ""),
+    ("timing_node", "source_key", ""),
+    ("timing_node", "node_type", "sleep"),
+    ("timing_node", "send_after", "missing"),
+    ("timing_node", "effective_interval_seconds", -1.0),
+    ("timing_node", "effective_duration_seconds", -1.0),
+    ("timing_node", "prompt_kind", "lead_main"),
+    ("timing_node", "actor_id", ""),
+    ("timing_node", "actor_role", "lead"),
+    ("timing_node", "parent_actor_id", "someone-else"),
+]
+
+
+def _mutated_plan(level: str, field: str, value: object) -> dict:
+    """A minimal plan with one field of one level replaced."""
+
+    data = _minimal_plan_dict()
+    if level == "plan":
+        target = data
+    elif level == "task":
+        target = data["tasks"][0]
+    elif level == "request_node":
+        target = _first_request_node(data)
+    elif level == "timing_node":
+        target = _timing_node_dict()
+        data["tasks"][0]["requests"].append(target)
+    else:  # pragma: no cover - guards the table above
+        raise AssertionError(f"unknown level {level!r}")
+    target[field] = value
+    return data
+
+
+@pytest.mark.parametrize(("level", "field", "value"), _FIELD_MUTATIONS)
+def test_serialized_field_constraint_matches_its_classification(level: str, field: str, value: object) -> None:
+    """A constrained field rejects a wrong value; an annotation field accepts one."""
+
+    data = _mutated_plan(level, field, value)
+    classification = _FIELD_TABLES[level][field]
+    if classification.startswith("annotation"):
+        validate_loaded_plan(ReplayPlan.from_dict(data))
+        return
+    with pytest.raises(ValueError):
+        validate_loaded_plan(ReplayPlan.from_dict(data))
+
+
+def test_every_classified_field_has_a_mutation() -> None:
+    """Each classification above is pinned by a mutation that exercises it.
+
+    Without this, a constraint added to the tables would be a claim no test
+    checks -- exactly the drift that made earlier review rounds necessary.
+    """
+
+    mutated = {(level, field) for level, field, _ in _FIELD_MUTATIONS}
+    classified = {(level, field) for level, table in _FIELD_TABLES.items() for field in table}
+    assert classified - mutated == set(), f"classified but never mutated: {sorted(classified - mutated)}"
+    assert mutated - classified == set(), f"mutated but never classified: {sorted(mutated - classified)}"

@@ -91,7 +91,15 @@ workload 配置。`to_dict()` 无条件写出的每个 key 都必须存在，即
 `context_after` 会被读成"无依赖"，静默改变执行顺序。`interval_model.mode` 还必须与参数一致（`lognormal` 需要
 `mu` 与 `sigma`，`trace` 不允许携带），使模式与参数不匹配在加载阶段失败，而不是拖到第一次采样间隔时。
 这条存在性规则到 `interval_model` 为止：其拟合字段（`anchors`、`anchor_predictions` 等）全部按可选读取，
-产物丢了这些值仍能加载，对应位置为 null。见 [Python API](../reference/python-api.md)。
+产物丢了这些值仍能加载，对应位置为 null。
+
+除逐字段的存在性与类型，加载还会校验所有构建路径都成立的跨字段事实：`execution_ready` 与
+`execution_unavailable_reason` 成对设置；`prompt_calibration.status` 必须是 runner 会写出的状态之一；
+`replayable_source_sessions` 不超过 `source_sessions`；任务身份在全计划内唯一（`task_id`、`task_index`、
+`runtime_session_id`、`(source_session_id, sample_ordinal)` 这次抽样，以及每个请求的 `runtime_request_id`），
+两个 session id 均非空。重复抽样尤其要拒绝：它不增加覆盖，任务计数与 fingerprint 却按增加计。请求节点还必须
+携带真实的 `prompt_kind` 与 `context_mode`：`"none"` 是 timing 节点的中性取值，出现在请求上会渲染出与计划描述
+不符的 prompt，或指向执行器根本不会校验的上下文前驱。见 [Python API](../reference/python-api.md)。
 
 节点序列化出的每个字段都能被解析回来，因此 `from_dict(to_dict())` 保持节点不变。`timing_dependency` 节点在其
 请求类字段中携带 `prompt_kind` 以及 actor 身份（`actor_id`、`actor_role`、`parent_actor_id`），使加载后的计划仍能

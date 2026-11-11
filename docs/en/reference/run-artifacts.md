@@ -98,8 +98,16 @@ value is null: a dropped `send_after` or `context_after` would otherwise read as
 execution order. `interval_model.mode` must also agree with its parameters (`lognormal` needs `mu` and `sigma`;
 `trace` rejects them), so a mode/parameter mismatch fails at load instead of at the first interval sample. The
 presence rule stops at `interval_model`: its fit fields (`anchors`, `anchor_predictions`, and the rest) are all optional,
-so an artifact that lost them still loads with those values null. See
-[Python API](../reference/python-api.md).
+so an artifact that lost them still loads with those values null.
+
+Beyond per-field presence and typing, loading enforces the cross-field facts that hold for every plan a builder can
+write: `execution_ready` and `execution_unavailable_reason` are set together, `prompt_calibration.status` names one of the
+states the runner writes, `replayable_source_sessions` never exceeds `source_sessions`, and task identity is unique across
+the plan (`task_id`, `task_index`, `runtime_session_id`, the `(source_session_id, sample_ordinal)` draw, and every
+request's `runtime_request_id`) with both session ids non-empty. A repeated draw in particular adds no coverage while the
+task counts and fingerprint claim it does. Request nodes must also carry a real `prompt_kind` and `context_mode`: `"none"`
+is the timing node's neutral value, and on a request it renders a different prompt than the plan describes or names a
+context predecessor the executor never validates. See [Python API](../reference/python-api.md).
 
 Every field a node serializes is parsed back, so `from_dict(to_dict())` preserves the node. A `timing_dependency`
 node carries `prompt_kind` and its actor identity (`actor_id`, `actor_role`, `parent_actor_id`) so a reloaded plan can

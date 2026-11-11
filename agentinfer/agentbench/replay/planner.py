@@ -81,6 +81,8 @@ _REQUEST_REQUIRED_NODE_FIELDS = (
     "backend_sampling_seed",
 )
 _RESPONSE_VALIDATIONS = frozenset({"exact_tokens"})
+# ``prompt_calibration.status`` values the planner and runner actually write.
+_CALIBRATION_STATUSES = frozenset({"pending", "active", "completed", "failed"})
 _PLAN_KINDS = frozenset({"structural"})
 _SCHEMA_VERSIONS = frozenset({"1", "2"})
 
@@ -953,11 +955,30 @@ def validate_loaded_plan(plan: ReplayPlan) -> None:
         raise ValueError("plan prompt_calibration must be an object")
     if not plan.tasks:
         raise ValueError("plan must have at least one task")
+    # ``execution_ready`` and its reason are written as a pair by both builders
+    # (the planner leaves ``False`` with an explanation; the runner replaces both
+    # together). One flipped without the other describes a plan that is claimed
+    # runnable and simultaneously declared unbuildable.
+    if plan.execution_ready and plan.execution_unavailable_reason is not None:
+        raise ValueError("plan execution_ready=True must not carry an execution_unavailable_reason")
+    if not plan.execution_ready and not plan.execution_unavailable_reason:
+        raise ValueError("plan execution_ready=False requires an execution_unavailable_reason")
+    # ``prompt_calibration.status`` is the only key the runner rewrites
+    # (``pending`` -> ``active`` -> ``completed``/``failed``); an unknown value
+    # would make a reloaded artifact report a state no run can produce.
+    status = plan.prompt_calibration.get("status")
+    if status not in _CALIBRATION_STATUSES:
+        raise ValueError(f"plan prompt_calibration.status must be one of {sorted(_CALIBRATION_STATUSES)}")
+    # Both counts are reported as coverage, and a plan claiming more replayable
+    # sessions than it saw is impossible for any builder to have written.
+    if plan.replayable_source_sessions > plan.source_sessions:
+        raise ValueError("plan replayable_source_sessions must not exceed source_sessions")
 
     runtime_sessions: set[str] = set()
     task_indexes: set[int] = set()
     task_ids: set[str] = set()
     runtime_request_ids: set[str] = set()
+    sampled_sessions: set[tuple[str, int]] = set()
     for task in plan.tasks:
         if task.task_index < 0:
             raise ValueError(f"task {task.task_id} task_index must be non-negative")
@@ -977,9 +998,26 @@ def validate_loaded_plan(plan: ReplayPlan) -> None:
         if task.task_id in task_ids:
             raise ValueError(f"task task_id {task.task_id!r} must be unique")
         task_ids.add(task.task_id)
+        # Both identity fields are written non-empty by every planning path and
+        # both end up in report rows: an empty runtime session id collapses the
+        # per-session grouping, and an empty source session id makes distinct
+        # draws indistinguishable in the trace-coverage report.
+        for field in ("runtime_session_id", "source_session_id"):
+            if not getattr(task, field):
+                raise ValueError(f"task {task.task_id} {field} must be non-empty")
         if task.runtime_session_id in runtime_sessions:
             raise ValueError("runtime session ids must be unique")
         runtime_sessions.add(task.runtime_session_id)
+        # ``(source_session_id, sample_ordinal)`` is what the sampler feeds into
+        # ``runtime_session_id``, so a repeated pair means two tasks describe the
+        # same draw of the same session -- the second adds no coverage while the
+        # task counts and workload fingerprint say it does.
+        sampled = (task.source_session_id, task.sample_ordinal)
+        if sampled in sampled_sessions:
+            raise ValueError(
+                f"task {task.task_id} repeats source session {sampled[0]!r} at sample ordinal {sampled[1]}"
+            )
+        sampled_sessions.add(sampled)
         nodes = task.requests
         by_key = {node.source_key: node for node in nodes}
         if len(by_key) != len(nodes):
@@ -1004,12 +1042,23 @@ def validate_loaded_plan(plan: ReplayPlan) -> None:
                 if node.runtime_request_id in runtime_request_ids:
                     raise ValueError(f"request runtime_request_id {node.runtime_request_id} must be unique")
                 runtime_request_ids.add(node.runtime_request_id)
-            if node.node_type == "request":
                 # Same reasoning for the actor: an empty actor_id makes the
                 # same-actor context check below compare "" against "" and pass.
                 for field in ("prompt_recipe_key", "actor_id"):
                     if not getattr(node, field):
                         raise ValueError(f"request {node.source_key} {field} must be non-empty in {task.task_id}")
+                # ``prompt_kind`` is set to "none" precisely when the analyzer
+                # could not resolve token targets, which also forces the node to
+                # be a timing dependency. "none" on a request node is therefore
+                # unproducible: the prompt builder reads it as a continuation and
+                # silently renders a different prompt than the plan describes.
+                if node.prompt_kind == "none":
+                    raise ValueError(f"request {node.source_key} prompt_kind must not be 'none' in {task.task_id}")
+                # "none" is the timing node's context mode; a request with it
+                # skips both context branches below while still naming a
+                # predecessor, so the target is neither used nor validated.
+                if node.context_mode == "none":
+                    raise ValueError(f"request {node.source_key} context_mode must not be 'none' in {task.task_id}")
             references = [("send_after", node.send_after), ("context_after", node.context_after)]
             for field, reference in references:
                 if reference is not None and reference not in by_key:
