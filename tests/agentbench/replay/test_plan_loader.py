@@ -253,8 +253,13 @@ def test_validate_loaded_plan_rejects_dangling_send_after_reference() -> None:
 def test_validate_loaded_plan_rejects_duplicate_runtime_session() -> None:
     data = _minimal_plan_dict()
     data["tasks"].append(json.loads(json.dumps(data["tasks"][0])))
-    # task_index must stay distinct or the duplicate-session check still fires first
+    # task_index and task_id must stay distinct or their own uniqueness checks
+    # fire before the duplicate-session one this test is about.
     data["tasks"][1]["task_index"] = 1
+    data["tasks"][1]["task_id"] = "replay-000001"
+    data["tasks"][1]["requests"][0]["runtime_request_id"] = "rid-2"
+    data["tasks"][1]["requests"][0]["source_key"] = "k2"
+    data["tasks"][1]["requests"][0]["prompt_recipe_key"] = "k2"
     plan = ReplayPlan.from_dict(data)
     with pytest.raises(ValueError, match="runtime session ids must be unique"):
         validate_loaded_plan(plan)
@@ -368,6 +373,42 @@ def test_validate_loaded_plan_rejects_duplicate_task_index() -> None:
     # task_id is derived from task_index and becomes the result instance_id, so
     # two tasks sharing an index rewrite each other's results.
     with pytest.raises(ValueError, match="task_index 0 must be unique"):
+        validate_loaded_plan(ReplayPlan.from_dict(data))
+
+
+def test_validate_loaded_plan_rejects_duplicate_task_id() -> None:
+    data = _minimal_plan_dict()
+    second = json.loads(json.dumps(data["tasks"][0]))
+    second["task_index"] = 1
+    second["runtime_session_id"] = "another-session"
+    second["requests"][0]["runtime_request_id"] = "rid-2"
+    second["requests"][0]["source_key"] = "k2"
+    second["requests"][0]["prompt_recipe_key"] = "k2"
+    # task_id and task_index are read independently from the artifact, so a
+    # distinct index does not imply a distinct id.
+    data["tasks"].append(second)
+    with pytest.raises(ValueError, match="task_id 'replay-000000' must be unique"):
+        validate_loaded_plan(ReplayPlan.from_dict(data))
+
+
+def test_validate_loaded_plan_rejects_empty_task_id() -> None:
+    data = _minimal_plan_dict()
+    data["tasks"][0]["task_id"] = ""
+    with pytest.raises(ValueError, match="task_id must be non-empty"):
+        validate_loaded_plan(ReplayPlan.from_dict(data))
+
+
+def test_validate_loaded_plan_rejects_runtime_request_id_reused_by_another_task() -> None:
+    data = _minimal_plan_dict()
+    second = json.loads(json.dumps(data["tasks"][0]))
+    second["task_id"] = "replay-000001"
+    second["task_index"] = 1
+    second["runtime_session_id"] = "another-session"
+    second["requests"][0]["source_key"] = "k2"
+    second["requests"][0]["prompt_recipe_key"] = "k2"
+    # runtime_request_id stays "rid-1"; the per-task check cannot see this.
+    data["tasks"].append(second)
+    with pytest.raises(ValueError, match="runtime_request_id rid-1 must be unique"):
         validate_loaded_plan(ReplayPlan.from_dict(data))
 
 

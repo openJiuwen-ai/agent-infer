@@ -90,6 +90,8 @@ Replay 额外写出 `replay-source-analysis.json`、`replay-plan.json` 和 `repl
 workload 配置。`to_dict()` 无条件写出的每个 key 都必须存在，即使其值为 null：否则丢失的 `send_after` 或
 `context_after` 会被读成"无依赖"，静默改变执行顺序。`interval_model.mode` 还必须与参数一致（`lognormal` 需要
 `mu` 与 `sigma`，`trace` 不允许携带），使模式与参数不匹配在加载阶段失败，而不是拖到第一次采样间隔时。
+这条存在性规则到 `interval_model` 为止：其拟合字段（`anchors`、`anchor_predictions` 等）全部按可选读取，
+产物丢了这些值仍能加载，对应位置为 null。见 [Python API](../reference/python-api.md)。
 
 节点序列化出的每个字段都能被解析回来，因此 `from_dict(to_dict())` 保持节点不变。`timing_dependency` 节点在其
 请求类字段中携带 `prompt_kind` 以及 actor 身份（`actor_id`、`actor_role`、`parent_actor_id`），使加载后的计划仍能

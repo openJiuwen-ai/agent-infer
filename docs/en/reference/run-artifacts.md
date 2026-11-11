@@ -96,7 +96,10 @@ validates the artifact alone (reference closure, full wait-for graph acyclicity 
 which embed the build-time workload config. Every key `to_dict()` writes unconditionally must be present, even when its
 value is null: a dropped `send_after` or `context_after` would otherwise read as "no dependency" and quietly change the
 execution order. `interval_model.mode` must also agree with its parameters (`lognormal` needs `mu` and `sigma`;
-`trace` rejects them), so a mode/parameter mismatch fails at load instead of at the first interval sample.
+`trace` rejects them), so a mode/parameter mismatch fails at load instead of at the first interval sample. The
+presence rule stops at `interval_model`: its fit fields (`anchors`, `anchor_predictions`, and the rest) are all optional,
+so an artifact that lost them still loads with those values null. See
+[Python API](../reference/python-api.md).
 
 Every field a node serializes is parsed back, so `from_dict(to_dict())` preserves the node. A `timing_dependency`
 node carries `prompt_kind` and its actor identity (`actor_id`, `actor_role`, `parent_actor_id`) so a reloaded plan can

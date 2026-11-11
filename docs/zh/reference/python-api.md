@@ -120,7 +120,10 @@ def load(cls, path: str | Path) -> ReplayPlan: ...
 key —— `prompt_ref`、`response_validation`、`effective_output_tokens`、`source_prefix_tokens`
 —— 才是真正可选的。key 缺失意味着产物被截断，而不是该字段为 null，因此拒绝加载而非补默认值。
 `interval_model.mode` 必须与参数一致：`lognormal` 需要同时提供 `mu` 与 `sigma`，`trace`
-则不允许携带它们。
+则不允许携带它们。`interval_model` 内部不适用上面这条存在性规则：所有拟合字段都按可选读取，
+`anchors`（或其他审计字段）缺失时加载为 null。这是有意的 —— 采样只读 `mode`/`mu`/`sigma`，
+为缺一个审计字段拒绝整个产物，会把本来能正常执行的旧产物挡在门外；代价是手工删掉这些字段
+不会在加载时报错，需要审计的计划请对照写出的文件本身，而不是 `load()` 的返回值。
 
 ## Replay 采样参数
 
