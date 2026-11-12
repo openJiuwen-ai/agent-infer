@@ -161,6 +161,10 @@ TraceLab 转换和计划保留 `output_tokens: 0`。当前后端不能精确执�
 token、延迟和吞吐统计；服务端缓存会继续保留。TraceLab 用 `/v1/completions` 发送预先构造的
 token ID 数组，以避免 Chat Template 再编码改变前缀或长度。因此 `chat_template_kwargs` 不作用于
 TraceLab 的正式请求。后端必须支持 Completions 的 token ID 输入以及 `return_token_ids` 流式输出。
+后端上下文窗口必须容纳预热请求以及每个请求的输入与输出目标；该上限取自 `/v1/models` 中配置模型的
+`max_model_len`。若回放目标是 gRPC Router，其模型列表不含 `max_model_len`，则改从
+`backend.tokenizer_base_url` 读取，前提是该地址已设置且提供同一模型；否则 Replay 会在发送任何请求前
+直接失败。
 
 Replay 同时设置 `max_tokens` 和 `min_tokens` 为源 trace 的输出目标长度，
 设置 `ignore_eos: true`，
