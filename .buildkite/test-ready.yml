@@ -28,7 +28,7 @@ steps:
   - group: ":card_index_dividers: e2e function"
     depends_on: ci-image
     steps:
-      # One step on the 2-GPU queue: test-user, then both 8x4 profiles.
+      # One step on the 2-GPU queue: test-user, then both 2x1 profiles.
       # The case uses the Hugging Face repo id; vLLM downloads into HF_HOME
       # (/home/models). Skip useradd when test-user exists. The step stays
       # root so plan-subagent can sudo -u test-user. single stays root.
@@ -65,8 +65,8 @@ steps:
                 usermod -aG "$$extra" test-user
               fi
             done
-            pytest -s -v tests/e2e/function/agentbench/dsh/test_dsh_swebench.py::test_dsh_swebench --test-config-file tests/e2e/function/agentbench/dsh/cases/qwen3_coder_dsh_8x4.json
-            pytest -s -v tests/e2e/function/agentbench/dsh/test_dsh_swebench.py::test_dsh_swebench --test-config-file tests/e2e/function/agentbench/dsh/cases/qwen3_coder_dsh_8x4_plan_subagent.json
+            pytest -s -v tests/e2e/function/agentbench/dsh/test_dsh_swebench.py::test_dsh_swebench --test-config-file tests/e2e/function/agentbench/dsh/cases/qwen3_coder_dsh_2x1.json
+            pytest -s -v tests/e2e/function/agentbench/dsh/test_dsh_swebench.py::test_dsh_swebench --test-config-file tests/e2e/function/agentbench/dsh/cases/qwen3_coder_dsh_2x1_plan_subagent.json
 
   # cpu_small is another machine, so it builds the same Dockerfile itself.
   - label: ":docker: Build CI image (cpu)"

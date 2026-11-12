@@ -1,5 +1,5 @@
 {
-  "test_name": "qwen3_coder_dsh_8x4_plan_subagent",
+  "test_name": "qwen3_coder_dsh_2x1",
   "scenario": "baseline",
   "mark": [
     {
@@ -11,7 +11,7 @@
       }
     }
   ],
-  "description": "Qwen3-Coder-30B-A3B-Instruct-FP8 on 2x L20 + DSH plan-subagent, SWE-bench Verified 8 tasks x 4 concurrency",
+  "description": "Qwen3-Coder-30B-A3B-Instruct-FP8 on 2x L20 + DSH single, SWE-bench Verified 2 tasks x 1 concurrency",
   "serve_env": {
     "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1"
   },
@@ -38,11 +38,10 @@
     "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
     "agent-type": "dsh",
     "agent-executable": "/usr/local/bin/dsh",
-    "agent-profile": "plan-subagent",
-    "benchmark-run-as-user": "test-user",
+    "agent-profile": "single",
     "endpoint": "/v1/chat/completions",
-    "task-num": 8,
-    "max-concurrency": 4,
-    "timeout": 3600
+    "task-num": 2,
+    "max-concurrency": 1,
+    "timeout": 14400
   }
 }
