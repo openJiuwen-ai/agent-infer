@@ -39,16 +39,17 @@ steps:
           AGENTINFER_CI_AS_ROOT: "1"
         timeout_in_minutes: 90
         commands:
+          # pipeline upload expands $NAME. $$ is the literal $ the container shell needs.
           - |
-            trap 'status=$?; uid=$(stat -c %u .); gid=$(stat -c %g .); if [ "$uid" != 0 ]; then chown -R "$uid:$gid" . || true; fi; exit "$status"' EXIT
+            trap 'status=$$?; uid=$$(stat -c %u .); gid=$$(stat -c %g .); if [ "$$uid" != 0 ]; then chown -R "$$uid:$$gid" . || true; fi; exit "$$status"' EXIT
             if id test-user >/dev/null 2>&1; then
               echo "test-user exists, skip useradd"
             else
               useradd -m -s /bin/bash test-user
             fi
             for extra in video render; do
-              if getent group "$extra" >/dev/null 2>&1; then
-                usermod -aG "$extra" test-user
+              if getent group "$$extra" >/dev/null 2>&1; then
+                usermod -aG "$$extra" test-user
               fi
             done
             pytest -s -v tests/e2e/function/agentbench/dsh/test_dsh_swebench.py::test_dsh_swebench --test-config-file tests/e2e/function/agentbench/dsh/cases/qwen3_coder_dsh_8x4.json
