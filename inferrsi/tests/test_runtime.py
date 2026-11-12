@@ -260,6 +260,49 @@ class RuntimeTests(unittest.TestCase):
         _, evaluation = self.run_spec(output_dir=str(self.repo / "runs"))
         self.assertEqual(evaluation["verdict"], "PASS")
 
+    def test_exclude_reached_through_a_symlink_covers_its_target(self):
+        """An exclude root passed as a symlink must exclude the same files.
+
+        The candidate path was compared with ``absolute()`` against a resolved
+        exclude root, so the two sides were expressed in different terms: a
+        symlink pointing at the output directory stayed in the fingerprint even
+        when it *was* the exclude root.
+        """
+
+        output = self.repo / "output"
+        output.mkdir()
+        (output / "gen.txt").write_text("generated\n", encoding="utf-8")
+        (self.repo / "outlink").symlink_to(output, target_is_directory=True)
+
+        for exclude in (self.repo / "outlink", output):
+            identity = repository_identity(self.repo, exclude=exclude)
+            self.assertTrue(identity["available"])
+            self.assertEqual(identity["untracked"], [], f"exclude={exclude.name}")
+            self.assertFalse(identity["dirty"], f"exclude={exclude.name}")
+
+        # Without an exclude root both paths are genuine source evidence.
+        identity = repository_identity(self.repo)
+        self.assertEqual(
+            sorted(entry["path"] for entry in identity["untracked"]),
+            ["outlink", "output/gen.txt"],
+        )
+
+    def test_exclude_does_not_swallow_a_sibling_of_the_symlink_target(self):
+        """Resolving the candidate must not widen the exclude to its parent."""
+
+        output = self.repo / "output"
+        output.mkdir()
+        (output / "gen.txt").write_text("generated\n", encoding="utf-8")
+        (self.repo / "outlink").symlink_to(output, target_is_directory=True)
+        (self.repo / "other.txt").write_text("not generated\n", encoding="utf-8")
+
+        identity = repository_identity(self.repo, exclude=self.repo / "outlink")
+        self.assertEqual(
+            [entry["path"] for entry in identity["untracked"]],
+            ["other.txt"],
+        )
+        self.assertTrue(identity["dirty"])
+
     def test_unique_runs_do_not_reuse_previous_metrics(self):
         first, _ = self.run_spec(repetitions=1)
         second, evaluation = self.run_spec(
