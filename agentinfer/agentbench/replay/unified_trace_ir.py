@@ -170,7 +170,11 @@ def _trace_ir_digest_payload(manifest: dict[str, object]) -> dict[str, object]:
         "texts": manifest.get("texts"),
         "summary": manifest.get("summary"),
     }
-    if manifest.get("schema_version") in {TOKEN_RECIPE_SCHEMA_VERSION, HASH_SNAPSHOT_SCHEMA_VERSION}:
+    schema_version = manifest.get("schema_version")
+    if isinstance(schema_version, str) and schema_version in {
+        TOKEN_RECIPE_SCHEMA_VERSION,
+        HASH_SNAPSHOT_SCHEMA_VERSION,
+    }:
         payload["prompt_source"] = manifest.get("prompt_source")
     return payload
 
@@ -212,7 +216,14 @@ def validate_trace_ir(requests_path: Path, text_dir: Path | None = None) -> Unif
     manifest_path = root / BUNDLE_MANIFEST_NAME
     manifest = _load_object(manifest_path, "unified Trace IR manifest")
     schema_version = manifest.get("schema_version")
-    if schema_version not in {BUNDLE_SCHEMA_VERSION, TOKEN_RECIPE_SCHEMA_VERSION, HASH_SNAPSHOT_SCHEMA_VERSION}:
+    # A JSON value reaches this membership test untyped. A list or object is
+    # unhashable and would raise ``TypeError`` instead of the ``ValueError``
+    # this function uses for every other malformed-manifest case.
+    if not isinstance(schema_version, str) or schema_version not in {
+        BUNDLE_SCHEMA_VERSION,
+        TOKEN_RECIPE_SCHEMA_VERSION,
+        HASH_SNAPSHOT_SCHEMA_VERSION,
+    }:
         raise ValueError(f"unsupported unified Trace IR schema_version: {manifest.get('schema_version')!r}")
     prompt_source = manifest.get("prompt_source")
     if schema_version == BUNDLE_SCHEMA_VERSION:
