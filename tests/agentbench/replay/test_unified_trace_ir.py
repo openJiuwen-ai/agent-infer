@@ -209,6 +209,26 @@ def test_trace_ir_rejects_old_manifest_schema(tmp_path: Path) -> None:
         validate_trace_ir(output / "requests.jsonl", output / "texts")
 
 
+@pytest.mark.parametrize("schema_version", [[], {}, ["2"]])
+def test_trace_ir_rejects_non_string_manifest_schema(tmp_path: Path, schema_version: object) -> None:
+    """A non-string schema_version raises ``ValueError``, not ``TypeError``.
+
+    The value comes straight from JSON and goes into a set membership test. A
+    list or object is unhashable, so without the type check this raised
+    ``TypeError: unhashable type`` -- breaking the ``ValueError`` contract every
+    other malformed-manifest case in this function follows.
+    """
+
+    output, _, _ = _trace_ir(tmp_path)
+    manifest_path = output / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema_version"] = schema_version
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unsupported unified Trace IR schema_version"):
+        validate_trace_ir(output / "requests.jsonl", output / "texts")
+
+
 def test_inferact_synthetic_uses_human_sidecar_and_live_length_aligned_assistant(tmp_path: Path) -> None:
     output, _, trace_ir = _trace_ir(tmp_path)
     config = ReplayBenchConfig.model_validate(
