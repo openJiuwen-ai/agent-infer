@@ -1294,10 +1294,24 @@ def test_legacy_timing_node_without_actor_fields_loads(tmp_path: Path) -> None:
 #   * a field classified as "mutating it must be rejected" that stops being
 #     rejected fails the mutation test, so a check cannot be lost silently.
 #
-# The classification is deliberately not "reject everything". Fields that only
-# annotate the artifact (``planner_version``, ``source``, the ``interval_model``
-# audit values) are listed as unconstrained on purpose, and their reason is
-# recorded -- that is the documented boundary of what loading promises.
+# The classification is deliberately not "reject everything". Fields the loader
+# does not constrain are split by *why*, because "no check" means three
+# different things and collapsing them hides the two that still matter at run
+# time:
+#
+#   * ``annotation`` -- pure description of the artifact. Nothing reads it after
+#     load, so any well-formed value is genuinely harmless.
+#   * ``annotation-execution`` -- the loader cannot cross-check it against the
+#     original source, but the executor *does* send it, so a changed value
+#     changes the run. Type and range are still checked where the field has
+#     them; fidelity to the source is not checkable from the artifact alone.
+#   * ``annotation-provenance`` -- a record of where the plan came from. It
+#     feeds the run summary rather than the request, so a changed value changes
+#     what the run reports but not what it does.
+#
+# Every non-constrained class still loads with an arbitrary well-formed value;
+# the distinction is documentation plus the grouping test below, which keeps a
+# field from being filed as "pure annotation" when something consumes it.
 
 _PLAN_FIELDS = {
     # Rejected when mutated: the loader constrains them.
@@ -1346,10 +1360,10 @@ _REQUEST_NODE_FIELDS = {
     "planned_output_tokens": "non-negative",
     "source_prefix_tokens": "<= planned_input_tokens",
     "prompt_ref": "parsed; one safe path component",
-    "source_output_tokens": "annotation",
-    "backend_sampling_seed": "annotation",
+    "source_output_tokens": "annotation-provenance (counted in the run summary)",
+    "backend_sampling_seed": "annotation-execution (sent as the backend sampling seed)",
     "response_validation": "enum",
-    "parent_actor_id": "annotation",
+    "parent_actor_id": "annotation-execution (sent as the parent-agent header)",
     "effective_output_tokens": "annotation; ignored on load",
 }
 
@@ -1361,16 +1375,18 @@ _TIMING_NODE_FIELDS = {
     "effective_interval_seconds": "finite, non-negative",
     "effective_duration_seconds": "finite, non-negative",
     "prompt_kind": "must be 'none'",
-    "actor_id": "annotation",
-    "actor_role": "annotation",
-    "parent_actor_id": "annotation",
+    "actor_id": "annotation-provenance (whose wait this is)",
+    "actor_role": "annotation-provenance",
+    "parent_actor_id": "annotation-provenance",
 }
 
 
 # Fields `to_dict` writes only when they carry a value. They legitimately
 # disappear from an artifact, so the coverage test cannot demand them in a
 # builder-produced sample. Only the names live here; their constraints stay in
-# the table above so a field never carries two classifications.
+# the table above so a field never carries two classifications -- enforced by
+# ``test_conditional_fields_are_classified`` below, which is what stops a field
+# from being excused here and never classified at all.
 _CONDITIONAL_REQUEST_NODE_FIELDS = frozenset(
     {"prompt_ref", "response_validation", "source_prefix_tokens", "effective_output_tokens"}
 )
@@ -1544,3 +1560,225 @@ def test_every_classified_field_has_a_mutation() -> None:
     classified = {(level, field) for level, table in _FIELD_TABLES.items() for field in table}
     assert classified - mutated == set(), f"classified but never mutated: {sorted(classified - mutated)}"
     assert mutated - classified == set(), f"mutated but never classified: {sorted(mutated - classified)}"
+
+
+def test_conditional_fields_are_classified() -> None:
+    """A field excused from the coverage test must still be classified.
+
+    ``_CONDITIONAL_REQUEST_NODE_FIELDS`` removes a name from the "must appear in
+    a builder sample" requirement. Without this check, adding a field there and
+    nowhere else leaves it wholly unclassified while every other test still
+    passes -- the exact hole that lets a serialized field escape the contract.
+    """
+
+    unclassified = _CONDITIONAL_REQUEST_NODE_FIELDS - set(_REQUEST_NODE_FIELDS)
+    assert unclassified == set(), f"conditional but never classified: {sorted(unclassified)}"
+
+
+# --- Built artifacts, not just the hand-built minimal dict -------------------
+#
+# Everything above mutates a hand-written dict. A builder-produced artifact is
+# the only thing that proves the *real* shapes load: a schema-2 plan written by
+# the TraceLab or AgentX paths carries conditional fields the minimal dict never
+# sets, so a constraint that fires on them would be invisible above. These
+# build through the real converter, save, reload, and compare field by field.
+
+
+def _trace_ir_roundtrip_plan(tmp_path: Path, kind: str) -> ReplayPlan:
+    from agentinfer.agentbench.replay.converters import TraceLabConverter
+    from agentinfer.agentbench.replay.converters.agentx import AgentXConverter, analyze_agentx_trace_ir
+    from agentinfer.agentbench.replay.unified_trace_ir import (
+        analyze_explicit_trace_ir,
+        validate_trace_ir,
+    )
+
+    source = tmp_path / f"{kind}-source.jsonl"
+    output = tmp_path / f"{kind}-converted"
+    if kind == "tracelab":
+        rows = [
+            {
+                "provider": "codex",
+                "project": "fixture",
+                "session_id": "session",
+                "round_index": index,
+                "round_id": f"round-{index}",
+                "model": "source-model",
+                "input_tokens_total": input_tokens,
+                "prefix_tokens": prefix_tokens,
+                "newly_append_tokens": input_tokens - prefix_tokens,
+                "output_tokens": 7 + index,
+                "reasoning_output_tokens": 1,
+                "timing_events": [
+                    {"event_type": "user_message", "timestamp": f"2026-01-01T00:00:0{index}Z"},
+                    {"event_type": "text", "timestamp": f"2026-01-01T00:00:0{index + 1}Z"},
+                ],
+                "tools": [{"is_error": True}],
+            }
+            for index, (input_tokens, prefix_tokens) in enumerate([(30, 20), (35, 29)])
+        ]
+        source.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        TraceLabConverter().convert(source, output)
+        trace_ir = validate_trace_ir(output / "requests.jsonl")
+        analysis = analyze_explicit_trace_ir(trace_ir)
+        config = ReplayBenchConfig.model_validate(
+            {"experiment": {"task_num": 1}, "replay": {"trace_type": "tracelab", "trace_path": source}}
+        )
+    else:
+        source.write_text(
+            json.dumps(
+                {
+                    "id": "source-session",
+                    "models": ["model-a"],
+                    "block_size": 64,
+                    "hash_id_scope": "local",
+                    "requests": [
+                        {"t": 0, "api_time": 4, "in": 64, "out": 3, "hash_ids": [0], "model": "model-a", "type": "n"},
+                        {
+                            "t": 1,
+                            "api_time": 1,
+                            "in": 128,
+                            "out": 3,
+                            "hash_ids": [0, 1],
+                            "model": "model-a",
+                            "type": "n",
+                        },
+                    ],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        AgentXConverter().convert(source, output)
+        trace_ir = validate_trace_ir(output / "requests.jsonl")
+        analysis = analyze_agentx_trace_ir(trace_ir)
+        config = ReplayBenchConfig.model_validate(
+            {
+                "experiment": {"task_num": 1},
+                "backend": {"base_url": "http://backend", "model": "served-model", "endpoint": "/v1/completions"},
+                "replay": {"trace_type": "agentX", "trace_path": source},
+            }
+        )
+    return build_replay_plan(config, analysis, trace_ir)
+
+
+@pytest.mark.parametrize("kind", ["tracelab", "agentx"])
+def test_builder_produced_schema2_plan_loads_unchanged(tmp_path: Path, kind: str) -> None:
+    """A real schema-2 artifact survives save/load with every field intact.
+
+    The hand-built fixtures above are schema 1. The schema-2 shapes set fields
+    the minimal dict leaves at their defaults -- TraceLab's zero output target
+    for a warmup request in particular -- so this is the case that would catch a
+    load-time rule that rejects a plan the builder itself wrote.
+    """
+
+    plan = _trace_ir_roundtrip_plan(tmp_path, kind)
+    assert plan.schema_version == "2"
+
+    path = tmp_path / f"{kind}-plan.json"
+    path.write_text(json.dumps(plan.to_dict()), encoding="utf-8")
+    loaded = ReplayPlan.load(path)
+    validate_loaded_plan(loaded)
+
+    assert json.dumps(loaded.to_dict(), sort_keys=True) == json.dumps(plan.to_dict(), sort_keys=True)
+
+
+# --- Review round 2026-11-12 -------------------------------------------------
+
+
+def test_validate_loaded_plan_rejects_timing_node_sharing_a_request_id() -> None:
+    """A timing node and a request may not share an id, even across tasks.
+
+    The executor removes per-node preparation state by id at task end and the
+    tokenizer cancels in-flight work by id, so a shared id deletes the other
+    node's records. The check used to sit inside the ``node_type == "request"``
+    branch, so a timing node slipped past it.
+    """
+
+    data = _minimal_plan_dict()
+    second = json.loads(json.dumps(data["tasks"][0]))
+    second.update(
+        {
+            "task_id": "replay-000001",
+            "task_index": 1,
+            "sample_ordinal": 1,
+            "runtime_session_id": "sess-2",
+            "source_session_id": "s2",
+        }
+    )
+    second["requests"][0].update({"source_key": "k2", "runtime_request_id": "rid-2", "prompt_recipe_key": "k2"})
+    data["tasks"].append(second)
+
+    timing = _timing_node_dict()
+    timing["runtime_request_id"] = "rid-1"
+    timing["source_key"] = "wait-1"
+    second["requests"].append(timing)
+
+    with pytest.raises(ValueError, match="timing_dependency runtime_request_id rid-1 must be unique"):
+        validate_loaded_plan(ReplayPlan.from_dict(data))
+
+
+@pytest.mark.parametrize("status", [[], {}])
+def test_validate_loaded_plan_rejects_non_string_calibration_status(status: object) -> None:
+    """A non-string status raises ``ValueError``, as the docstring promises.
+
+    A membership test on an unhashable value raises ``TypeError`` instead, which
+    a caller catching the documented ``ValueError`` would not see.
+    """
+
+    data = _minimal_plan_dict()
+    data["prompt_calibration"]["status"] = status
+    with pytest.raises(ValueError, match="prompt_calibration.status must be one of"):
+        validate_loaded_plan(ReplayPlan.from_dict(data))
+
+
+def test_validate_loaded_plan_rejects_zero_output_in_a_schema1_plan() -> None:
+    """Schema 1 never carries a zero output target; schema 2 legitimately does."""
+
+    data = _minimal_plan_dict()
+    _first_request_node(data)["planned_output_tokens"] = 0
+    with pytest.raises(ValueError, match="positive output target in a schema-1 plan"):
+        validate_loaded_plan(ReplayPlan.from_dict(data))
+
+    data["schema_version"] = "2"
+    validate_loaded_plan(ReplayPlan.from_dict(data))
+
+
+def _long_chain(count: int, *, reverse: bool) -> dict:
+    data = _minimal_plan_dict()
+    base = _first_request_node(data)
+    nodes = []
+    for index in range(count):
+        node = json.loads(json.dumps(base))
+        node.update(
+            {
+                "source_key": f"k{index}",
+                "runtime_request_id": f"rid-{index}",
+                "prompt_recipe_key": f"k{index}",
+                "send_after": f"k{index - 1}" if index else None,
+            }
+        )
+        nodes.append(node)
+    data["tasks"][0]["requests"] = list(reversed(nodes)) if reverse else nodes
+    return data
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_validate_loaded_plan_handles_a_long_dependency_chain(reverse: bool) -> None:
+    """Node order in the artifact must not decide whether a plan loads.
+
+    The acyclic check recursed once per edge, so a valid 1000-request chain
+    loaded in build order and raised ``RecursionError`` when the same chain was
+    serialized in reverse. The traversal is iterative now.
+    """
+
+    data = _long_chain(1000, reverse=reverse)
+    validate_loaded_plan(ReplayPlan.from_dict(data))
+
+
+def test_validate_loaded_plan_still_rejects_a_cycle_in_a_long_chain() -> None:
+    """The iterative traversal keeps detecting cycles, not just avoiding the crash."""
+
+    data = _long_chain(1000, reverse=True)
+    data["tasks"][0]["requests"][-1]["send_after"] = "k999"  # k999 -> ... -> k0 -> k999
+    with pytest.raises(ValueError, match="dependency cycle detected"):
+        validate_loaded_plan(ReplayPlan.from_dict(data))

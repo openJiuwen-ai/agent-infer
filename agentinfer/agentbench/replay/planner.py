@@ -601,22 +601,40 @@ def _validate_acyclic(nodes: Iterable[ReplayPlanNode]) -> None:
         key: tuple(dep for dep in (node.send_after, node.context_after) if dep is not None)
         for key, node in by_key.items()
     }
-    visiting: set[str] = set()
+    # Iterative depth-first search with an explicit stack. The recursive form
+    # depended on the nodes happening to be ordered predecessor-first: a valid
+    # 1000-request chain loads when it is written in build order and raises
+    # ``RecursionError`` when the same chain is serialized in reverse. Node order
+    # does not change the dependency graph, so it must not change the verdict,
+    # and the interpreter's recursion limit is not a property of the plan.
+    #
+    # Frames are ``(key, index of the next predecessor to follow)``; the stack
+    # itself is the current path, so the cycle message is formed from it without
+    # copying a path tuple per edge.
     visited: set[str] = set()
-
-    def visit(key: str, path: tuple[str, ...]) -> None:
-        if key in visited:
-            return
-        if key in visiting:
-            raise ValueError(f"dependency cycle detected: {' -> '.join((*path, key))}")
-        visiting.add(key)
-        for predecessor in edges[key]:
-            visit(predecessor, (*path, key))
-        visiting.remove(key)
-        visited.add(key)
-
-    for key in by_key:
-        visit(key, ())
+    on_path: set[str] = set()
+    for root in by_key:
+        if root in visited:
+            continue
+        stack: list[tuple[str, int]] = [(root, 0)]
+        on_path.add(root)
+        while stack:
+            key, index = stack[-1]
+            predecessors = edges[key]
+            if index < len(predecessors):
+                stack[-1] = (key, index + 1)
+                predecessor = predecessors[index]
+                if predecessor in on_path:
+                    cycle = [frame[0] for frame in stack] + [predecessor]
+                    start = cycle.index(predecessor)
+                    raise ValueError(f"dependency cycle detected: {' -> '.join(cycle[start:])}")
+                if predecessor not in visited:
+                    stack.append((predecessor, 0))
+                    on_path.add(predecessor)
+                continue
+            stack.pop()
+            on_path.discard(key)
+            visited.add(key)
 
 
 def _validate_task(
@@ -925,9 +943,12 @@ def validate_loaded_plan(plan: ReplayPlan) -> None:
     listed below as not recoverable from the artifact, so the two validators do
     not drift apart a check at a time:
 
-    - ``planned_output_tokens >= 1`` is **not** enforced: the bound is
-      ``allow_unknown_context``, a build-time flag the artifact does not carry
-      (TraceLab plans legitimately allow a zero output target).
+    - ``planned_output_tokens >= 1`` is enforced for ``schema_version == "1"``
+      only. The exemption exists for the trace-record shapes (TraceLab
+      structural plans legitimately allow a zero output target), and every
+      builder that writes those emits schema 2, which the artifact records. The
+      build-time ``allow_unknown_context`` flag is not needed: schema 1 plus a
+      zero output target is not a combination any builder can produce.
     - ``context_after`` must reference a source ``success`` is **not** enforced:
       ``from_dict`` restores ``source_status="unknown"`` for every node, so the
       check would be vacuous. Everything about the target that *is* recoverable
@@ -967,7 +988,12 @@ def validate_loaded_plan(plan: ReplayPlan) -> None:
     # (``pending`` -> ``active`` -> ``completed``/``failed``); an unknown value
     # would make a reloaded artifact report a state no run can produce.
     status = plan.prompt_calibration.get("status")
-    if status not in _CALIBRATION_STATUSES:
+    # ``from_dict`` copies the calibration mapping through without inspecting
+    # it, so a hand-edited artifact can carry ``[]`` or ``{}`` here. The
+    # membership test alone would raise ``TypeError: unhashable type`` for those,
+    # which contradicts the documented ``ValueError`` contract and slips past a
+    # caller that catches what the docstring promises.
+    if not isinstance(status, str) or status not in _CALIBRATION_STATUSES:
         raise ValueError(f"plan prompt_calibration.status must be one of {sorted(_CALIBRATION_STATUSES)}")
     # Both counts are reported as coverage, and a plan claiming more replayable
     # sessions than it saw is impossible for any builder to have written.
@@ -1033,15 +1059,22 @@ def validate_loaded_plan(plan: ReplayPlan) -> None:
             for field in ("source_key", "runtime_request_id"):
                 if not getattr(node, field):
                     raise ValueError(f"node {field} must be non-empty in {task.task_id}")
-            # The per-task check above misses a request id reused by another
-            # task. ``_execution_metadata()`` flattens every task's requests into
-            # one mapping keyed on this id, so the later task silently replaces
-            # the earlier one and first/continuation cache stats are computed
+            # The per-task check above misses an id reused by another task. The
+            # rule is stated for every node type, not just requests: a timing
+            # node is keyed on this id too (the executor drops its per-node
+            # preparation records by it at task end, and the tokenizer cancels
+            # in-flight work by it), so a timing node sharing a request's id
+            # deletes the other node's state. Checking before the node-type
+            # branch means a future node type inherits the rule instead of
+            # silently escaping it.
+            if node.runtime_request_id in runtime_request_ids:
+                raise ValueError(f"{node.node_type} runtime_request_id {node.runtime_request_id} must be unique")
+            runtime_request_ids.add(node.runtime_request_id)
+            # ``_execution_metadata()`` flattens every task's requests into one
+            # mapping keyed on this id, so the later task silently replaces the
+            # earlier one and first/continuation cache stats are computed
             # against the wrong node.
             if node.node_type == "request":
-                if node.runtime_request_id in runtime_request_ids:
-                    raise ValueError(f"request runtime_request_id {node.runtime_request_id} must be unique")
-                runtime_request_ids.add(node.runtime_request_id)
                 # Same reasoning for the actor: an empty actor_id makes the
                 # same-actor context check below compare "" against "" and pass.
                 for field in ("prompt_recipe_key", "actor_id"):
@@ -1067,6 +1100,17 @@ def validate_loaded_plan(plan: ReplayPlan) -> None:
                 isinstance(node.planned_input_tokens, int) and node.planned_input_tokens > 0
             ):
                 raise ValueError(f"request {node.source_key} has no positive input target")
+            # A zero output target is only producible by the trace-record shapes
+            # (TraceLab structural plans), and those write schema 2. The schema
+            # version is in the artifact, so the exemption can be scoped without
+            # reaching for build-time flags: a schema-1 request promising no
+            # output is a hand-edited artifact, not a plan any builder wrote.
+            if (
+                node.node_type == "request"
+                and plan.schema_version == "1"
+                and not (isinstance(node.planned_output_tokens, int) and node.planned_output_tokens >= 1)
+            ):
+                raise ValueError(f"request {node.source_key} must have a positive output target in a schema-1 plan")
             if node.node_type == "request":
                 if node.source_prefix_tokens is not None and (
                     node.source_prefix_tokens < 0 or node.source_prefix_tokens > node.planned_input_tokens
