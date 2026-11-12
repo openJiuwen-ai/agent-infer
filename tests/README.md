@@ -60,7 +60,7 @@ pytest tests/agentcache/ tests/agentbench/ -v
 ### Run E2E tests (GPU / NPU, real model)
 
 End-to-end tests live under [`tests/e2e/`](e2e/README.md) (performance benchmarks and functional suites).
-They are not part of default CPU CI (`pytest --ignore=tests/e2e`).
+They have no ready lane and are not selected by default CPU CI (`-m "cpu and ready"`).
 
 | Suite | Entry doc |
 | ----- | --------- |
@@ -106,6 +106,11 @@ E2E case JSON uses a hardware object and strings:
 This generates only `A3_16` and `function`. CUDA uses `res: {"cuda": "L20"}`;
 CPU uses the string `cpu`. Unknown labels, conflicting dimensions, malformed
 hardware objects and scenes inconsistent with the directory fail collection.
+Hardware marker descriptions register their platform with `[cuda]` or `[npu]`;
+this is registry metadata, not an additional pytest marker. Platform/model
+mismatches are rejected. `timeout` is registered as a mechanism marker so
+collection also works without the optional pytest-timeout plugin; timeout
+enforcement still requires that plugin.
 The case id includes its relative directory to distinguish baseline and
 AgentInfer files with the same name. `--test-config-file` selects one case.
 
@@ -120,6 +125,9 @@ The 12 replay and nine perf cases have no lane and stay out of ready CI.
 `L20_2` is reserved for the DSH cases proposed in PR #75; this baseline does
 not contain those cases or their CI step. No nightly pipeline is introduced.
 `inferrsi/tests/` remains outside this marker policy.
+A single-case override must
+name an existing JSON in a suite's cases tree and match a collected suite;
+invalid overrides fail instead of silently skipping an empty parameter set.
 
 ### Select smoke and real-runtime tests by path
 

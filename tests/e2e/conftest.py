@@ -9,30 +9,69 @@ from pathlib import Path
 
 import pytest
 
-from tests.e2e.helpers.hardware_marks import registered_names, resolve_pytest_marks, scene_for_path
+from tests.e2e.helpers.hardware_marks import (
+    registered_hardware_platforms,
+    registered_names,
+    resolve_pytest_marks,
+    scene_for_path,
+)
+
+_SELECTED_CASE = pytest.StashKey[Path | None]()
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    raw = config.getoption("--test-config-file")
+    selected = Path(raw).resolve() if raw else None
+    config.stash[_SELECTED_CASE] = selected
+    if selected is None:
+        return
+    root = Path(__file__).resolve().parent
+    case_roots = [
+        path.resolve()
+        for path in root.rglob("cases")
+        if path.is_dir()
+        and scene_for_path(path) is not None
+        and (any(path.parent.glob("test_*.py")) or (path.parent / "run_benchmark.py").is_file())
+    ]
+    if (
+        selected.suffix != ".json"
+        or not selected.is_file()
+        or not any(selected.is_relative_to(path) for path in case_roots)
+    ):
+        raise pytest.UsageError(f"--test-config-file must name an existing JSON in an E2E suite's cases tree: {raw}")
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    selected = config.stash.get(_SELECTED_CASE, None)
+    if selected is not None and not any(
+        getattr(item, "callspec", None) is not None and item.callspec.params.get("case_file") == selected
+        for item in items
+    ):
+        raise pytest.UsageError(f"--test-config-file is not handled by any collected suite: {selected}")
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if "case_file" not in metafunc.fixturenames:
         return
-    suite_dir = Path(metafunc.definition.path).parent
-    selected = metafunc.config.getoption("--test-config-file")
-    paths = [Path(selected).resolve()] if selected else sorted((suite_dir / "cases").rglob("*.json"))
+    cases_dir = (Path(metafunc.definition.path).parent / "cases").resolve()
+    selected = metafunc.config.stash.get(_SELECTED_CASE, None)
+    paths = [selected] if selected else sorted(path.resolve() for path in cases_dir.rglob("*.json"))
+    registered = registered_names(metafunc.config)
+    platforms = registered_hardware_platforms(metafunc.config)
     params = []
     for path in paths:
         try:
-            if not path.is_relative_to((suite_dir / "cases").resolve()):
+            if not path.is_relative_to(cases_dir):
                 # A CLI override selects only the suite that owns the case.
-                if not path.is_file():
-                    raise ValueError("case file does not exist")
                 continue
             payload = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError("case JSON must be an object")
             marks = resolve_pytest_marks(
-                payload.get("mark", []), registered_names(metafunc.config), scene=scene_for_path(path)
+                payload.get("mark", []), registered, platforms=platforms, scene=scene_for_path(path)
             )
-            case_id = path.relative_to(suite_dir / "cases").with_suffix("").as_posix()
+            case_id = path.relative_to(cases_dir).with_suffix("").as_posix()
             params.append(pytest.param(path, marks=marks, id=case_id))
         except (OSError, ValueError, TypeError) as exc:
             raise pytest.UsageError(f"{metafunc.definition.nodeid} [{path}]: {exc}") from exc

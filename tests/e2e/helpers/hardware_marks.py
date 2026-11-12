@@ -24,6 +24,17 @@ def is_hardware(name: str) -> bool:
     return name == "cpu" or bool(HARDWARE_RE.fullmatch(name))
 
 
+def registered_hardware_platforms(config: pytest.Config) -> dict[str, str]:
+    platforms = {}
+    for line in config.getini("markers"):
+        name, _, description = line.partition(":")
+        if HARDWARE_RE.fullmatch(name.strip()):
+            for platform in ("cuda", "npu"):
+                if f"[{platform}]" in description:
+                    platforms[name.strip()] = platform
+    return platforms
+
+
 def validate_names(names: Iterable[str], registered: set[str], *, scene: str | None = None) -> None:
     dimensions: dict[str, list[str]] = {"hardware": [], "scene": [], "lane": []}
     for name in names:
@@ -51,7 +62,7 @@ def scene_for_path(path: Path) -> str | None:
 
 
 def resolve_pytest_marks(
-    mark_field: Any, registered: set[str], *, scene: str | None = None
+    mark_field: Any, registered: set[str], *, platforms: dict[str, str], scene: str | None = None
 ) -> list[pytest.MarkDecorator]:
     if not isinstance(mark_field, list):
         raise ValueError("mark must be a list")
@@ -81,6 +92,9 @@ def resolve_pytest_marks(
             raise ValueError("hardware model must start with a letter and contain only letters and digits")
         if type(count) is not int or count < 1:
             raise ValueError("num_cards must be a positive integer")
-        names.append(f"{model}_{count}")
+        name = f"{model}_{count}"
+        if name in registered and platforms.get(name) != platform:
+            raise ValueError(f"hardware marker {name!r} is not registered for platform {platform!r}")
+        names.append(name)
     validate_names(names, registered, scene=scene)
     return [getattr(pytest.mark, name) for name in names]

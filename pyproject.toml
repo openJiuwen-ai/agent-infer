@@ -22,14 +22,15 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "cpu: no accelerator",
-    "L20_1: one L20 card",
-    "L20_2: two L20 cards",
-    "A3_16: sixteen A3 cards",
+    "L20_1: [cuda] one L20 card",
+    "L20_2: [cuda] two L20 cards",
+    "A3_16: [npu] sixteen A3 cards",
     "function: tests/e2e/function",
     "perf: tests/e2e/perf",
     "acc: tests/e2e/acc (reserved)",
     "ready: selected by the ready pipeline",
     "nightly: reserved for a future nightly pipeline",
+    "timeout: per-test timeout override supplied by pytest-timeout",
 ]
 
 [tool.setuptools.packages.find]
