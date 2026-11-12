@@ -21,7 +21,7 @@ from agentinfer.agentbench.benchkit.runner import run_benchmark
 
 from .helpers.benchmark_smoke import FakeAgentRuntime, FakeModelServer, ThreadBarrier, ThreadRequestProxyProcess
 
-pytestmark = [pytest.mark.cpu_test, pytest.mark.benchmark_smoke]
+pytestmark = [pytest.mark.cpu, pytest.mark.ready]
 
 
 @pytest.fixture(autouse=True)

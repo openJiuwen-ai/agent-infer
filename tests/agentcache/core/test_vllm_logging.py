@@ -11,7 +11,7 @@ import pytest
 
 from agentinfer.agentcache.core.vllm_logging import attach_agentinfer_to_vllm_logging
 
-pytestmark = pytest.mark.cpu_test
+pytestmark = pytest.mark.cpu
 
 
 @pytest.fixture

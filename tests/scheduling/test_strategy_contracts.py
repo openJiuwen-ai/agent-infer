@@ -34,7 +34,7 @@ from agentinfer.scheduling import (
     TransitionResult,
 )
 
-pytestmark = pytest.mark.cpu_test
+pytestmark = [pytest.mark.cpu, pytest.mark.ready]
 
 
 @dataclass(frozen=True)

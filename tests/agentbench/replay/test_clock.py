@@ -14,7 +14,7 @@ from agentinfer.agentbench.replay.prompt import SyntheticPrompt
 from agentinfer.agentbench.replay.transport import TransportResult
 from tests.agentbench.replay.test_executor import _node
 
-pytestmark = pytest.mark.cpu_test
+pytestmark = [pytest.mark.cpu, pytest.mark.ready]
 
 
 class ManualClock:

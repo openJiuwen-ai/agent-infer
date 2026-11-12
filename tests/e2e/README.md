@@ -1,6 +1,6 @@
 # End-to-end tests (`tests/e2e`)
 
-GPU/NPU-oriented E2E tests. Excluded from default CPU CI (`pytest --ignore=tests/e2e`).
+GPU/NPU-oriented E2E tests. Ready CPU CI selects `cpu and ready`; these cases have no ready lane.
 
 Shared helpers for case JSON and vLLM lifecycle: [`helpers/`](helpers/).
 

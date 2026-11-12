@@ -13,7 +13,7 @@ from tests.agentbench.replay.helpers.cold_start import run_round
 from tests.agentbench.replay.helpers.fixtures import build_fixture
 from tests.agentbench.replay.helpers.validation import validate_round
 
-pytestmark = [pytest.mark.cpu_test, pytest.mark.replay_smoke]
+pytestmark = [pytest.mark.cpu, pytest.mark.ready]
 
 
 @pytest.fixture(scope="module")

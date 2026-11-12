@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
-"""Pytest E2E performance benchmark driven by a JSON case file."""
+"""Explicit pytest entry point for JSON-driven E2E performance benchmarks."""
 
 from __future__ import annotations
 
@@ -12,15 +12,10 @@ from ..helpers.benchmark import run_benchmark, validate_completed_run
 from ..helpers.case_loader import E2EConfig, load_case_file
 
 
-@pytest.mark.e2e_perf
-def test_benchmark_completes(pytestconfig: pytest.Config) -> None:
-    """Run one benchmark case selected by ``--test-config-file``."""
+def test_benchmark_completes(pytestconfig: pytest.Config, case_file: Path) -> None:
+    """Run one independently collected JSON benchmark case."""
 
-    test_config_file = pytestconfig.getoption("--test-config-file")
-    if not test_config_file:
-        pytest.skip("--test-config-file is required for e2e perf benchmarks")
-
-    case = load_case_file(Path(test_config_file))
+    case = load_case_file(case_file)
     config = E2EConfig.from_case(case).with_benchmark_load(
         task_num=pytestconfig.getoption("--task-num"),
         max_concurrency=pytestconfig.getoption("--max-concurrency"),

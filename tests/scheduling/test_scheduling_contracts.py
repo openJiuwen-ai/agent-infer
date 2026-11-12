@@ -6,7 +6,7 @@ import pytest
 
 from agentinfer.scheduling import BackendInfo, BackendPoolInfo, DpRankInfo, ProgramRef, ProgramTokenObservation
 
-pytestmark = pytest.mark.cpu_test
+pytestmark = [pytest.mark.cpu, pytest.mark.ready]
 
 
 def test_program_ref_and_token_observation_validate_counts() -> None:

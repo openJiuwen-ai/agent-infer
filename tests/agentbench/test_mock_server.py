@@ -15,7 +15,7 @@ from tests.agentbench.helpers.mock_server import MockServerProcess
 from tests.agentbench.helpers.mock_server.process import read_rows
 from tests.agentbench.helpers.mock_server.protocol import Scenario
 
-pytestmark = pytest.mark.cpu_test
+pytestmark = [pytest.mark.cpu, pytest.mark.ready]
 
 
 def body(request_id="r", *, chat=False, **overrides):

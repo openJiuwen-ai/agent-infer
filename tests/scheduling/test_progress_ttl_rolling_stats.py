@@ -6,7 +6,7 @@ import pytest
 
 from agentinfer.scheduling.progress_ttl import ProgressTTLConfig, ProgressTTLGlobalFactors
 
-pytestmark = pytest.mark.cpu_test
+pytestmark = [pytest.mark.cpu, pytest.mark.ready]
 
 
 def test_config_rejects_invalid_segment_and_capacity_bounds() -> None:

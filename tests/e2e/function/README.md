@@ -3,7 +3,7 @@
 Correctness-oriented GPU/NPU checks (repeatability, smoke). **Not** the performance A/B tree under
 [`../perf/`](../perf/).
 
-Default CI skips all of `tests/e2e` (`pytest --ignore=tests/e2e`).
+Ready CPU CI selects `cpu and ready`; these E2E cases have no ready lane.
 
 ## Features
 

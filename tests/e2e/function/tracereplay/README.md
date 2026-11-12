@@ -1,7 +1,7 @@
 # Trace replay functional E2E (`tests/e2e/function/tracereplay`)
 
 Cold vLLM + `vllm bench serve --agentinfer replay` repeatability for **Inferact**, **TraceLab**, and **AgentX**.
-Requires a GPU/NPU host with vLLM, weights, and trace files. Default CI skips `tests/e2e`.
+Requires a GPU/NPU host with vLLM, weights, and trace files. These cases have no CI lane and are not selected by ready.
 
 ## Layout
 
@@ -11,7 +11,7 @@ tracereplay/
 │   ├── inferact/    # *.json
 │   ├── tracelab/
 │   └── agentx/
-├── test_replay.py   # test_trace_replay[inferact|tracelab|agentx]
+├── test_replay.py   # test_trace_replay[family/case]
 ├── conftest.py
 └── helpers/
 ```
@@ -28,23 +28,24 @@ Shared vLLM/case loading: [`../../helpers/`](../../helpers/).
 | [`../../conftest.py`](../../conftest.py) | Shared `--test-config-file`, `--task-num`, and `--max-concurrency` options |
 | `conftest.py` | Replay-specific `--bench-config`, `--cold-runs`, and `--stability-tolerance` options |
 
-`test_replay.py` parametrizes three suites; only the param whose `workload` matches `--test-config-file`
-runs—the others **skip**. Prefer `test_replay.py::test_trace_replay[tracelab]`.
+Each case JSON is collected as an independent item, with `A3_16` and `function` markers.
+Use `--test-config-file` to select one case, or `-m "A3_16 and function"` to select all 12.
+No lane is assigned, so ready CI does not select these cases.
 
 ## Quick start (pytest)
 
 ```bash
-pytest -s -v tests/e2e/function/tracereplay/test_replay.py::test_trace_replay[inferact] \
+pytest -s -v tests/e2e/function/tracereplay/test_replay.py::test_trace_replay \
   --test-config-file tests/e2e/function/tracereplay/cases/inferact/glm52_8x4_inferact_replay.json \
   --cold-runs 2 \
   --stability-tolerance 0.05
 ```
 
-Replace `[inferact]` and `cases/inferact/` with `tracelab` or `agentx` as needed.
+Replace `cases/inferact/` and the case filename with the desired TraceLab or AgentX case.
 
 | CLI option | Meaning |
 | ---------- | ------- |
-| `--test-config-file` | **Required.** Case JSON path |
+| `--test-config-file` | Optional. Select a single case JSON; otherwise collect all 12 |
 | `--cold-runs` | Cold vLLM + replay cycles (default **2**); compare uses runs **1** and **2** |
 | `--stability-tolerance` | Max relative metric gap (default **0.05**) |
 | `--task-num` / `--max-concurrency` | Override case JSON load |
@@ -87,7 +88,7 @@ Bench defaults:
 [`docs/en/how-to/run-trace-replay.md`](../../../docs/en/how-to/run-trace-replay.md).
 
 ```bash
-pytest -s -v tests/e2e/function/tracereplay/test_replay.py::test_trace_replay[tracelab] \
+pytest -s -v tests/e2e/function/tracereplay/test_replay.py::test_trace_replay \
   --test-config-file tests/e2e/function/tracereplay/cases/tracelab/glm52_8x4_tracelab_replay.json \
   --cold-runs 2 --stability-tolerance 0.05
 ```

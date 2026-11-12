@@ -19,7 +19,7 @@ steps:
     steps:
       - label: "e2e · serve-flag"
         commands:
-          - AGENTINFER_E2E_MODEL=Qwen/Qwen3-0.6B pytest -sv -m gpu_test tests/agentcache/entrypoints/test_serve_flag_e2e.py
+          - AGENTINFER_E2E_MODEL=Qwen/Qwen3-0.6B pytest -sv -m "L20_1 and ready" tests/agentcache/entrypoints/test_serve_flag_e2e.py
         timeout_in_minutes: 25
         mirror_hardwares: l20_1
 
@@ -38,7 +38,7 @@ steps:
     steps:
       - label: "ut"
         commands:
-          - pytest tests -sv --ignore=tests/e2e --ignore=tests/agentcache/core -m "not gpu_test and not e2e_perf"
+          - pytest tests -sv -m "cpu and ready"
         timeout_in_minutes: 20
         mirror_hardwares: cpu_small
 

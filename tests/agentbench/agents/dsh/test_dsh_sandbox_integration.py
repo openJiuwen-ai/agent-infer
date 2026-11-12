@@ -21,7 +21,6 @@ from agentinfer.agentbench.benchkit.dataset import Task
 from tests.agentbench.helpers.dsh_mock_server import write_chat_completion_stream
 
 pytestmark = [
-    pytest.mark.dsh_runtime,
     pytest.mark.timeout(180),
     pytest.mark.skipif(os.name != "posix", reason="DSH native Linux sandbox is unavailable"),
 ]
@@ -86,7 +85,8 @@ class _CanaryHandler(BaseHTTPRequestHandler):
         return
 
 
-@pytest.mark.cpu_test
+@pytest.mark.cpu
+@pytest.mark.ready
 def test_dsh_native_workspace_sandbox_blocks_escape_canaries(persistent_canary_root: Path) -> None:
     # Landlock can permit /tmp; use persistent sibling paths for this assertion.
     tmp_path = persistent_canary_root

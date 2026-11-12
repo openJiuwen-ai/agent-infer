@@ -16,10 +16,17 @@ python -m pytest --timeout=120 -q tests/agentbench/test_mock_server.py
 python -m pytest --timeout=120 -q tests/agentbench/replay/test_cold_start.py
 
 # HTTP 依赖、故障传播和校验器反例。
-python -m pytest --timeout=120 -q -m replay_smoke tests/agentbench/replay
+python -m pytest --timeout=120 -q -m "cpu and ready" \
+  tests/agentbench/replay/test_cold_start.py \
+  tests/agentbench/replay/test_http_dependencies.py \
+  tests/agentbench/replay/test_validation.py
 
 # 精确时间和已有单元测试。
-python -m pytest --timeout=120 -q -m 'not replay_smoke' tests/agentbench/replay
+python -m pytest --timeout=120 -q -m "cpu and ready" \
+  tests/agentbench/replay \
+  --ignore=tests/agentbench/replay/test_cold_start.py \
+  --ignore=tests/agentbench/replay/test_http_dependencies.py \
+  --ignore=tests/agentbench/replay/test_validation.py
 
 # 完整 CPU CI 范围。
 python -m pytest --timeout=120 -q tests/agentbench tests/scheduling tests/agentcache/test_entrypoints.py

@@ -35,7 +35,7 @@ from agentinfer.scheduling.progress_ttl import (
     ProgressTTLStrategy,
 )
 
-pytestmark = pytest.mark.cpu_test
+pytestmark = [pytest.mark.cpu, pytest.mark.ready]
 
 EVENT_KIND = {
     TransitionKind.ADMIT: SchedulingEventKind.REQUEST_ADMITTED,

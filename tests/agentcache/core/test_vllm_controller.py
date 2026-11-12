@@ -8,7 +8,7 @@ from agentinfer.agentcache.core.controller import build_progress_ttl_controller
 from agentinfer.scheduling.backend import BackendInfo, BackendPoolInfo, DpRankInfo
 from agentinfer.scheduling.progress_ttl import ProgressTTLMode
 
-pytestmark = pytest.mark.cpu_test
+pytestmark = pytest.mark.cpu
 
 
 def backend() -> BackendPoolInfo:

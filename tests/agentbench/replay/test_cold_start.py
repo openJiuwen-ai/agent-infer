@@ -11,7 +11,7 @@ from .helpers.cold_start import run_round
 from .helpers.fixtures import SOURCES, build_fixture
 from .helpers.validation import compare_rounds, validate_round
 
-pytestmark = [pytest.mark.cpu_test, pytest.mark.replay_smoke]
+pytestmark = [pytest.mark.cpu, pytest.mark.ready]
 
 
 @pytest.mark.parametrize("source", SOURCES)

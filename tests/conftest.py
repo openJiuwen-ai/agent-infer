@@ -1,15 +1,30 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 
-import pytest  # noqa: F401
+from pathlib import Path
+
+import pytest
+
+from tests.e2e.helpers.hardware_marks import LANES, is_hardware, registered_names, scene_for_path, validate_names
 
 
-def pytest_configure(config):
-    config.addinivalue_line("markers", "cpu_test: tests that run without GPU")
-    config.addinivalue_line("markers", "gpu_test: tests that require GPU")
-    config.addinivalue_line("markers", "e2e_perf: end-to-end performance benchmarks")
-    config.addinivalue_line("markers", "benchmark_smoke: hermetic AgentBench benchmark contract tests")
-
-    config.addinivalue_line("markers", "replay_smoke: process-isolated Replay HTTP contract tests")
-
-    config.addinivalue_line("markers", "dsh_runtime: real pinned DSH and native sandbox tests")
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    registered = registered_names(config)
+    tests_root = Path(__file__).parent
+    for item in items:
+        path = Path(item.path)
+        if not path.is_relative_to(tests_root):
+            continue
+        names = [mark.name for mark in item.iter_markers()]
+        if not path.is_relative_to(tests_root / "e2e") and not any(is_hardware(name) for name in names):
+            defaults = ["cpu"]
+            if not LANES.intersection(names):
+                defaults.append("ready")
+            for name in defaults:
+                item.add_marker(name)
+                names.append(name)
+        try:
+            validate_names(names, registered, scene=scene_for_path(path))
+        except ValueError as exc:
+            raise pytest.UsageError(f"{item.nodeid}: {exc}") from exc

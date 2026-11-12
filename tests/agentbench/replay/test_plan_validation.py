@@ -12,7 +12,7 @@ from agentinfer.agentbench.replay.config import ReplayBenchConfig
 from agentinfer.agentbench.replay.planner import _validate_plan, build_replay_plan
 from tests.agentbench.replay.helpers.fixtures import build_fixture, config
 
-pytestmark = pytest.mark.cpu_test
+pytestmark = [pytest.mark.cpu, pytest.mark.ready]
 
 
 @pytest.mark.parametrize("mutation,message", [("missing", "missing"), ("self", "cycle"), ("cycle", "cycle")])

@@ -19,7 +19,7 @@ from agentinfer.scheduling.backend import DispatchTarget
 from agentinfer.scheduling.request_pool import RequestPool, RequestPoolEntry
 from agentinfer.scheduling.runtime import ProgramScheduler
 
-pytestmark = pytest.mark.cpu_test
+pytestmark = pytest.mark.cpu
 
 
 class _Controller:

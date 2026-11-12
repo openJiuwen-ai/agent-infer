@@ -5,11 +5,12 @@
     {
       "hardware_marks": {
         "res": {
-          "npu": "Ascend"
+          "npu": "A3"
         },
         "num_cards": 16
       }
-    }
+    },
+    "perf"
   ],
   "description": "GLM-5.2 AgentInfer long stability soak, SWE-bench 480 tasks x 12 concurrency",
   "serve_env": {

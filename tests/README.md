@@ -30,7 +30,7 @@ Unit tests for the `vllm serve MODEL --agentinfer` takeover in
 ### `tests/agentcache/entrypoints/test_serve_flag_e2e.py`
 
 GPU e2e tests for `vllm serve MODEL --agentinfer` through the installed
-`vllm` entrypoint (requires a vLLM environment; skip-marked as `gpu_test`).
+`vllm` entrypoint (requires a vLLM environment; skip-marked as `L20_1`).
 
 | Test | What it verifies |
 | ---- | ---------------- |
@@ -75,3 +75,69 @@ Run 模式和 Replay 共用独立进程 Mock Server。
 依赖与故障测试、执行命令和失败产物说明。
 CPU CI 沿用现有 Python 3.10/3.12 任务，通过 `tests/agentbench` 统一收集单元测试、
 `benchmark_smoke` 和 `replay_smoke`。
+
+## Pytest labels
+
+See [RFC #81](https://github.com/openJiuwen-ai/agent-infer/issues/81).
+Labels are registered only in `pyproject.toml`. Each dimension is optional,
+with at most one value per dimension:
+
+| Dimension | Values |
+| --- | --- |
+| Hardware | `cpu`, `L20_1`, `L20_2`, `A3_16` |
+| E2E scene | `function`, `perf`, `acc` (reserved) |
+| CI lane | `ready`, `nightly` (reserved) |
+
+Unmarked unit tests default to `cpu` and `ready`. Explicit hardware prevents
+these defaults: `agentcache/core` has only `cpu`; the serve smoke has `L20_1`
+and `ready`. Unit tests do not have a scene. Only the three classification
+dimensions are retained; select smaller groups by file path. CPU labels describe hardware;
+real DSH tests still require DSH and its native sandbox.
+
+E2E case JSON uses a hardware object and strings:
+
+```json
+"mark": [
+  {"hardware_marks": {"res": {"npu": "A3"}, "num_cards": 16}},
+  "function"
+]
+```
+
+This generates only `A3_16` and `function`. CUDA uses `res: {"cuda": "L20"}`;
+CPU uses the string `cpu`. Unknown labels, conflicting dimensions, malformed
+hardware objects and scenes inconsistent with the directory fail collection.
+The case id includes its relative directory to distinguish baseline and
+AgentInfer files with the same name. `--test-config-file` selects one case.
+
+```bash
+pytest -q -m "cpu and ready" tests
+pytest -sv -m "L20_1 and ready" tests/agentcache/entrypoints/test_serve_flag_e2e.py
+pytest --collect-only -q -m "A3_16 and function" tests/e2e
+pytest --collect-only -q -m "A3_16 and perf" tests/e2e/perf/run_benchmark.py
+```
+
+The 12 replay and nine perf cases have no lane and stay out of ready CI.
+`L20_2` is reserved for the DSH cases proposed in PR #75; this baseline does
+not contain those cases or their CI step. No nightly pipeline is introduced.
+`inferrsi/tests/` remains outside this marker policy.
+
+### Select smoke and real-runtime tests by path
+
+All three groups use `cpu and ready`; their file paths distinguish them.
+These commands preserve the previous groups without custom sublabels:
+
+```bash
+# Benchmark smoke
+pytest -q -m "cpu and ready" tests/agentbench/test_benchmark_smoke.py
+
+# Replay HTTP smoke
+pytest -q -m "cpu and ready" \
+  tests/agentbench/replay/test_cold_start.py \
+  tests/agentbench/replay/test_http_dependencies.py \
+  tests/agentbench/replay/test_validation.py
+
+# Real DSH runtime and sandbox
+pytest -q -m "cpu and ready" \
+  tests/agentbench/agents/dsh/test_dsh_benchmark_integration.py \
+  tests/agentbench/agents/dsh/test_dsh_sandbox_integration.py
+```

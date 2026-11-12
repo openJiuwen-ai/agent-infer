@@ -23,7 +23,10 @@ The Python groups require no running vLLM, Router, Claude Code, JiuwenSwarm,
 tmux, GPU, accelerator, or Internet:
 
 ```bash
-python -m pytest -q -m "not benchmark_smoke and not dsh_runtime" tests/agentbench
+python -m pytest -q -m "cpu and ready" tests/agentbench \
+  --ignore=tests/agentbench/test_benchmark_smoke.py \
+  --ignore=tests/agentbench/agents/dsh/test_dsh_benchmark_integration.py \
+  --ignore=tests/agentbench/agents/dsh/test_dsh_sandbox_integration.py
 python -m pytest -q tests/agentbench/test_benchmark_smoke.py
 ```
 
@@ -67,7 +70,9 @@ and cancellation/timeout evidence. The scripted model server issues tool calls; 
 ```bash
 npm install --global @deepseek-ai/dsh@0.2.1-rc.2
 export DSH_TEST_EXECUTABLE="$(command -v dsh)"
-python -m pytest -q -m dsh_runtime tests/agentbench/agents/dsh --timeout=180
+python -m pytest -q -m "cpu and ready" \
+  tests/agentbench/agents/dsh/test_dsh_benchmark_integration.py \
+  tests/agentbench/agents/dsh/test_dsh_sandbox_integration.py --timeout=180
 ```
 
 The existing CPU CI collects the adapter tests. Real DSH tests skip when DSH is not installed;

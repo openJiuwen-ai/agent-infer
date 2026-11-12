@@ -14,7 +14,7 @@ from agentinfer.scheduling.progress_ttl import ProgressTTLConfig, build_progress
 from agentinfer.scheduling.runtime import ProgramScheduler
 from agentinfer.scheduling.transitions import TransitionKind, TransitionRequest
 
-pytestmark = pytest.mark.cpu_test
+pytestmark = [pytest.mark.cpu, pytest.mark.ready]
 
 
 def backend(capacity: int) -> BackendPoolInfo:

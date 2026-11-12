@@ -21,7 +21,7 @@ from agentinfer.agentbench.agents.dsh.transcript import DshTranscriptNormalizer,
 from agentinfer.agentbench.benchkit.dataset import Task
 from tests.agentbench.helpers.dsh_mock_server import DshMockServer, seed_tasks
 
-pytestmark = [pytest.mark.dsh_runtime, pytest.mark.timeout(180)]
+pytestmark = pytest.mark.timeout(180)
 
 
 @pytest.fixture
