@@ -41,7 +41,20 @@ steps:
         commands:
           # pipeline upload expands $NAME. $$ is the literal $ the container shell needs.
           - |
-            trap 'status=$$?; uid=$$(stat -c %u .); gid=$$(stat -c %g .); if [ "$$uid" != 0 ]; then chown -R "$$uid:$$gid" . || true; fi; exit "$$status"' EXIT
+            checkout_uid=$$(stat -c %u .)
+            checkout_gid=$$(stat -c %g .)
+            restore_checkout_owner() {
+              status=$$?
+              trap - EXIT
+              if [ "$$checkout_uid" != 0 ]; then
+                if ! chown -R "$$checkout_uid:$$checkout_gid" .; then
+                  echo "ERROR: failed to restore checkout ownership" >&2
+                  if [ "$$status" = 0 ]; then status=1; fi
+                fi
+              fi
+              exit "$$status"
+            }
+            trap restore_checkout_owner EXIT
             if id test-user >/dev/null 2>&1; then
               echo "test-user exists, skip useradd"
             else
