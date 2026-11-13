@@ -29,7 +29,7 @@ import pytest
 if importlib.util.find_spec("vllm") is None:
     pytest.skip("vllm is not installed; serve e2e requires a vLLM environment", allow_module_level=True)
 
-pytestmark = [pytest.mark.L20_1, pytest.mark.ready]
+pytestmark = [pytest.mark.L20, pytest.mark.cards_1, pytest.mark.ready]
 
 MODEL = os.environ.get("AGENTINFER_E2E_MODEL", "Qwen/Qwen3-0.6B")
 STARTUP_TIMEOUT = int(os.environ.get("AGENTINFER_E2E_STARTUP_TIMEOUT", "300"))

@@ -7,8 +7,7 @@
         "res": {"npu": "A3"},
         "num_cards": 16
       }
-    },
-    "function"
+    }
   ],
   "description": "GLM-5.2 TraceLab normalized JSONL replay, 16 sessions x 8 concurrency",
   "serve_env": {

@@ -7,8 +7,7 @@
         "res": {"npu": "A3"},
         "num_cards": 16
       }
-    },
-    "function"
+    }
   ],
   "description": "GLM-5.2 AgentX hash-block snapshot replay, 24 sessions x 12 concurrency",
   "serve_env": {

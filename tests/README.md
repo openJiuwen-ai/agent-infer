@@ -30,7 +30,7 @@ Unit tests for the `vllm serve MODEL --agentinfer` takeover in
 ### `tests/agentcache/entrypoints/test_serve_flag_e2e.py`
 
 GPU e2e tests for `vllm serve MODEL --agentinfer` through the installed
-`vllm` entrypoint (requires a vLLM environment; skip-marked as `L20_1`).
+`vllm` entrypoint (requires a vLLM environment; marked `L20`, `cards_1`, and `ready`).
 
 | Test | What it verifies |
 | ---- | ---------------- |
@@ -84,49 +84,52 @@ with at most one value per dimension:
 
 | Dimension | Values |
 | --- | --- |
-| Hardware | `cpu`, `L20_1`, `L20_2`, `A3_16` |
-| E2E scene | `function`, `perf`, `acc` (reserved) |
+| Model | `cpu`, `L20`, `A3` |
+| Card count | `cards_1`, `cards_2`, `cards_16` |
 | CI lane | `ready`, `nightly` (reserved) |
 
-Unmarked unit tests default to `cpu` and `ready`. Explicit hardware prevents
-these defaults: `agentcache/core` has only `cpu`; the serve smoke has `L20_1`
-and `ready`. Unit tests do not have a scene. Only the three classification
-dimensions are retained; select smaller groups by file path. CPU labels describe hardware;
-real DSH tests still require DSH and its native sandbox.
+Card counts describe the number of accelerators, not device indices. CPU tests
+have no card-count label. Add other positive card counts to the registry when
+needed. Scenes are selected through directories (`function/`, `perf/`, and any
+future `acc/`), with no scene markers.
 
-E2E case JSON uses a hardware object and strings:
+Unit tests without model or card-count labels default to `cpu`, adding `ready`
+only when no CI lane is explicit. Explicit hardware prevents these defaults:
+`agentcache/core` has only `cpu`; the serve smoke has `L20`, `cards_1`, and
+`ready`. Smaller test groups are selected by file path. CPU labels describe
+hardware; real DSH tests still require DSH and its native sandbox.
+
+E2E case JSON retains the hardware object:
 
 ```json
 "mark": [
-  {"hardware_marks": {"res": {"npu": "A3"}, "num_cards": 16}},
-  "function"
+  {"hardware_marks": {"res": {"npu": "A3"}, "num_cards": 16}}
 ]
 ```
 
-This generates only `A3_16` and `function`. CUDA uses `res: {"cuda": "L20"}`;
-CPU uses the string `cpu`. Unknown labels, conflicting dimensions, malformed
-hardware objects and scenes inconsistent with the directory fail collection.
-Hardware marker descriptions register their platform with `[cuda]` or `[npu]`;
+This generates two independent markers, `A3` and `cards_16`. CUDA uses
+`res: {"cuda": "L20"}`; CPU uses the string `cpu`. Optional lane labels are
+strings in the same list. Unknown labels, conflicting dimension values,
+malformed hardware objects, and CPU/card-count combinations fail collection.
+Hardware model descriptions register their platform with `[cuda]` or `[npu]`;
 this is registry metadata, not an additional pytest marker. Platform/model
 mismatches are rejected. `timeout` is registered as a mechanism marker so
-collection also works without the optional pytest-timeout plugin; timeout
-enforcement still requires that plugin.
+collection works without pytest-timeout; enforcement still requires the plugin.
 The case id includes its relative directory to distinguish baseline and
 AgentInfer files with the same name. `--test-config-file` selects one case.
 
 ```bash
 pytest -q -m "cpu and ready" tests
-pytest -sv -m "L20_1 and ready" tests/agentcache/entrypoints/test_serve_flag_e2e.py
-pytest --collect-only -q -m "A3_16 and function" tests/e2e
-pytest --collect-only -q -m "A3_16 and perf" tests/e2e/perf/run_benchmark.py
+pytest -sv -m "L20 and cards_1 and ready" tests/agentcache/entrypoints/test_serve_flag_e2e.py
+pytest --collect-only -q -m "A3 and cards_16" tests/e2e/function/tracereplay/
+pytest --collect-only -q -m "A3 and cards_16" tests/e2e/perf/run_benchmark.py
 ```
 
 The 12 replay and nine perf cases have no lane and stay out of ready CI.
-`L20_2` is reserved for the DSH cases proposed in PR #75; this baseline does
-not contain those cases or their CI step. No nightly pipeline is introduced.
-`inferrsi/tests/` remains outside this marker policy.
-A single-case override must
-name an existing JSON in a suite's cases tree and match a collected suite;
+`cards_2` supports the DSH cases proposed in PR #75; this baseline does not
+contain those cases or their CI step. No nightly pipeline is introduced.
+`inferrsi/tests/` remains outside this marker policy. A single-case override
+must name an existing JSON in a suite's cases tree and match a collected suite;
 invalid overrides fail instead of silently skipping an empty parameter set.
 
 ### Select smoke and real-runtime tests by path

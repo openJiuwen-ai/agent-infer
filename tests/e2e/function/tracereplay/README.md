@@ -28,8 +28,8 @@ Shared vLLM/case loading: [`../../helpers/`](../../helpers/).
 | [`../../conftest.py`](../../conftest.py) | Shared `--test-config-file`, `--task-num`, and `--max-concurrency` options |
 | `conftest.py` | Replay-specific `--bench-config`, `--cold-runs`, and `--stability-tolerance` options |
 
-Each case JSON is collected as an independent item, with `A3_16` and `function` markers.
-Use `--test-config-file` to select one case, or `-m "A3_16 and function"` to select all 12.
+Each case JSON is collected as an independent item, with `A3` and `cards_16` markers.
+Use `--test-config-file` to select one case, or `-m "A3 and cards_16"` to select all 12.
 No lane is assigned, so ready CI does not select these cases.
 
 ## Quick start (pytest)

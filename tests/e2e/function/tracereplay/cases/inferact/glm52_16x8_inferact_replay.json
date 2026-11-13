@@ -7,8 +7,7 @@
         "res": {"npu": "A3"},
         "num_cards": 16
       }
-    },
-    "function"
+    }
   ],
   "description": "GLM-5.2 Inferact Codex trace replay, 16 tasks x 8 concurrency (full codex_swebenchpro.json)",
   "serve_env": {

@@ -9,8 +9,7 @@
         },
         "num_cards": 16
       }
-    },
-    "perf"
+    }
   ],
   "description": "GLM-5.2 AgentInfer scheduler bridge, SWE-bench 32 tasks x 16 concurrency",
   "serve_env": {

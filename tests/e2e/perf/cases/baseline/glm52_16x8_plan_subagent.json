@@ -9,8 +9,7 @@
         },
         "num_cards": 16
       }
-    },
-    "perf"
+    }
   ],
   "description": "GLM-5.2 Ascend baseline AsyncScheduler serve profile (16 TP), 16 tasks x 8 concurrency",
   "serve_env": {

@@ -13,7 +13,6 @@ from tests.e2e.helpers.hardware_marks import (
     registered_hardware_platforms,
     registered_names,
     resolve_pytest_marks,
-    scene_for_path,
 )
 
 _SELECTED_CASE = pytest.StashKey[Path | None]()
@@ -29,9 +28,7 @@ def pytest_configure(config: pytest.Config) -> None:
     case_roots = [
         path.resolve()
         for path in root.rglob("cases")
-        if path.is_dir()
-        and scene_for_path(path) is not None
-        and (any(path.parent.glob("test_*.py")) or (path.parent / "run_benchmark.py").is_file())
+        if path.is_dir() and (any(path.parent.glob("test_*.py")) or (path.parent / "run_benchmark.py").is_file())
     ]
     if (
         selected.suffix != ".json"
@@ -68,9 +65,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
             payload = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError("case JSON must be an object")
-            marks = resolve_pytest_marks(
-                payload.get("mark", []), registered, platforms=platforms, scene=scene_for_path(path)
-            )
+            marks = resolve_pytest_marks(payload.get("mark", []), registered, platforms=platforms)
             case_id = path.relative_to(cases_dir).with_suffix("").as_posix()
             params.append(pytest.param(path, marks=marks, id=case_id))
         except (OSError, ValueError, TypeError) as exc:

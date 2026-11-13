@@ -3,7 +3,7 @@
 Baseline and AgentInfer cases are **fully independent** JSON files. Each file contains its own
 environment variables, vLLM serve parameters, and benchmark parameters.
 
-Each JSON is an independent pytest item marked `A3_16` and `perf`, with no CI lane.
+Each JSON is an independent pytest item marked `A3` and `cards_16`, with no CI lane.
 Run one selected case:
 
 ```bash
@@ -47,7 +47,7 @@ pytest -s -v tests/e2e/perf/run_benchmark.py \
 | Field | Purpose |
 | ----- | ------- |
 | `scenario` | `baseline` or `agentinfer` (legacy JSON key `arm` still accepted) |
-| `mark` | Hardware object plus scene/lane strings; validated during collection |
+| `mark` | Hardware object plus optional model/card-count/lane strings; validated during collection |
 | `wait_for_vllm_ready` | Optional. Poll `/v1/models` after vLLM start (default: `true`; omit in JSON) |
 | `serve_env` | vLLM serve subprocess environment variables |
 | `server_params` | Model path, middleware, and `vllm serve` CLI flags |
