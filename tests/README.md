@@ -146,8 +146,8 @@ pytest --collect-only -q -m "A3 and cards_16" tests/e2e/perf/run_benchmark.py
 ```
 
 The 12 replay and nine perf cases have no lane and stay out of ready CI.
-`cards_2` supports the DSH cases proposed in PR #75; this baseline does not
-contain those cases or their CI step. No nightly pipeline is introduced.
+The two DSH cases from PR #75 declare `L20`, `cards_2`, and `ready`; their
+GPU CI step selects `L20 and cards_2 and ready` from `tests/e2e/function/`. No nightly pipeline is introduced.
 `inferrsi/tests/` remains outside this marker policy. A single-case override
 must name an existing JSON in a suite's cases tree and match a collected suite;
 invalid overrides fail instead of silently skipping an empty parameter set.
