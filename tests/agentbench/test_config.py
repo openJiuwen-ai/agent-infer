@@ -1,13 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from agentinfer.agentbench.agents.registry import get_runtime
 from agentinfer.agentbench.benchkit.config import (
     AgentBenchConfig,
+    AgentConfig,
     RequestProxyConfig,
     load_config,
     resolve_config_paths,
@@ -15,6 +18,73 @@ from agentinfer.agentbench.benchkit.config import (
 from tests.helpers.marks import test_marks
 
 pytestmark = test_marks(hardware="cpu", ci="ready")
+
+
+def test_zcode_subagent_limits():
+    config = AgentConfig(type="zcode", profile="plan-subagent", max_subagents=4, max_concurrent_subagents=2)
+    assert (config.max_subagents, config.max_concurrent_subagents) == (4, 2)
+    assert (AgentConfig().max_subagents, AgentConfig().max_concurrent_subagents) == (1, 1)
+
+
+@pytest.mark.parametrize(
+    ("agent_type", "profile_name", "supports_limits"),
+    [
+        ("claude", "single", False),
+        ("claude", "plan-subagent", False),
+        ("dsh", "single", False),
+        ("dsh", "plan-subagent", False),
+        ("jiuwenswarm", "code.normal", False),
+        ("zcode", "single", False),
+        ("zcode", "plan-subagent", True),
+    ],
+)
+def test_subagent_limits_preserve_profile_defaults(agent_type: str, profile_name: str, supports_limits: bool) -> None:
+    config = AgentConfig.model_validate({"type": agent_type, "profile": profile_name})
+    payload = config.model_dump(mode="python")
+    assert (config.max_subagents, config.max_concurrent_subagents) == (1, 1)
+    assert AgentConfig.model_validate(payload) == config
+
+    payload.update(max_subagents=4, max_concurrent_subagents=2)
+    if supports_limits:
+        updated = AgentConfig.model_validate(payload)
+        assert (updated.max_subagents, updated.max_concurrent_subagents) == (4, 2)
+    else:
+        with pytest.raises(ValidationError, match="does not support subagent limits"):
+            AgentConfig.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("agent_type", "profile_name", "supports_limits"), [("dsh", "single", True), ("zcode", "plan-subagent", False)]
+)
+def test_subagent_limits_follow_profile_capability(
+    agent_type: str, profile_name: str, supports_limits: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = get_runtime(agent_type)
+    profile = replace(runtime.get_profile(profile_name), supports_subagent_limits=supports_limits)
+    monkeypatch.setattr(runtime, "get_profile", lambda name: profile)
+    payload = {"type": agent_type, "profile": profile_name, "max_subagents": 4, "max_concurrent_subagents": 2}
+
+    if supports_limits:
+        config = AgentConfig.model_validate(payload)
+        assert (config.max_subagents, config.max_concurrent_subagents) == (4, 2)
+    else:
+        with pytest.raises(ValidationError, match="does not support subagent limits"):
+            AgentConfig.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"max_subagents": 0},
+        {"max_concurrent_subagents": 0},
+        {"max_subagents": 1, "max_concurrent_subagents": 2},
+        {"type": "dsh", "max_subagents": 4},
+        {"profile": "single", "max_subagents": 4},
+    ],
+)
+def test_invalid_subagent_limits(values):
+    with pytest.raises(ValueError):
+        AgentConfig.model_validate({"type": "zcode", "profile": "plan-subagent", **values})
 
 
 def test_defaults_and_nested_overrides() -> None:

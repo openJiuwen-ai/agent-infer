@@ -5,6 +5,7 @@
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -91,6 +92,50 @@ def test_completed_transcript_returns_normal_completion(tmp_path: Path, monkeypa
 
     assert result.outcome is AgentRunOutcome.COMPLETED
     assert result.termination_reason is None
+    assert len(cleanup) == 1
+
+
+@pytest.mark.parametrize("expired", [False, True])
+def test_operation_timeout_respects_task_deadline(tmp_path, monkeypatch, expired):
+    cleanup = _patch_runtime(monkeypatch, transcript=[])
+    request = _request(tmp_path, timeout_seconds=5)
+    now = [0.0]
+    monkeypatch.setattr(runner, "time", SimpleNamespace(monotonic=lambda: now[0]))
+
+    async def check_session(*args):
+        if expired:
+            now[0] = request.timeout_seconds
+        return True
+
+    def unavailable(*args, **kwargs):
+        raise TimeoutError("terminal operation timed out")
+
+    monkeypatch.setattr(runner, "_session_exists_async", check_session)
+    monkeypatch.setattr(runner, "capture_pane", unavailable)
+    result = asyncio.run(runner.run_claude(request))
+
+    assert result.outcome is AgentRunOutcome.FAILED
+    assert result.termination_reason is (TerminationReason.TIMEOUT if expired else TerminationReason.HARNESS_ERROR)
+    assert "TimeoutError" in (request.artifact_dir / "claude-runner-error.log").read_text()
+    assert len(cleanup) == 1
+
+
+def test_patch_failure_keeps_diagnostics(tmp_path, monkeypatch):
+    cleanup = _patch_runtime(
+        monkeypatch,
+        transcript=[{"type": "assistant", "message": {"stop_reason": "end_turn", "content": []}}],
+    )
+
+    def fail(workspace):
+        raise OSError("patch export failed")
+
+    monkeypatch.setattr(runner, "export_patch", fail)
+    request = _request(tmp_path)
+    result = asyncio.run(runner.run_claude(request))
+
+    assert result.outcome is AgentRunOutcome.FAILED
+    assert result.termination_reason is TerminationReason.HARNESS_ERROR
+    assert "OSError: patch export failed" in (request.artifact_dir / "claude-evidence-error.log").read_text()
     assert len(cleanup) == 1
 
 

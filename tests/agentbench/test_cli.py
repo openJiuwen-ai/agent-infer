@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 
+import asyncio
+import json
 import sys
 import types
 from pathlib import Path
@@ -8,6 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from agentinfer.agentbench.benchkit import cli
 from agentinfer.agentbench.benchkit.cli import (
     _apply_cli_overrides,
     _apply_replay_cli_overrides,
@@ -38,6 +41,29 @@ def test_schema_overrides_metrics_url(tmp_path: Path) -> None:
 
     args = parser.parse_args(["run", "--config", "c.yaml", "--metrics-url", "http://vllm:8000/metrics"])
     assert _apply_cli_overrides(args, config).backend.metrics_url == "http://vllm:8000/metrics"
+
+
+def test_zcode_subagent_limit_cli_overrides():
+    args = _parser().parse_args(
+        [
+            "run",
+            "--config",
+            "c.yaml",
+            "--agent-type",
+            "zcode",
+            "--agent-profile",
+            "plan-subagent",
+            "--endpoint",
+            "/v1/chat/completions",
+            "--max-subagents",
+            "4",
+            "--max-concurrent-subagents",
+            "2",
+        ]
+    )
+    config = _apply_cli_overrides(args, AgentBenchConfig())
+    assert config.agent.max_subagents == 4
+    assert config.agent.max_concurrent_subagents == 2
 
 
 @pytest.mark.parametrize(
@@ -208,6 +234,8 @@ def test_run_without_config_uses_defaults_and_omits_config_path(
     runner.run_benchmark = AsyncMock(return_value=tmp_path / "run")
     monkeypatch.setitem(sys.modules, runner.__name__, runner)
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "_evaluation_config", lambda *a: pytest.fail("unexpected evaluation config load"))
+    monkeypatch.setattr(cli, "_evaluate", lambda *a: pytest.fail("unexpected evaluation"))
 
     assert main(["run", "--task-num", "2"]) == 0
     call = runner.run_benchmark.await_args
@@ -217,6 +245,90 @@ def test_run_without_config_uses_defaults_and_omits_config_path(
     assert call.args[0].dataset.cache_dir == tmp_path / "data/swebench/repo-cache"
     assert "config_path" not in call.kwargs["cli_metadata"]
     assert call.kwargs["cli_metadata"]["overrides"] == {"task_num": 2}
+
+
+@pytest.fixture
+def mock_benchmark(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    runner = types.ModuleType("agentinfer.agentbench.benchkit.runner")
+    runner.run_benchmark = AsyncMock(return_value=tmp_path / "actual-run")
+    monkeypatch.setitem(sys.modules, runner.__name__, runner)
+    return runner.run_benchmark
+
+
+@pytest.mark.parametrize("custom_config", [False, True])
+@pytest.mark.parametrize("code", [0, 1, 130])
+def test_run_evaluates_after_finalization_with_separate_config(
+    tmp_path, monkeypatch, mock_benchmark, capsys, custom_config, code
+):
+    from agentinfer.agentbench.benchkit.evaluation import runner
+
+    monkeypatch.chdir(tmp_path)
+    run_config = tmp_path / "run.yaml"
+    _config(run_config)
+    evaluation_config = tmp_path / "evaluation.yaml"
+    evaluation_config.write_text("harness_python: evaluator/bin/python\nmax_workers: 3\n")
+    argv = ["run", "--config", str(run_config), "--task-num", "2", "--with-correctness"]
+    if custom_config:
+        argv.extend(["--evaluation-config", evaluation_config.name])
+    events = []
+
+    async def run(config, *, cli_metadata):
+        events.append("run")
+        assert config.experiment.result_dir == tmp_path / "relative-results"
+        assert cli_metadata["overrides"] == {"task_num": 2}
+        # Evaluation must use the configuration loaded before generation.
+        evaluation_config.write_text("max_workers: 9\n")
+        try:
+            return mock_benchmark.return_value
+        finally:
+            events.append("finalized")
+
+    def evaluate(run_dir, config, output_dir):
+        events.append("evaluate")
+        with pytest.raises(RuntimeError, match="no running event loop"):
+            asyncio.get_running_loop()
+        assert run_dir == mock_benchmark.return_value
+        assert output_dir is None
+        assert config.max_workers == (3 if custom_config else 2)
+        assert config.harness_python == (tmp_path / "evaluator/bin/python" if custom_config else Path(sys.executable))
+        output = tmp_path / "evaluation"
+        output.mkdir()
+        (output / "correctness.json").write_text('{"evaluation_id": "eval-unit"}')
+        return output, code
+
+    mock_benchmark.side_effect = run
+    monkeypatch.setattr(runner, "evaluate", evaluate)
+    assert main(argv) == code
+    assert events == ["run", "finalized", "evaluate"]
+    assert json.loads(capsys.readouterr().out) == {"evaluation_id": "eval-unit"}
+
+
+@pytest.mark.parametrize("fault", ["without-flag", "missing", "unknown-field", "malformed"])
+def test_run_rejects_invalid_evaluation_config_before_generation(tmp_path, mock_benchmark, capsys, fault):
+    path = tmp_path / "evaluation.yaml"
+    if fault == "unknown-field":
+        path.write_text("unknown_setting: true\n")
+    elif fault == "malformed":
+        path.write_text("max_workers: [\n")
+    argv = ["run", "--evaluation-config", str(path)]
+    if fault != "without-flag":
+        argv.append("--with-correctness")
+    with pytest.raises(SystemExit) as exc:
+        main(argv)
+    assert exc.value.code == 2
+    mock_benchmark.assert_not_awaited()
+    if fault == "without-flag":
+        assert "--evaluation-config requires --with-correctness" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("run failed"), KeyboardInterrupt()])
+def test_run_failure_skips_evaluation(monkeypatch, mock_benchmark, failure):
+    mock_benchmark.side_effect = failure
+    monkeypatch.setattr(cli, "_evaluate", lambda *a: pytest.fail("evaluation ran after a failed run"))
+    with pytest.raises(type(failure)) as exc:
+        main(["run", "--with-correctness"])
+    assert exc.value is failure
+    mock_benchmark.assert_awaited_once()
 
 
 def test_replay_delegates_to_planner_with_replay_schema(

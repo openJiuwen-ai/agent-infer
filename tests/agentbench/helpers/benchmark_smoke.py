@@ -28,6 +28,7 @@ from .mock_server import MockServerProcess
 @dataclass(frozen=True)
 class FakeProfile:
     name: str = "code.normal"
+    supports_subagent_limits: bool = False
 
     @staticmethod
     def build_prompt(task: Task) -> str:

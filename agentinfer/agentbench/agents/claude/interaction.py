@@ -7,6 +7,9 @@ import re
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+_CONFIRMATION_RETRY_SECONDS = 5.0
+_CONFIRMATION_MAX_ATTEMPTS = 2
+
 
 @dataclass
 class InteractionState:
@@ -14,13 +17,18 @@ class InteractionState:
 
     startup_dismissed: bool = False
     yes_confirmation_visible: bool = False
+    yes_confirmation_attempts: int = 0
+    yes_confirmation_sent_at: float | None = None
     plan_approval_visible: bool = False
+    plan_approval_attempts: int = 0
+    plan_approval_sent_at: float | None = None
     generic_selection_visible: bool = False
     auto_yes_confirmations: int = 0
     auto_plan_approvals: int = 0
     auto_generic_selections: int = 0
     generic_selection_attempts: int = 0
     generic_selection_sent_at: float | None = None
+    confirmation_id: tuple[str | None, str] | None = None
 
 
 @dataclass
@@ -74,6 +82,22 @@ class StartupDialogHandler:
 
     def act(self, ctx: InteractionContext) -> InteractionAction:
         low = ctx.terminal.lower()
+        if any(marker in low for marker in ("do you trust", "quick safety check", "yes, i trust")):
+            options = list(
+                re.finditer(
+                    r"^\s*([❯>➤▶]?)\s*(?:\d+\.\s*)?(yes, i trust\b.*|no\b.*)$",
+                    ctx.terminal,
+                    re.IGNORECASE | re.MULTILINE,
+                )
+            )
+            trusted = next(
+                (i for i, option in enumerate(options) if option[2].lower().startswith("yes, i trust")), None
+            )
+            selected = next((i for i, option in enumerate(options) if option[1]), None)
+            if trusted is None or selected is None:
+                return InteractionAction(kind="none")
+            key = "Enter" if selected == trusted else ("Down" if selected < trusted else "Up")
+            return InteractionAction(kind="send_keys", keys=key)
         if any(marker in low for marker in _STARTUP_MARKERS):
             return InteractionAction(kind="send_keys", keys="Enter")
         ctx.state.startup_dismissed = True
@@ -83,17 +107,26 @@ class StartupDialogHandler:
 def _plan_approval_visible(terminal: str) -> bool:
     """Return whether either supported plan approval prompt is visible."""
 
+    text = " ".join(terminal.lower().split())
     return (
-        "Claude has written up a plan and is ready to execute." in terminal
-        and "Yes, and bypass permissions" in terminal
-    ) or ("Exit plan mode?" in terminal and "Claude wants to exit plan mode" in terminal and "Yes" in terminal)
+        "claude has written up a plan and is ready to execute." in text
+        and ("yes, and bypass permissions" in text or "yes, and switch to bypass permissions" in text)
+    ) or ("exit plan mode?" in text and "claude wants to exit plan mode" in text and "yes" in text)
 
 
 class PlanApprovalHandler:
-    """Accept supported plan-approval prompts once per appearance."""
+    """Confirm supported plan approvals, retrying once if the prompt persists."""
 
     def recognize(self, ctx: InteractionContext) -> bool:
-        return not ctx.state.plan_approval_visible and _plan_approval_visible(ctx.terminal)
+        if not _plan_approval_visible(ctx.terminal):
+            return False
+        state = ctx.state
+        # A newly rendered dialog may ignore the first key; retry once after it settles.
+        return not state.plan_approval_visible or (
+            state.plan_approval_attempts < _CONFIRMATION_MAX_ATTEMPTS
+            and state.plan_approval_sent_at is not None
+            and ctx.elapsed_seconds - state.plan_approval_sent_at >= _CONFIRMATION_RETRY_SECONDS
+        )
 
     def act(self, ctx: InteractionContext) -> InteractionAction:
         return _approve_plan(ctx)
@@ -101,6 +134,8 @@ class PlanApprovalHandler:
 
 def _approve_plan(ctx: InteractionContext) -> InteractionAction:
     ctx.state.plan_approval_visible = True
+    ctx.state.plan_approval_attempts += 1
+    ctx.state.plan_approval_sent_at = ctx.elapsed_seconds
     ctx.state.auto_plan_approvals += 1
     return InteractionAction(kind="send_keys", keys="Enter")
 
@@ -119,8 +154,6 @@ _NUMBERED_SELECTION_RE = re.compile(r"^\s*(?:[❯➤▶]\s*)?\d+\.\s+")
 _HIGHLIGHTED_NUMBERED_SELECTION_RE = re.compile(r"^\s*[❯➤▶]\s*\d+\.\s+")
 
 _PROMPT_WINDOW_LINES = 20
-_GENERIC_SELECTION_RETRY_SECONDS = 5.0
-_GENERIC_SELECTION_MAX_ATTEMPTS = 2
 
 
 def _yes_confirmation_visible(terminal: str) -> bool:
@@ -131,15 +164,22 @@ def _yes_confirmation_visible(terminal: str) -> bool:
 
 
 class YesConfirmationHandler:
-    """Select a Yes confirmation once per prompt appearance."""
+    """Confirm a selected Yes, retrying once if the prompt persists."""
 
     def recognize(self, ctx: InteractionContext) -> bool:
-        if ctx.state.yes_confirmation_visible or _plan_approval_visible(ctx.terminal):
+        if _plan_approval_visible(ctx.terminal) or not _yes_confirmation_visible(ctx.terminal):
             return False
-        return _yes_confirmation_visible(ctx.terminal)
+        state = ctx.state
+        return not state.yes_confirmation_visible or (
+            state.yes_confirmation_attempts < _CONFIRMATION_MAX_ATTEMPTS
+            and state.yes_confirmation_sent_at is not None
+            and ctx.elapsed_seconds - state.yes_confirmation_sent_at >= _CONFIRMATION_RETRY_SECONDS
+        )
 
     def act(self, ctx: InteractionContext) -> InteractionAction:
         ctx.state.yes_confirmation_visible = True
+        ctx.state.yes_confirmation_attempts += 1
+        ctx.state.yes_confirmation_sent_at = ctx.elapsed_seconds
         ctx.state.auto_yes_confirmations += 1
         return InteractionAction(kind="send_keys", keys="Enter")
 
@@ -184,9 +224,9 @@ class GenericSelectionHandler:
         if not state.generic_selection_visible:
             return True
         return (
-            state.generic_selection_attempts < _GENERIC_SELECTION_MAX_ATTEMPTS
+            state.generic_selection_attempts < _CONFIRMATION_MAX_ATTEMPTS
             and state.generic_selection_sent_at is not None
-            and ctx.elapsed_seconds - state.generic_selection_sent_at >= _GENERIC_SELECTION_RETRY_SECONDS
+            and ctx.elapsed_seconds - state.generic_selection_sent_at >= _CONFIRMATION_RETRY_SECONDS
         )
 
     def act(self, ctx: InteractionContext) -> InteractionAction:
@@ -222,7 +262,12 @@ class NoProgressHandler:
             self._workspace_checked = False
             return False
         low = ctx.terminal.lower()
-        if "❯" in ctx.terminal and "[pasted text #" not in low and "streaming" not in low:
+        if (
+            "❯" in ctx.terminal
+            and "[pasted text #" not in low
+            and "streaming" not in low
+            and "esc to interrupt" not in low
+        ):
             if self._idle_seen_at == 0.0:
                 self._idle_seen_at = ctx.elapsed_seconds
                 return False
@@ -248,18 +293,69 @@ class InteractionController:
         self._handlers.append(NoProgressHandler(enable_idle_detection=enable_idle_detection))
 
     def process(self, ctx: InteractionContext) -> InteractionAction:
-        if ctx.state.yes_confirmation_visible and not _yes_confirmation_visible(ctx.terminal):
-            ctx.state.yes_confirmation_visible = False
-        if ctx.state.plan_approval_visible and not _plan_approval_visible(ctx.terminal):
-            ctx.state.plan_approval_visible = False
-        if ctx.state.generic_selection_visible and not _generic_selection_visible(ctx.terminal):
-            ctx.state.generic_selection_visible = False
-            ctx.state.generic_selection_attempts = 0
-            ctx.state.generic_selection_sent_at = None
+        visible = (
+            ("yes_confirmation", _yes_confirmation_visible(ctx.terminal)),
+            ("plan_approval", _plan_approval_visible(ctx.terminal)),
+            ("generic_selection", _generic_selection_visible(ctx.terminal)),
+        )
+        changed = False
+        if any(shown for _, shown in visible):
+            tool_id, prompt = _confirmation_identity(ctx)
+            previous = ctx.state.confirmation_id
+            if previous is not None:
+                changed = prompt != previous[1] or (
+                    tool_id is not None and previous[0] is not None and tool_id != previous[0]
+                )
+                # Transcript writes may lag behind the terminal, or finish before it redraws.
+                if prompt == previous[1] and tool_id is None:
+                    tool_id = previous[0]
+            ctx.state.confirmation_id = tool_id, prompt
+        else:
+            ctx.state.confirmation_id = None
+        for name, shown in visible:
+            if getattr(ctx.state, f"{name}_visible") and (changed or not shown):
+                setattr(ctx.state, f"{name}_visible", False)
+                setattr(ctx.state, f"{name}_attempts", 0)
+                setattr(ctx.state, f"{name}_sent_at", None)
         for handler in self._handlers:
             if handler.recognize(ctx):
                 return handler.act(ctx)
         return InteractionAction(kind="none")
+
+
+def _confirmation_identity(ctx: InteractionContext) -> tuple[str | None, str]:
+    """Identify the pending operation and dialog, excluding the changing footer."""
+    blocks: list[dict] = []
+    for event in ctx.transcript or []:
+        message = event.get("message")
+        if isinstance(message, dict) and isinstance(message.get("content"), list):
+            blocks.extend(block for block in message["content"] if isinstance(block, dict))
+    completed = {
+        b["tool_use_id"] for b in blocks if b.get("type") == "tool_result" and isinstance(b.get("tool_use_id"), str)
+    }
+    tool_id = next(
+        (
+            b["id"]
+            for b in blocks
+            if b.get("type") == "tool_use" and isinstance(b.get("id"), str) and b["id"] not in completed
+        ),
+        None,
+    )
+    lines = ctx.terminal.splitlines()
+    selected = next(
+        (
+            i
+            for i in reversed(range(len(lines)))
+            if _YES_CONFIRMATION_RE.search(lines[i]) or _HIGHLIGHTED_NUMBERED_SELECTION_RE.match(lines[i])
+        ),
+        len(lines),
+    )
+    prompt = " ".join(
+        line.strip()
+        for line in lines[max(0, selected - _PROMPT_WINDOW_LINES) : selected + 1]
+        if line.strip() and not re.match(r"^[\u2800-\u28ff✢✳✶✻✽]", line.strip())
+    )
+    return tool_id, " ".join(prompt.split())
 
 
 def handler_types_for_profile(interaction_profile: str) -> tuple[type[InteractionHandler], ...]:

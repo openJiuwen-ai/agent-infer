@@ -165,5 +165,6 @@ def test_dsh_native_workspace_sandbox_blocks_escape_canaries(persistent_canary_r
 
 @pytest.fixture
 def persistent_canary_root():
-    with tempfile.TemporaryDirectory(prefix="dsh-canary-", dir=Path.home()) as directory:
+    # CI sets HOME under /tmp, which Landlock allows writing.
+    with tempfile.TemporaryDirectory(prefix="dsh-canary-", dir=Path(__file__).resolve().parents[4]) as directory:
         yield Path(directory)

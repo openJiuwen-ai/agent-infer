@@ -664,6 +664,11 @@ def test_runtime_converter_counts_each_turn_with_full_backend_history(
             pass
 
     monkeypatch.setattr("agentinfer.agentbench.replay.converters.codex_swebenchpro.httpx.Client", Client)
+    # Keep this backend-history test independent of local tokenizer caches.
+    monkeypatch.setattr(
+        "agentinfer.agentbench.replay.converters.codex_swebenchpro.discover_local_tokenizer",
+        lambda *args, **kwargs: None,
+    )
     source = tmp_path / "source.json"
     source.write_text(
         json.dumps(

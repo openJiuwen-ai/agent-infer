@@ -73,9 +73,11 @@ def _request(tmp_path: Path) -> AgentRunRequest:
     )
 
 
+@pytest.mark.parametrize("patch_error", [False, True])
 def test_runner_passes_prompt_on_stdin_and_exports_patch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    patch_error: bool,
 ) -> None:
     from agentinfer.agentbench.agents.jiuwenswarm import runner
 
@@ -129,22 +131,29 @@ def test_runner_passes_prompt_on_stdin_and_exports_patch(
         assert (workspace / ".gitignore").exists()
         assert (workspace / ".agent_history").exists()
         assert (workspace / "prompt_attachment").exists()
+        if patch_error:
+            raise OSError("patch export failed")
         return "diff --git a/a b/a\n"
 
     monkeypatch.setattr(runner, "export_patch", export_clean_patch)
 
     result = runner.asyncio.run(runner.run_jiuwenswarm(_request(tmp_path)))
 
-    assert result.outcome is AgentRunOutcome.COMPLETED
-    assert result.termination_reason is None
+    if patch_error:
+        assert result.outcome is AgentRunOutcome.FAILED
+        assert result.termination_reason is TerminationReason.HARNESS_ERROR
+        assert "OSError: patch export failed" in (tmp_path / "artifacts/jiuwenswarm-patch-error.log").read_text()
+    else:
+        assert result.outcome is AgentRunOutcome.COMPLETED
+        assert result.termination_reason is None
     assert result.tmux_session is None
-    assert result.has_patch is True
+    assert result.has_patch is not patch_error
     assert state["started"] is state["stopped"] is True
     assert state["instance_kwargs"]["completion_timeout_seconds"] == 10
     assert state["prompt"].decode().startswith("You are an AI coding agent.")
     assert "--trusted-dir" not in state["command"]
     assert state["command"][-2:] == ("--timeout", "10")
-    assert (tmp_path / "artifacts" / "model.patch").exists()
+    assert (tmp_path / "artifacts" / "model.patch").exists() is not patch_error
 
 
 def test_runner_timeout_interrupts_before_instance_stop(
