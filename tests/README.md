@@ -73,8 +73,8 @@ They have no ready lane and are not selected by default CPU CI (`-m "cpu and rea
 Run 模式和 Replay 共用独立进程 Mock Server。
 [Replay CI 说明](agentbench/replay/README.md) 包含双轮冷启动矩阵、后端契约、
 依赖与故障测试、执行命令和失败产物说明。
-CPU CI 沿用现有 Python 3.10/3.12 任务，通过 `tests/agentbench` 统一收集单元测试、
-`benchmark_smoke` 和 `replay_smoke`。
+CPU CI 沿用现有 Python 3.10/3.12 任务，通过 `cpu and ready` 选择单元测试及 Run / Replay 冒烟用例。
+单独运行冒烟用例时，使用下方的具体文件路径加 `-m "cpu and ready"` 筛选，不再使用额外的 smoke 标签。
 
 ## Pytest labels
 
