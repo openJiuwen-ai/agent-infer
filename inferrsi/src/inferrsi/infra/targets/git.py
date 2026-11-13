@@ -33,12 +33,18 @@ def repository_identity(repo: str | Path, exclude: Path | None = None) -> dict:
         # generated artifacts can be excluded; tracked changes remain evidence.
         diff = git("diff", "--binary", "HEAD", "--", ".")
         untracked = []
+        # Resolve both sides of the comparison. ``exclude`` is resolved so a
+        # caller may pass either the real output root or a path that reaches it
+        # through a symlink; the candidate has to be resolved too, or the two
+        # sides are compared in different terms and a symlink that *is* the
+        # excluded root (or sits inside it) stays in the fingerprint.
+        exclude_root = Path(exclude).resolve() if exclude else None
         for raw in git("ls-files", "--others", "--exclude-standard", "-z").split(b"\0"):
             if not raw:
                 continue
             name = os.fsdecode(raw)
             path = repo / name
-            if exclude and path.absolute().is_relative_to(Path(exclude).resolve()):
+            if exclude_root and path.resolve().is_relative_to(exclude_root):
                 continue
             if path.is_symlink():
                 digest = hashlib.sha256(os.fsencode(os.readlink(path))).hexdigest()
