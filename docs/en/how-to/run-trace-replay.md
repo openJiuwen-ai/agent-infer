@@ -65,7 +65,10 @@ shortfall are recorded. Warmup usage and time are excluded from measured Replay 
 TraceLab sends token ID arrays to `/v1/completions`; the backend must return generated token IDs when
 `return_token_ids` is requested. The configured chat endpoint identifies the OpenAI backend, while
 `chat_template_kwargs` do not apply to TraceLab token ID requests. The model context window must fit the warmup
-and every input plus output target. Set `experiment.task_timeout_seconds: null` to avoid truncating long sessions;
+and every input plus output target. Replay reads that limit from `max_model_len` on the `/v1/models` entry for the
+configured model. When the replay target is a gRPC Router, whose model list carries no `max_model_len`, the limit is
+read from `backend.tokenizer_base_url` instead, provided it is set and serves the same model; otherwise Replay fails
+before sending any request. Set `experiment.task_timeout_seconds: null` to avoid truncating long sessions;
 the packaged TraceLab template does this by default.
 
 `send_after` still controls release after predecessor completion plus the configured interval. The shared graph
