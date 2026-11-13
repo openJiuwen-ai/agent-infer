@@ -592,17 +592,22 @@ def test_summarize_passes_figures_directory(tmp_path: Path, monkeypatch: pytest.
     ]
 
 
-def test_prepare_delegates_to_dataset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("dataset_name", ["swebench", "terminalbench"])
+def test_prepare_delegates_to_dataset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dataset_name: str) -> None:
     dataset = types.ModuleType("agentinfer.agentbench.benchkit.dataset")
-    dataset.prepare_swebench = lambda output: types.SimpleNamespace(rows=1, index_path=output / "instances.jsonl")
+    calls = []
+    dataset.prepare_dataset = lambda name, output: (
+        calls.append((name, output)) or types.SimpleNamespace(rows=1, index_path=output / "instances.jsonl")
+    )
     monkeypatch.setitem(sys.modules, dataset.__name__, dataset)
-    assert main(["prepare", "swebench", "--output-dir", str(tmp_path / "data")]) == 0
+    assert main(["prepare", dataset_name, "--output-dir", str(tmp_path / "data")]) == 0
+    assert calls == [(dataset_name, tmp_path / "data")]
 
 
 def test_prepare_defaults_output_dir_to_data_swebench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: list[Path] = []
     dataset = types.ModuleType("agentinfer.agentbench.benchkit.dataset")
-    dataset.prepare_swebench = lambda output: (
+    dataset.prepare_dataset = lambda name, output: (
         captured.append(output) or types.SimpleNamespace(rows=1, index_path=output / "instances.jsonl")
     )
     monkeypatch.setitem(sys.modules, dataset.__name__, dataset)
