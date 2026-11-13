@@ -5,6 +5,7 @@
 
 import argparse
 import asyncio
+import json
 import logging
 import sys
 import types
@@ -17,6 +18,9 @@ from pydantic import BaseModel
 
 from ..replay.config import ReplayBenchConfig, ReplayTraceType, builtin_replay_config_path, load_replay_config
 from .config import AgentBenchConfig, load_config
+
+if typing.TYPE_CHECKING:
+    from .evaluation.config import EvaluationConfig
 
 logger = logging.getLogger(__name__)
 
@@ -232,6 +236,8 @@ def _parser() -> argparse.ArgumentParser:
 
     run = commands.add_parser("run", help="Run one benchmark")
     run.add_argument("--config", type=Path, default=None)
+    run.add_argument("--with-correctness", action="store_true", help="Evaluate completed tasks after the run finishes")
+    run.add_argument("--evaluation-config", type=Path, help="Optional evaluation YAML; requires --with-correctness")
     _register_run_args(run)
 
     replay = commands.add_parser(
@@ -251,6 +257,17 @@ def _parser() -> argparse.ArgumentParser:
     compare.add_argument("--candidate", type=Path, nargs="+", required=True)
     compare.add_argument("--confidence", type=float, default=0.95)
     compare.add_argument("--json", action="store_true")
+
+    evaluate = commands.add_parser("evaluate", help="Evaluate completed SWE-bench tasks using the official harness")
+    evaluate.add_argument("--result-path", type=Path, required=True)
+    evaluate.add_argument(
+        "--config", type=Path, help="Optional evaluation YAML; defaults to the current Python environment"
+    )
+    evaluate.add_argument("--output-dir", type=Path)
+
+    correctness = commands.add_parser("compare-correctness", help="Compare finalized SWE-bench correctness results")
+    correctness.add_argument("--baseline", type=Path, required=True)
+    correctness.add_argument("--candidate", type=Path, required=True)
     return parser
 
 
@@ -260,6 +277,8 @@ def main(argv: list[str] | None = None, *, cli_metadata: dict[str, object] | Non
     _configure_logging()
     parser = _parser()
     args = parser.parse_args(argv)
+    if args.command in {"evaluate", "compare-correctness"}:
+        return _correctness(args, parser)
     if args.command == "replay" and args.config is None:
         missing = [flag for dest, flag in _REPLAY_REQUIRED_WITHOUT_CONFIG if getattr(args, dest) is None]
         if missing:
@@ -275,7 +294,12 @@ def main(argv: list[str] | None = None, *, cli_metadata: dict[str, object] | Non
         if args.command == "replay":
             _replay(args, metadata)
         else:
-            asyncio.run(_run(args, metadata))
+            if args.evaluation_config is not None and not args.with_correctness:
+                parser.error("--evaluation-config requires --with-correctness")
+            evaluation_config = _evaluation_config(args.evaluation_config, parser) if args.with_correctness else None
+            run_dir = asyncio.run(_run(args, metadata))
+            if evaluation_config is not None:
+                return _evaluate(run_dir, evaluation_config)
     elif args.command == "summarize":
         _summarize(args)
     elif args.command == "compare":
@@ -285,7 +309,44 @@ def main(argv: list[str] | None = None, *, cli_metadata: dict[str, object] | Non
     return 0
 
 
-async def _run(args: argparse.Namespace, cli_metadata: dict[str, object]) -> None:
+def _correctness(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if args.command == "evaluate":
+        return _evaluate(args.result_path, _evaluation_config(args.config, parser), args.output_dir)
+
+    from .evaluation.compare import compare_correctness
+
+    try:
+        report = compare_correctness(args.baseline, args.candidate)
+        sys.stdout.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+        return {"passed": 0, "failed": 1, "insufficient_evidence": 2}[report["status"]]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        logger.error("Correctness operation failed: %s", exc)
+        return 1
+
+
+def _evaluation_config(path: Path | None, parser: argparse.ArgumentParser) -> "EvaluationConfig":
+    from .evaluation.config import load_evaluation_config
+
+    try:
+        return load_evaluation_config(path)
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
+
+
+def _evaluate(run_dir: Path, config: "EvaluationConfig", output_dir: Path | None = None) -> int:
+    from .evaluation.runner import evaluate
+
+    try:
+        output, code = evaluate(run_dir, config, output_dir)
+        logger.info("Correctness results: %s", output / "correctness.json")
+        sys.stdout.write((output / "correctness.json").read_text(encoding="utf-8") + "\n")
+        return code
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        logger.error("Correctness operation failed: %s", exc)
+        return 1
+
+
+async def _run(args: argparse.Namespace, cli_metadata: dict[str, object]) -> Path:
     """Delegate benchmark execution to the Runner API."""
 
     from .runner import run_benchmark
@@ -293,6 +354,7 @@ async def _run(args: argparse.Namespace, cli_metadata: dict[str, object]) -> Non
     config = _apply_cli_overrides(args, load_config(args.config))
     run_dir = await run_benchmark(config, cli_metadata=cli_metadata)
     logger.info("Results: %s", run_dir)
+    return run_dir
 
 
 def _replay(args: argparse.Namespace, cli_metadata: dict[str, object]) -> None:

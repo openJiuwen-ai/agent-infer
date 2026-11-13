@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from agentinfer.agentbench.agents.contracts import AgentRunOutcome, AgentRunResult
@@ -70,9 +71,10 @@ def test_router_backend_skips_control_protocol_and_serializes_result(
         lambda request: asyncio.sleep(0, result=_agent_result(request.session_id)),
     )
 
-    result = asyncio.run(
-        _run_single_task(_context(tmp_path, router=True), _task(), "http://proxy", tmp_path / "cache", 0)
-    )
+    context = _context(tmp_path, router=True)
+    # A live trace may end midway through a UTF-8 character.
+    context.trace_path.write_bytes(b'{"error":"\xe4')
+    result = asyncio.run(_run_single_task(context, _task(), "http://proxy", tmp_path / "cache", 0))
     assert result.outcome == AgentRunOutcome.COMPLETED
     payload = (tmp_path / "tasks" / "instance" / "result.json").read_text(encoding="utf-8")
     assert "registration" not in payload
@@ -336,6 +338,41 @@ def test_jiuwenswarm_preflight_does_not_require_tmux(
         ["/usr/bin/jiuwenswarm", "chat", "--help"],
     ]
     assert urls == ["http://router:8400/v1/models"]
+
+
+@pytest.mark.parametrize("failure", ["timeout", "connection", "status"])
+def test_backend_preflight_preserves_failure_details(tmp_path, monkeypatch, failure):
+    from agentinfer.agentbench.benchkit import runner
+
+    async def ready(*args):
+        return None
+
+    def respond(request):
+        if failure == "timeout":
+            raise httpx.ReadTimeout("", request=request)
+        if failure == "connection":
+            raise httpx.ConnectError("connection refused", request=request)
+        return httpx.Response(503)
+
+    client_class = httpx.AsyncClient
+    monkeypatch.setattr(runner, "check_agent_preflight", ready)
+    monkeypatch.setattr(
+        runner.httpx,
+        "AsyncClient",
+        lambda **kwargs: client_class(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    config = _run_config(tmp_path)
+    with pytest.raises(RuntimeError) as caught:
+        asyncio.run(runner.run_benchmark(config))
+
+    manifest = json.loads((config.experiment.result_dir / "manifest.json").read_text())
+    capture = next(item for item in manifest["evidence"] if item["source"] == "claude_runtime")
+    assert manifest["status"] == "failed"
+    assert capture["reason"] == str(caught.value)
+    assert "GET http://router:8400/v1/models" in capture["reason"]
+    assert {"timeout": "ReadTimeout", "connection": "ConnectError", "status": "HTTP 503"}[failure] in capture["reason"]
+    if failure == "timeout":
+        assert "timeout=10s" in capture["reason"]
 
 
 def test_preflight_failure_skips_remote_finalizers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
