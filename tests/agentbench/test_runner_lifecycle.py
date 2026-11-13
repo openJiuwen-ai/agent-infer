@@ -71,9 +71,10 @@ def test_router_backend_skips_control_protocol_and_serializes_result(
         lambda request: asyncio.sleep(0, result=_agent_result(request.session_id)),
     )
 
-    result = asyncio.run(
-        _run_single_task(_context(tmp_path, router=True), _task(), "http://proxy", tmp_path / "cache", 0)
-    )
+    context = _context(tmp_path, router=True)
+    # A live trace may end midway through a UTF-8 character.
+    context.trace_path.write_bytes(b'{"error":"\xe4')
+    result = asyncio.run(_run_single_task(context, _task(), "http://proxy", tmp_path / "cache", 0))
     assert result.outcome == AgentRunOutcome.COMPLETED
     payload = (tmp_path / "tasks" / "instance" / "result.json").read_text(encoding="utf-8")
     assert "registration" not in payload
