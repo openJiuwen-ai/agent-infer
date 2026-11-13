@@ -2,6 +2,7 @@
 
 This guide compares a cold upstream vLLM async scheduler with the AgentInfer Progress-TTL agent-aware scheduler using
 the same Claude Code workload. BenchKit records both arms through the same Request Proxy to avoid observation-path bias.
+It also covers SWE-bench Verified correctness evaluation, including automatic scoring after a run.
 
 ## Prepare the Environment
 
@@ -11,6 +12,21 @@ The workflow requires:
 - CUDA GPUs capable of running the target model; the script defaults to two tensor-parallel workers.
 - Claude Code, tmux, and Git, with Claude Code authentication completed.
 - A model that supports Anthropic `POST /v1/messages`.
+
+Run Claude's `plan-subagent` profile as a non-root user (`id -u` must not be `0`). This profile uses
+`--permission-mode bypassPermissions`; Claude rejects root/sudo execution with
+`--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons`.
+Use an account that can read the code and dataset and write the workspace and results. With `--with-correctness`,
+the same account also needs Docker access; verify it with `docker info`. Otherwise, run standalone `evaluate`
+after generation in an environment with Docker access.
+
+At startup, the framework selects `Yes, I trust this folder` in Claude's workspace trust dialog and confirms only
+once that option is highlighted, including when `No, exit` is the default. Unrecognized selections are not confirmed.
+While `esc to interrupt` is visible, Claude is treated as busy even if its input prompt is also shown.
+Plan approval recognizes wrapped text and case changes, including `Yes, and switch to BYPASS PERMISSIONS`.
+If the same approval prompt remains visible for 5 seconds, confirmation is retried once to handle an ignored initial key.
+File edits and other highlighted Yes confirmations use the same bounded retry. It resets when the prompt clears;
+confirmation is not retried when Yes is no longer selected.
 
 Create an environment and install AgentInfer from the repository root:
 
@@ -97,6 +113,131 @@ See [Benchmark CLI](../reference/benchmark-cli.md) for command options,
 [Run artifacts](../reference/run-artifacts.md) for output files. `completed` means that the agent process completed,
 not that its patch is correct; read [Benchmark methodology](../explanation/benchmark-methodology.md) before making a
 release claim.
+
+## Evaluate SWE-bench Verified correctness
+
+Evaluate existing AgentBench patches using official SWE-bench **4.1.0**. Only
+tasks with outcome=completed are selected; the finalized run may contain failed
+tasks. No model requests are made. Version 5 requires a different dataset schema.
+The evaluation runner targets Linux and uses POSIX process groups for bounded
+shutdown. On Windows, run it inside a Linux environment such as WSL2.
+
+The configuration file is optional. By default, evaluation uses the Python
+environment running AgentInfer, which must have swebench==4.1.0 installed:
+
+```bash
+vllm bench serve --agentinfer evaluate --result-path results/run-a
+```
+
+Defaults are 2 workers, a 1800-second instance timeout and a 7200-second overall
+timeout. Use --config only for a separate interpreter or custom settings.
+
+### Setup and evaluation
+
+To use a separate evaluator with Docker access, create evaluation.yaml:
+
+```bash
+uv venv --python 3.12 /path/to/swebench-venv
+uv pip install --python /path/to/swebench-venv/bin/python 'swebench==4.1.0'
+```
+
+```yaml
+harness_python: /path/to/swebench-venv/bin/python
+expected_harness_version: "4.1.0"
+max_workers: 2
+timeout_seconds: 1800
+overall_timeout_seconds: 7200
+cleanup_timeout_seconds: 30
+```
+
+```bash
+vllm bench serve --agentinfer evaluate \
+  --result-path results/run-a \
+  --config evaluation.yaml \
+  --output-dir results/run-a/evaluations/eval-001
+```
+
+The source needs finalized manifest/summary files, a consistent task index,
+per-task results/prompts and the local Verified dataset referenced by the manifest.
+Task IDs, repository and base commit are checked. With no completed tasks, no
+score is produced. Relative interpreter paths resolve against the configuration
+file; unknown fields and unsupported harness versions are rejected.
+Preflight checks the installed SWE-bench version before importing evaluator modules
+and collecting environment details; a version mismatch prevents scoring from starting.
+
+Omit --output-dir to create a unique directory under the run's evaluations/.
+Existing directories are not overwritten. Original patches, manifest and
+performance summary are preserved. First use downloads official Docker images.
+Finalization removes containers left by this evaluation in one batch. Cleanup
+failures or timeouts are recorded in the evaluation manifest and mark the evaluation failed.
+
+### Evaluate automatically after a run
+
+Add `--with-correctness` to `run` to generate patches and evaluate them in one command:
+
+```bash
+vllm bench serve --agentinfer run \
+  --config agentinfer/agentbench/configs/swebench_vllm.yaml \
+  --result-dir results/run-a \
+  --with-correctness
+```
+
+For a separate evaluator, also pass `--evaluation-config evaluation.yaml`.
+`--config` selects the run configuration; `--evaluation-config` selects the evaluation
+configuration described above. Omitting the latter uses the current Python environment
+and default evaluation settings. Passing it without `--with-correctness` exits with code 2.
+Evaluation configuration is loaded and validated before generation. Checks of Docker,
+the installed SWE-bench version and other scoring requirements remain in the evaluation phase.
+
+After performance aggregation, artifact writes and resource cleanup finish, completed tasks
+in the actual run directory are evaluated. Results go under that directory's `evaluations/`;
+the result path and correctness summary are printed. Scoring time is excluded from run timing,
+and evaluation uses its own timeout and worker settings. The original performance summary
+and patches are preserved.
+
+Without the flag, run behavior is unchanged. Run exceptions or interruption skip automatic
+evaluation and propagate the original failure. Valid finalized artifacts can still be scored
+later using standalone `evaluate`. If some tasks fail but orchestration finishes normally,
+only completed tasks are scored. With no completed tasks, the command exits 1 without a score.
+Normal unresolved or empty-patch results exit 0; this does not mean every patch is correct.
+Evaluation errors and interruption use the exit codes below.
+
+### Results
+
+Each selected task gets one record in task_results.jsonl. The correctness.json
+counts contain exactly total, resolved, unresolved, empty_patch and error.
+The only accuracy metric is resolved_rate = resolved / total; errors remain in
+the denominator. This describes the completed-task subset, not all Verified tasks.
+
+An absent patch is only empty when the result and DSH export status confirm
+no_changes. Otherwise it is an error. Failed source tasks are excluded even when
+they have patches. F2P/P2P details stay in official per-task reports under raw/.
+Commands, logs, versions, image identities and hashes are retained.
+
+Exit codes: 0 for finalized evaluation without errors (unresolved is valid),
+1 for input/execution/evaluation errors, 2 for invalid configuration, and 130
+for interruption. Errors still produce summaries once the task set is known.
+
+### Comparison
+
+```bash
+vllm bench serve --agentinfer compare-correctness \
+  --baseline results/baseline/evaluations/eval-001/correctness.json \
+  --candidate results/candidate/evaluations/eval-001/correctness.json
+```
+
+Comparison checks hashes, task sets, dataset contents, recorded generation
+configuration/prompts, evaluator environment and image identity. Incompatible or
+incomplete evidence yields insufficient_evidence; it never silently intersects
+task sets. An unrecorded model checkpoint revision cannot be independently verified.
+
+The JSON report lists regressions and improvements even when total accuracy is
+unchanged. Any task regression fails the comparison; improvements do not offset
+regressions. Exit codes: 0 (passed), 1 (regression detected), 2 (insufficient
+evidence). This is a fixed-task check, not a statistical capability claim.
+
+See the [official guide](https://www.swebench.com/SWE-bench/guides/evaluation/)
+and [benchmark methodology](../explanation/benchmark-methodology.md).
 
 ## Select an agent and transparent Router
 
@@ -192,6 +333,31 @@ timeout or cancellation reasons are preserved. Cleanup details are recorded in
 
 For Router runs use `swebench_agentinfer.yaml`, with `backend.base_url` pointing to the Router and
 `backend.metrics_url` directly to vLLM. The Router forwards transparently without the old registration/cleanup API.
+
+## Historical DSH execution record (2026-10-29)
+
+The run `test-dsh-20261029-102951` exercised 16 SWE-bench Verified Astropy tasks
+at task concurrency 8, with a 3600-second per-task timeout and no overall timeout.
+It used DSH 0.2.1-rc.2, Node 24.22.1, Python 3.12.13 and
+Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8 in the plan-subagent profile.
+
+| Observation | Result |
+| --- | --- |
+| Agent tasks completed / failed | 14 / 2 |
+| Tasks with exported patches | 14 |
+| Run wall time | 3614.25 seconds |
+| Model requests successful / failed | 1971 / 1 |
+| Request Proxy TTFT mean / P95 | 1.201 / 2.887 seconds |
+
+Task 13033 timed out after a child repeatedly read the same source; its final
+request was cancelled during cleanup. Task 13579 failed because the lead ended
+without completing plan approval. These are observations from that dated run,
+not outcomes guaranteed by the current runtime safeguards.
+
+No official correctness evaluation was available for this run. The 87.5% agent
+completion rate is not a SWE-bench resolved rate, and its long-tail behavior does
+not establish normal-workload scaling. The [Chinese run record](../../zh/how-to/run-benchmark.md)
+retains the full parameters, task evidence and reproduction example.
 
 For captured traces, see [Trace Replay](run-trace-replay.md).
 
