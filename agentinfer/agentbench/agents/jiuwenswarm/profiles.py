@@ -17,6 +17,7 @@ class JiuwenSwarmProfile:
 
     name: str
     build_prompt: Callable[[Task], str]
+    supports_subagent_limits: bool = False
 
 
 def _code_normal_prompt(task: Task) -> str:

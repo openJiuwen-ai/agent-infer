@@ -7,7 +7,9 @@ import asyncio
 import json
 import os
 import shlex
+import subprocess
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -453,6 +455,7 @@ async def run_claude(request: AgentRunRequest) -> AgentRunResult:
                 timeout=request.patch_flush_seconds + _FINALIZATION_TIMEOUT_SECONDS,
             )
         except Exception:
+            await _write_text_async(artifact_dir / "claude-evidence-error.log", traceback.format_exc())
             if result.outcome is AgentRunOutcome.COMPLETED:
                 result.outcome = AgentRunOutcome.FAILED
                 result.termination_reason = TerminationReason.HARNESS_ERROR
@@ -463,9 +466,14 @@ async def run_claude(request: AgentRunRequest) -> AgentRunResult:
                 await asyncio.shield(launch_task)
             except Exception:
                 pass
-    except Exception:
+    except Exception as exc:
         result.outcome = AgentRunOutcome.FAILED
-        result.termination_reason = TerminationReason.HARNESS_ERROR
+        result.termination_reason = (
+            TerminationReason.TIMEOUT
+            if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)) and time.monotonic() >= task_deadline
+            else TerminationReason.HARNESS_ERROR
+        )
+        await _write_text_async(artifact_dir / "claude-runner-error.log", traceback.format_exc())
     finally:
         if tmux_owned:
             try:
