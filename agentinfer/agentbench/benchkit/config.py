@@ -28,7 +28,7 @@ class ExperimentConfig(StrictModel):
 
 
 class DatasetConfig(StrictModel):
-    name: Literal["swebench_verified"] = Field(
+    name: Literal["swebench_verified", "terminalbench"] = Field(
         "swebench_verified", json_schema_extra={"cli": {"flag": "--dataset-name"}}
     )
     index_path: Path = Field(Path("data/swebench/instances.jsonl"), json_schema_extra={"cli": True})
