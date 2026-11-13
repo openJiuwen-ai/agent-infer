@@ -1,19 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 
-"""Load and prepare benchmark dataset metadata.
+"""Share task metadata, load local indexes, and dispatch dataset preparation.
 
-Normal benchmark runs read local SWE-bench-style JSONL and task-list files.
-The explicit prepare helper can generate those local files from supported
-upstream datasets.
+Normal benchmark runs read local JSONL indexes and task-list files.
+Preparation is delegated to the selected dataset's implementation.
 """
 
 import json
 import re
-from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import cast
 
 _INSTANCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _WINDOWS_RESERVED = {
@@ -28,7 +25,7 @@ _WINDOWS_RESERVED = {
 
 @dataclass(frozen=True)
 class Task:
-    """One SWE-bench task selected for a benchmark run."""
+    """One task selected for a benchmark run."""
 
     instance_id: str
     repo: str
@@ -37,6 +34,8 @@ class Task:
     difficulty: str | None = None
     fail_to_pass: tuple[str, ...] = field(default_factory=tuple)
     pass_to_pass: tuple[str, ...] = field(default_factory=tuple)
+    task_path: Path | None = None
+    cpu_candidate: bool = False
 
     def __post_init__(self) -> None:
         stem = self.instance_id.split(".", 1)[0].upper()
@@ -135,6 +134,8 @@ def load_tasks(
                 difficulty=row.get("difficulty"),
                 fail_to_pass=_as_tuple(row.get("fail_to_pass", row.get("FAIL_TO_PASS", []))),
                 pass_to_pass=_as_tuple(row.get("pass_to_pass", row.get("PASS_TO_PASS", []))),
+                task_path=Path(row["task_path"]) if row.get("task_path") else None,
+                cpu_candidate=bool(row.get("cpu_candidate", False)),
             )
 
     tasks = [tasks_by_id[instance_id] for instance_id in instance_ids if instance_id in tasks_by_id]
@@ -144,82 +145,18 @@ def load_tasks(
     return tasks
 
 
-def prepare_swebench(output_dir: Path) -> PreparedDataset:
-    """Download SWE-bench Verified metadata and write benchkit local inputs.
+def prepare_dataset(name: str, output_dir: Path) -> PreparedDataset:
+    """Prepare a named dataset using its specific implementation."""
 
-    The command writes `instances.jsonl`, `task-lists/default.txt`, and
-    `manifest.json`. `default.txt` includes every prepared task ID in upstream
-    dataset iteration order; `experiment.task_num` can later choose the first N
-    tasks from that generated list.
-    """
+    if name == "swebench":
+        from .swebench import prepare_swebench
 
-    if output_dir.exists() and (not output_dir.is_dir() or any(output_dir.iterdir())):
-        raise FileExistsError(f"Output path already exists and is not an empty directory: {output_dir}")
+        return prepare_swebench(output_dir)
+    if name == "terminalbench":
+        from .terminalbench import prepare_terminalbench
 
-    dataset = _load_swebench_verified()
-    rows = [_normalize_swebench_row(row) for row in dataset]
-
-    task_list_dir = output_dir / "task-lists"
-    task_list_dir.mkdir(parents=True, exist_ok=True)
-
-    index_path = output_dir / "instances.jsonl"
-    selection_path = task_list_dir / "default.txt"
-    manifest_path = output_dir / "manifest.json"
-
-    with index_path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-
-    selection_path.write_text("\n".join(row["instance_id"] for row in rows) + "\n", encoding="utf-8")
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "dataset": "swebench",
-                "variant": "verified",
-                "source": "princeton-nlp/SWE-bench_Verified",
-                "split": "test",
-                "rows": len(rows),
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    return PreparedDataset(
-        index_path=index_path,
-        selection_path=selection_path,
-        manifest_path=manifest_path,
-        rows=len(rows),
-    )
-
-
-def _load_swebench_verified() -> Iterable[Mapping[str, object]]:
-    from datasets import load_dataset
-
-    dataset = load_dataset("princeton-nlp/SWE-bench_Verified", split="test")
-    return cast(Iterable[Mapping[str, object]], dataset)
-
-
-def _normalize_swebench_row(row: Mapping[str, object]) -> dict[str, object]:
-    fail_to_pass = list(_as_tuple(row.get("fail_to_pass", row.get("FAIL_TO_PASS", []))))
-    pass_to_pass = list(_as_tuple(row.get("pass_to_pass", row.get("PASS_TO_PASS", []))))
-    return {
-        "repo": row.get("repo", ""),
-        "instance_id": row.get("instance_id", ""),
-        "base_commit": row.get("base_commit", ""),
-        "patch": row.get("patch", ""),
-        "test_patch": row.get("test_patch", ""),
-        "problem_statement": row.get("problem_statement", ""),
-        "created_at": row.get("created_at"),
-        "version": row.get("version"),
-        "FAIL_TO_PASS": fail_to_pass,
-        "PASS_TO_PASS": pass_to_pass,
-        "fail_to_pass": fail_to_pass,
-        "pass_to_pass": pass_to_pass,
-        "environment_setup_commit": row.get("environment_setup_commit"),
-        "difficulty": row.get("difficulty"),
-    }
+        return prepare_terminalbench(output_dir)
+    raise ValueError(f"unsupported benchmark dataset: {name}")
 
 
 def _as_tuple(value: object) -> tuple[str, ...]:

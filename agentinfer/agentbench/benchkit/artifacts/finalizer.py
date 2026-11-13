@@ -115,11 +115,7 @@ class RunFinalizer:
                 aggregate_task_results(self._ctx.results),
                 aggregate_request_metrics(self._ctx.facts),
                 vllm_metrics,
-                {
-                    "available": self._ctx.correctness.available if self._ctx.correctness else False,
-                    "reason": self._ctx.correctness.reason if self._ctx.correctness else "collection failed",
-                    "metadata": {},
-                },
+                self._correctness_summary(),
                 evaluate_captures(self._captured),
                 lifecycle_payload,
                 self._ctx.run_wall_time_seconds,
@@ -130,6 +126,41 @@ class RunFinalizer:
                 summary["cli"] = self._ctx.cli_metadata
             self._guard("summary_write", lambda: atomic_write_json(self._ctx.output_dir / "summary.json", summary))
         self._recompute_status()
+
+    def _correctness_summary(self) -> dict[str, object]:
+        capture = self._ctx.correctness
+        legacy = {
+            "available": capture.available if capture else False,
+            "reason": capture.reason if capture else "collection failed",
+            "metadata": {},
+        }
+        dataset = self._ctx.manifest.config.get("dataset")
+        if (
+            not isinstance(dataset, dict)
+            or dataset.get("name") != "terminalbench"
+            or not capture
+            or not capture.available
+        ):
+            return legacy
+        source = capture.metadata
+        keys = (
+            "dataset",
+            "scope",
+            "planned_trials",
+            "scored_trials",
+            "evaluation_coverage",
+            "agent_timeout_seconds",
+            "custom_timeout",
+        )
+        metadata = {key: source[key] for key in keys if key in source}
+        planned = source.get("planned_trials")
+        scored = source.get("scored_trials")
+        complete = isinstance(planned, int) and planned > 0 and scored == planned
+        return {
+            "available": complete,
+            "reason": None if complete else f"{scored}/{planned} trials have valid rewards",
+            "metadata": metadata,
+        }
 
     def _write_manifest(self) -> None:
         try:

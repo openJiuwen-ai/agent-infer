@@ -223,3 +223,6 @@ __marimo__/
 
 # opencode
 .opencode/
+
+# Downloaded Terminal-Bench task packages and generated indexes
+agentinfer/agentbench/data/terminalbench/
