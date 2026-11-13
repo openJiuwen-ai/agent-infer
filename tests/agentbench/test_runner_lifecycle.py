@@ -565,7 +565,11 @@ def test_run_artifacts_index_raw_evidence_without_embedding_payloads(
     assert all(row["metadata"] == {} for row in manifest["evidence"])
     assert all(row["metadata"] == {} for rows in summary["source_health"]["sources"].values() for row in rows)
     assert summary["cli"] == {"entrypoint": "test"}
-    assert summary["router"] == {"applicable": False, "events": {}}
+    assert summary["router"] == {
+        "applicable": False,
+        "events": {},
+        "prediction": {},
+    }
     assert metrics_urls == ["http://vllm:8000/metrics", "http://vllm:8000/metrics"]
     assert proxy_args[0][1] == "http://router:8400"
 

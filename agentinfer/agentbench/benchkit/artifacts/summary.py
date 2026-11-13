@@ -3,7 +3,7 @@
 
 """Build finalized run summary artifacts from normalized metrics."""
 
-from dataclasses import asdict
+from dataclasses import asdict, field
 from typing import Literal
 
 from pydantic import ConfigDict
@@ -34,6 +34,7 @@ class LifecycleSummary:
 class RouterSummary:
     applicable: bool
     events: dict[str, int]
+    prediction: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
@@ -93,15 +94,14 @@ def build_run_summary(
     lifecycle: LifecycleSummary | dict[str, object],
     run_wall_time_seconds: float,
     execution: ExecutionSummary | dict[str, object] | None = None,
+    router_prediction: dict[str, object] | None = None,
 ) -> RunSummary:
     return RunSummary(
         schema_version="1",
         run_id=run_id,
         tasks=tasks,
         requests=requests,
-        # Retain the field for historical artifact and compare compatibility.
-        # Transparent Router use has no AgentBench-side metric collection.
-        router=RouterSummary(False, {}),
+        router=RouterSummary(router_prediction is not None, {}, router_prediction or {}),
         vllm=vllm,
         correctness=(correctness if isinstance(correctness, CorrectnessSummary) else CorrectnessSummary(**correctness)),
         source_health=health,
