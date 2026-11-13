@@ -8,6 +8,12 @@ vllm bench serve --agentinfer
 
 未列出的 `vllm` 命令会原样委托给上游 vLLM CLI。
 
+运行后的精度评测使用 `evaluate --result-path RUN_DIR [--config YAML] [--output-dir DIR]`；
+逐题回归比较使用 `compare-correctness --baseline JSON --candidate JSON`，不允许任务退化。
+省略 `--output-dir` 时，在源运行的 `evaluations/` 下创建唯一目录；已有目标目录不覆盖。
+配置文件可选，默认使用当前 Python 环境；该环境需要安装 `swebench==4.1.0`。
+配置、产物和退出码见[验证 SWE-bench 精度](../how-to/run-benchmark.md#验证-swe-bench-verified-任务精度)。
+
 ## `prepare`
 
 准备基准数据集输入。
@@ -32,6 +38,8 @@ vllm bench serve --agentinfer run --config PATH [OVERRIDES]
 | 参数 | 类型或取值 | 映射字段 |
 | --- | --- | --- |
 | `--config PATH` | 文件路径，可选 | 配置文件 |
+| `--with-correctness` | 默认关闭 | 运行正常收尾后评测 completed 任务 |
+| `--evaluation-config PATH` | 文件路径，可选 | 评测配置；需同时指定 `--with-correctness` |
 | `--task-num INT` | `>= 1` | `experiment.task_num` |
 | `--result-dir PATH` | 目录路径 | `experiment.result_dir` |
 | `--max-concurrency INT` | `>= 1` | `experiment.max_concurrency` |
@@ -48,6 +56,12 @@ vllm bench serve --agentinfer run --config PATH [OVERRIDES]
 
 配置优先级为内置默认值、YAML、显式 CLI 覆盖。YAML 中的相对路径以 YAML 文件目录为基准；CLI 路径以当前
 工作目录为基准。未知 YAML 字段会被拒绝。Router 使用 `--base-url` 指向透明转发端点，`--metrics-url` 指向 vLLM 指标端点。
+
+开启 `--with-correctness` 后，评测配置在运行前校验，默认使用当前 Python 环境和标准评测参数。
+运行配置与评测配置独立；运行正常结束后，将实际产物目录交给评测器，结果写入 `evaluations/` 下的唯一目录。
+运行异常或中断时跳过自动评测并保留原始失败；正常评分返回 0（含 unresolved），评测错误返回 1，
+配置错误返回 2，评测中断返回 130。部分任务失败不会阻止其余 completed 任务入评；无 completed 任务时返回 1。
+用法和环境要求见[验证 SWE-bench 精度](../how-to/run-benchmark.md#验证-swe-bench-verified-任务精度)。
 
 ## `summarize`
 

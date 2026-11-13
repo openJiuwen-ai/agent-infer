@@ -2,6 +2,7 @@
 
 本指南使用同一批 Claude Code 工作负载，对比冷启动的上游 vLLM 异步调度器和 AgentInfer
 Progress-TTL Agent 感知调度器。BenchKit 通过相同的 Request Proxy 记录两个实验组，避免观测路径差异。
+本指南同时介绍 SWE-bench Verified 精度评测，包括运行后自动评分。
 
 ## 准备环境
 
@@ -11,6 +12,19 @@ Progress-TTL Agent 感知调度器。BenchKit 通过相同的 Request Proxy 记�
 - 可运行目标模型的 CUDA GPU；默认脚本使用两个张量并行进程。
 - Claude Code、tmux 和 Git，并已完成 Claude Code 身份验证。
 - 支持 Anthropic `POST /v1/messages` 的模型。
+
+Claude 的 `plan-subagent` 模式必须使用非 root 账号运行（`id -u` 不为 `0`）。该模式使用
+`--permission-mode bypassPermissions`，以 root/sudo 身份启动会被 Claude 拒绝，并提示
+`--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons`。
+请切换到有代码、数据读取权限及工作区、结果目录写入权限的普通账号。使用 `--with-correctness` 时，
+同一账号还必须能访问 Docker，可先运行 `docker info` 验证；否则生成结束后，在有 Docker 权限的环境单独运行 `evaluate`。
+
+Claude 启动时，框架会在工作区信任提示中选择 `Yes, I trust this folder`，确认选中后再继续，
+兼容默认选中 `No, exit` 的界面。无法识别选项时不自动确认。
+终端显示 `esc to interrupt` 时视为仍在执行，不因同时显示输入框而触发空闲终止。
+计划审批提示兼容终端换行与大小写变化，包括 `Yes, and switch to BYPASS PERMISSIONS` 选项。
+同一审批提示在确认后持续显示 5 秒时，最多重试一次，避免界面尚未就绪时丢失按键导致停滞。
+文件编辑等已高亮 Yes 的确认框也采用相同的受限重试；提示消失后重置，未选中 Yes 时不重试确认。
 
 在仓库根目录创建环境并安装 AgentInfer：
 
@@ -94,6 +108,113 @@ vllm bench serve --agentinfer summarize \
 [基准配置参考](../reference/benchmark-config.md)，输出文件见[运行产物参考](../reference/run-artifacts.md)。
 `completed` 只表示 Agent 进程完成，不表示补丁正确；发布结论前请阅读
 [基准方法](../explanation/benchmark-methodology.md)。
+
+## 验证 SWE-bench Verified 任务精度
+
+使用官方 SWE-bench **4.1.0** 评测已有补丁，仅选择 outcome=completed 的任务。
+整批运行可以包含失败任务，评测不重新调用模型。5.x 要求不同的数据集字段。
+评测编排面向 Linux，使用 POSIX 进程组执行有界清理；Windows 请使用 WSL2 等 Linux 环境。
+
+配置文件可选。省略时使用运行 AgentInfer 的当前 Python 环境，该环境需要安装 swebench==4.1.0：
+
+```bash
+vllm bench serve --agentinfer evaluate --result-path results/run-a
+```
+
+默认并发为 2，单实例超时 1800 秒，整体超时 7200 秒。
+使用独立解释器或自定义参数时，再通过 --config 指定配置文件。
+
+### 准备与执行
+
+如需独立评测环境，安装固定版本，确保 Docker 可访问，并保存配置 evaluation.yaml：
+
+```bash
+uv venv --python 3.12 /path/to/swebench-venv
+uv pip install --python /path/to/swebench-venv/bin/python 'swebench==4.1.0'
+```
+
+```yaml
+harness_python: /path/to/swebench-venv/bin/python
+expected_harness_version: "4.1.0"
+max_workers: 2
+timeout_seconds: 1800
+overall_timeout_seconds: 7200
+cleanup_timeout_seconds: 30
+```
+
+```bash
+vllm bench serve --agentinfer evaluate \
+  --result-path results/run-a \
+  --config evaluation.yaml \
+  --output-dir results/run-a/evaluations/eval-001
+```
+
+输入需要已结束的 manifest/summary、任务索引、逐任务 result/prompt 和 manifest 引用的
+本地 Verified 数据集。核对任务 ID、仓库和 base commit；无成功任务时不生成成绩。
+解释器相对路径以配置文件目录为基准，未知字段和不支持的版本会被拒绝。
+预检查先确认已安装的 SWE-bench 版本，匹配后才导入评分模块并采集环境信息；版本不匹配时不启动评分。
+
+省略 --output-dir 时，在原 run 的 evaluations/ 中创建唯一目录；已有目录不覆盖。
+原始补丁、manifest 和性能 summary 不修改。首次使用会下载官方 Docker 镜像。
+结束时批量清理本次评测遗留的容器；清理失败或超时会记录到评测 manifest，并使评测标记为 failed。
+
+### 运行后自动评测
+
+在 `run` 中添加 `--with-correctness`，可在一次命令中完成任务运行与精度评测：
+
+```bash
+vllm bench serve --agentinfer run \
+  --config agentinfer/agentbench/configs/swebench_vllm.yaml \
+  --result-dir results/run-a \
+  --with-correctness
+```
+
+使用独立评测环境时，再添加 `--evaluation-config evaluation.yaml`。
+`--config` 是运行配置，`--evaluation-config` 是上述评测配置；后者省略时使用当前 Python 和默认评测参数。
+单独传入 `--evaluation-config` 而未开启 `--with-correctness` 会返回参数错误 2。
+评测配置在模型运行前加载并校验；Docker 和已安装的 SWE-bench 等评分环境检查仍在评测阶段进行。
+
+运行完成性能统计、产物写入和资源清理后，自动评测实际运行目录中的 completed 任务。
+结果保存至该目录的 `evaluations/` 下，终端打印结果路径及精度摘要。
+评分不计入运行阶段的耗时，评测超时和并发使用评测配置，原始性能 summary 和补丁保持不变。
+
+未开启开关时沿用原有运行方式。运行编排异常或中断时，跳过自动评测并保留原始失败；
+完整收尾的有效产物仍可事后使用独立 `evaluate` 评分。
+部分任务失败但整批编排正常结束时，只评 completed 子集；没有 completed 任务时返回 1，不生成成绩。
+正常评分中的 unresolved 或 empty_patch 返回 0，这不表示所有补丁均正确；评分错误和中断使用下述退出码。
+
+### 结果
+
+每个入选任务在 task_results.jsonl 中有一条记录。correctness.json 的 counts 仅包含
+total、resolved、unresolved、empty_patch、error 五项。唯一汇总精度指标为
+resolved_rate = resolved / total，error 不从分母删除。
+该分数表示成功完成任务子集的解决率，不代表整个 Verified 数据集。
+
+没有补丁文件时，只有 result 与 DSH 导出状态共同证明 no_changes 才计为空补丁；
+否则计为 error。失败任务即使有补丁也不入选。F2P/P2P 明细保留在 raw/ 下官方逐题报告中。
+实际命令、日志、版本、镜像身份和文件哈希全部保留。
+
+退出码：0 表示评测无错误，unresolved 是正常结果；1 表示输入、执行或评测错误；
+2 表示配置错误；130 表示中断。确定任务集合后的错误仍保存汇总。
+
+### 对比
+
+```bash
+vllm bench serve --agentinfer compare-correctness \
+  --baseline results/baseline/evaluations/eval-001/correctness.json \
+  --candidate results/candidate/evaluations/eval-001/correctness.json
+```
+
+核对文件哈希、任务集合、题目内容、已记录的生成配置/提示词、评测环境和镜像身份。
+范围不同或证据不完整时返回 insufficient_evidence，不静默取交集。
+来源产物未记录的模型 checkpoint revision 无法被独立验证。
+
+输出逐题退化和改善列表，即使总分持平也能发现退化。任何任务退化都会导致比较失败，改善不能抵消退化。
+退出码为 0（通过）、1（发现任务退化）
+或 2（证据不足）。该门禁只适用于固定任务集，不是模型总体能力的统计结论。
+
+参考：[官方指南](https://www.swebench.com/SWE-bench/guides/evaluation/)、
+[benchmark 方法](../explanation/benchmark-methodology.md)。
 
 ## 选择 Agent 与透明 Router
 
