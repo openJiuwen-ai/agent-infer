@@ -86,6 +86,58 @@ def test_http_metadata_discovers_homogeneous_internal_dp() -> None:
     assert infer_kv_capacity_tokens(metadata) == 800
 
 
+def test_capacity_prefers_reported_logical_tokens() -> None:
+    """A reported logical KV size wins over block arithmetic.
+
+    Compressed or sparse attention backends can report a block_size that is not the
+    number of logical tokens per block. On such a deployment the legacy formula can be
+    an order of magnitude too small and silently removes every long-context decode
+    case from the calibration matrix.
+    """
+    metadata = {
+        "deployment": {
+            "engine_count": 4,
+            "cache_config": {
+                "block_size": "2",
+                "num_gpu_blocks": "125403",
+                "kv_cache_size_tokens": "1457130",
+            },
+        }
+    }
+    assert infer_kv_capacity_tokens(metadata) == 1457130
+
+
+def test_capacity_ignores_placeholder_logical_tokens() -> None:
+    """Placeholder label values fall back to the block arithmetic."""
+    metadata = {
+        "deployment": {
+            "engine_count": 2,
+            "cache_config": {
+                "block_size": "16",
+                "num_gpu_blocks": "100",
+                "kv_cache_size_tokens": "None",
+            },
+        }
+    }
+    assert infer_kv_capacity_tokens(metadata) == 800
+
+
+def test_capacity_override_environment_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The operator override wins over both the label and the block arithmetic."""
+    monkeypatch.setenv("AGENTINFER_KV_CAPACITY_TOKENS", "999999")
+    metadata = {
+        "deployment": {
+            "engine_count": 2,
+            "cache_config": {
+                "block_size": "16",
+                "num_gpu_blocks": "100",
+                "kv_cache_size_tokens": "1457130",
+            },
+        }
+    }
+    assert infer_kv_capacity_tokens(metadata) == 999999
+
+
 def test_cli_uses_repository_results_and_observed_capacity() -> None:
     """Output should have a safe default and decode capacity should not be manual."""
     prefill = prefill_parser().parse_args(["--model", "model-a"])
