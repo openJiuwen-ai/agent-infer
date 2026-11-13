@@ -37,6 +37,29 @@ def test_schema_overrides_metrics_url(tmp_path: Path) -> None:
     assert _apply_cli_overrides(args, config).backend.metrics_url == "http://vllm:8000/metrics"
 
 
+def test_zcode_subagent_limit_cli_overrides():
+    args = _parser().parse_args(
+        [
+            "run",
+            "--config",
+            "c.yaml",
+            "--agent-type",
+            "zcode",
+            "--agent-profile",
+            "plan-subagent",
+            "--endpoint",
+            "/v1/chat/completions",
+            "--max-subagents",
+            "4",
+            "--max-concurrent-subagents",
+            "2",
+        ]
+    )
+    config = _apply_cli_overrides(args, AgentBenchConfig())
+    assert config.agent.max_subagents == 4
+    assert config.agent.max_concurrent_subagents == 2
+
+
 @pytest.mark.parametrize(
     ("trace_type", "shape"),
     [

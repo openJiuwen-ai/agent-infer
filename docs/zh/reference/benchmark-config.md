@@ -71,13 +71,15 @@ DSH 将清理预算耗尽记录为 `cleanup_timeout`，保留已有的任务超�
 
 | 字段 | 默认值 | 约束和含义 |
 | --- | --- | --- |
-| `type` | `claude` | `claude`、`jiuwenswarm` 或 `dsh`。 |
-| `profile` | `single` | Claude/DSH：`single` 或 `plan-subagent`；JiuwenSwarm：`code.normal`。 |
+| `type` | `claude` | `claude`、`jiuwenswarm`、`dsh` 或 `zcode`。 |
+| `profile` | `single` | Claude/DSH/ZCode：`single` 或 `plan-subagent`；JiuwenSwarm：`code.normal`。 |
 | `executable` | `claude` | Agent CLI 命令名或路径。 |
 | `tmux_startup_seconds` | `2.0` | tmux 会话启动等待时间，必须 `>= 0`。 |
 | `terminal_capture_interval_seconds` | `30` | 终端证据采集间隔，必须 `>= 1`。 |
-| `context_window` | `262144` | DSH pi-ai 模型上下文容量；须与实际后端一致，仅支持 YAML 配置。 |
-| `max_tokens` | `8192` | DSH pi-ai 输出容量；须与实际后端一致，仅支持 YAML 配置。 |
+| `context_window` | `262144` | DSH/ZCode 模型上下文容量；须与实际后端一致，仅支持 YAML 配置。 |
+| `max_tokens` | `8192` | DSH/ZCode 输出容量；须与实际后端一致，仅支持 YAML 配置。 |
+| `max_subagents` | `1` | ZCode plan-subagent 每任务累计接受的子 Agent 启动次数，失败也计入。 |
+| `max_concurrent_subagents` | `1` | ZCode plan-subagent 每任务子 Agent 并发上限，不得超过 `max_subagents`。 |
 
 Claude 的 `plan-subagent` 使用 `bypassPermissions`。仅应在非 root 用户或经过批准的 Claude Code 权限环境中启用。
 
@@ -88,10 +90,10 @@ Claude 的 `plan-subagent` 使用 `bypassPermissions`。仅应在非 root 用户
 | `type` | `vllm` | 当前唯一支持的后端类型。 |
 | `base_url` | `http://127.0.0.1:8000` | vLLM API 基础 URL。 |
 | `model` | `Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8` | 请求中发送的服务模型名。 |
-| `endpoint` | `/v1/messages` | Claude 使用 `/v1/messages`；JiuwenSwarm/DSH 使用 `/v1/chat/completions`。 |
+| `endpoint` | `/v1/messages` | Claude 使用 `/v1/messages`；JiuwenSwarm/DSH/ZCode 使用 `/v1/chat/completions`。 |
 | `api_key_env` | `null` | 可选的 API Key 环境变量名；配置中不得写入密钥值。 |
 
-后端认证配置根据所选运行时声明的能力校验：DSH 不接受 `backend.api_key_env`，Claude Code 和 JiuwenSwarm 保持支持。
+后端认证配置根据所选运行时声明的能力校验：DSH 和 ZCode 不接受 `backend.api_key_env`，Claude Code 和 JiuwenSwarm 保持支持。
 
 ## `request_proxy`
 

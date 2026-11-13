@@ -314,6 +314,8 @@ async def _run_single_task(
                 context_window=config.agent.context_window,
                 max_tokens=config.agent.max_tokens,
                 cleanup_timeout_seconds=config.experiment.cleanup_timeout_seconds,
+                max_subagents=config.agent.max_subagents,
+                max_concurrent_subagents=config.agent.max_concurrent_subagents,
             )
         )
     except asyncio.CancelledError as exc:
@@ -424,8 +426,14 @@ def _trace_capture(path: Path, close_result) -> EvidenceCapture:
 
 async def check_preflight(config: AgentBenchConfig) -> AgentPreflightReport | None:
     report = await check_agent_preflight(config.agent.type, config.agent.executable)
-    async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
-        response = await client.get(f"{config.backend.base_url.rstrip('/')}/v1/models")
-        if response.status_code != 200:
-            raise RuntimeError(f"Backend {config.backend.base_url} is not healthy")
+    url = f"{config.backend.base_url.rstrip('/')}/v1/models"
+    try:
+        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
+            response = await client.get(url)
+    except httpx.RequestError as exc:
+        raise RuntimeError(f"Backend preflight failed: GET {url}, timeout=10s; {type(exc).__name__}: {exc}") from exc
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Backend {config.backend.base_url} is not healthy: GET {url} returned HTTP {response.status_code}"
+        )
     return report
