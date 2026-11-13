@@ -25,7 +25,7 @@ from agentinfer.agentbench.agents.claude.fence import _decide
 from agentinfer.agentbench.benchkit.dataset import Task
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 _IS_LINUX = sys.platform.startswith("linux")
 _HAS_BWRAP = shutil.which("bwrap") is not None

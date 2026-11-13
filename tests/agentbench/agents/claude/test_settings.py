@@ -15,7 +15,7 @@ from agentinfer.agentbench.agents.claude.settings import (
 )
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def test_bootstrap_writes_onboarding_and_trust_state(tmp_path: Path) -> None:

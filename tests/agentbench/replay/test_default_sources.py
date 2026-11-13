@@ -15,7 +15,7 @@ from agentinfer.agentbench.replay.inferact_source import materialize_inferact_so
 from agentinfer.agentbench.replay.runner import _resolve_replay_source
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def test_builtin_agentinfer_source_is_packaged() -> None:

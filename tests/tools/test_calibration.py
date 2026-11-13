@@ -25,7 +25,7 @@ from tools.calibration.metadata import (
     resolve_calibration_engine,
 )
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 METRICS = """
 # TYPE vllm:cache_config_info gauge

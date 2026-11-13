@@ -15,7 +15,7 @@ from agentinfer.agentbench.benchkit.runner import RunContext, _run_single_task, 
 from agentinfer.agentbench.request_proxy import RequestProxyCloseResult
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _context(tmp_path: Path, *, router: bool = False) -> RunContext:

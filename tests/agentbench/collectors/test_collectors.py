@@ -20,7 +20,7 @@ from tests.helpers.marks import test_marks
 
 from .http_fakes import FakeClient, FakeResponse
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def test_load_correctness_artifact_returns_raw_object(tmp_path) -> None:

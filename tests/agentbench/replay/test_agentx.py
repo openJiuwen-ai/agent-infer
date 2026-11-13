@@ -26,7 +26,7 @@ from agentinfer.agentbench.replay.unified_trace_ir import validate_trace_ir, wri
 from agentinfer.agentbench.request_proxy.request_trace import RequestTraceWriter, load_request_facts
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _request(t: float, duration: float, hashes: list[int], *, output: int = 3, model: str = "model-a") -> dict:

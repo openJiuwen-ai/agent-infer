@@ -9,7 +9,7 @@ from agentinfer.scheduling.backend import BackendInfo, BackendPoolInfo, DpRankIn
 from agentinfer.scheduling.progress_ttl import ProgressTTLMode
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"})
+pytestmark = test_marks(hardware="cpu")
 
 
 def backend() -> BackendPoolInfo:

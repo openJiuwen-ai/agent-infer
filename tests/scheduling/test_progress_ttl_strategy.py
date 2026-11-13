@@ -36,7 +36,7 @@ from agentinfer.scheduling.progress_ttl import (
 )
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 EVENT_KIND = {
     TransitionKind.ADMIT: SchedulingEventKind.REQUEST_ADMITTED,

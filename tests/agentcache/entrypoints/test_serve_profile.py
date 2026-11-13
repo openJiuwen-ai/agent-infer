@@ -13,7 +13,7 @@ import pytest
 from agentinfer.agentcache.entrypoints.cli import serve_profile
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _stub_parser() -> argparse.ArgumentParser:

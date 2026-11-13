@@ -18,7 +18,7 @@ from pathlib import Path
 
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 TOOL_DIR = Path(__file__).resolve().parents[2] / "tools" / "sr-config-tool"
 SRC_DIR = TOOL_DIR / "src"

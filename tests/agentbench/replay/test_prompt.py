@@ -14,7 +14,7 @@ from agentinfer.agentbench.replay.config import ReplayBenchConfig
 from agentinfer.agentbench.replay.prompt import PromptBuilder, PromptExchange, SyntheticPrompt, TokenizerClient
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 class _Tokenizer:

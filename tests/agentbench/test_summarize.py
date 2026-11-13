@@ -13,7 +13,7 @@ from agentinfer.agentbench.benchkit.distribution_plot import _task_request_bucke
 from agentinfer.agentbench.benchkit.summarize import combine_summaries
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _run(tmp_path: Path, name: str, summary: object) -> Path:

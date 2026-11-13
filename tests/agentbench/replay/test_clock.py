@@ -15,7 +15,7 @@ from agentinfer.agentbench.replay.transport import TransportResult
 from tests.agentbench.replay.test_executor import _node
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 class ManualClock:

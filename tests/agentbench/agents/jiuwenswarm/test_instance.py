@@ -10,7 +10,7 @@ import yaml
 from agentinfer.agentbench.agents.jiuwenswarm.instance import JiuwenInstance
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _instance(tmp_path: Path) -> JiuwenInstance:

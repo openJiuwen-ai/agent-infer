@@ -18,35 +18,27 @@ def registered_names(config: pytest.Config) -> set[str]:
     return {line.split(":", 1)[0].split("(", 1)[0].strip() for line in config.getini("markers")}
 
 
-def registered_hardware_platforms(config: pytest.Config) -> dict[str, str]:
-    platforms = {}
+def registered_hardware_names(config: pytest.Config) -> set[str]:
+    names = set()
     for line in config.getini("markers"):
         name, _, description = line.partition(":")
-        for platform in ("cuda", "npu"):
-            if f"[{platform}]" in description:
-                platforms[name.strip()] = platform
-    return platforms
+        if "[hardware]" in description:
+            names.add(name.strip())
+    return names
 
 
-def test_marks(
-    *, hardware: dict[str, str], num_cards: int | None = None, ci: str | None = None
-) -> list[pytest.MarkDecorator]:
+def test_marks(*, hardware: str, num_cards: int | None = None, ci: str | None = None) -> list[pytest.MarkDecorator]:
     """Return standard pytest markers from the same fields used by case JSON."""
-    if not isinstance(hardware, dict) or len(hardware) != 1:
-        raise ValueError("hardware must contain exactly one platform and model")
-    platform, model = next(iter(hardware.items()))
-    if platform not in {"cpu", "cuda", "npu"}:
-        raise ValueError(f"unsupported hardware platform {platform!r}")
-    if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", model):
-        raise ValueError("model must start with a letter and contain only letters and digits")
-    if platform == "cpu":
-        if model != "cpu" or num_cards is not None:
-            raise ValueError("CPU declarations require hardware={'cpu': 'cpu'} with no num_cards")
-    elif model == "cpu" or type(num_cards) is not int or num_cards < 1:
+    if not isinstance(hardware, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", hardware):
+        raise ValueError("hardware must be a model name starting with a letter, containing only letters and digits")
+    if hardware == "cpu":
+        if num_cards is not None:
+            raise ValueError("CPU declarations require hardware='cpu' with no num_cards")
+    elif type(num_cards) is not int or num_cards < 1:
         raise ValueError("accelerators require a non-CPU model and a positive integer num_cards")
     if ci is not None and (not isinstance(ci, str) or ci not in LANES):
         raise ValueError("ci must be ready, nightly, or omitted")
-    marks = [getattr(pytest.mark, model)(platform=platform)]
+    marks = [getattr(pytest.mark, hardware)]
     if num_cards is not None:
         marks.append(getattr(pytest.mark, f"cards_{num_cards}"))
     if ci is not None:
@@ -60,16 +52,13 @@ test_marks.__test__ = False
 
 def validate_marks(marks: Iterable[pytest.Mark], config: pytest.Config) -> None:
     registered = registered_names(config)
-    platforms = registered_hardware_platforms(config)
+    hardware_names = registered_hardware_names(config)
     dimensions: dict[str, list[str]] = {"model": [], "cards": [], "lane": []}
     for mark in marks:
         name = mark.name
         if name not in registered:
             raise ValueError(f"unregistered marker {name!r}")
-        if name == "cpu" or name in platforms:
-            expected = "cpu" if name == "cpu" else platforms[name]
-            if mark.kwargs.get("platform") != expected:
-                raise ValueError(f"model {name!r} must be declared through test_marks with platform {expected!r}")
+        if name in hardware_names:
             dimensions["model"].append(name)
         elif CARDS_RE.fullmatch(name):
             dimensions["cards"].append(name)

@@ -20,9 +20,9 @@ addopts = ["--import-mode=importlib"]
 testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
-    "cpu: no accelerator",
-    "L20: [cuda] L20 GPU",
-    "A3: [npu] A3 accelerator",
+    "cpu: [hardware] CPU only, no GPU or NPU",
+    "L20: [hardware] NVIDIA L20 GPU",
+    "A3: [hardware] Ascend A3 NPU",
     "cards_1: one accelerator card",
     "cards_2: two accelerator cards",
     "cards_16: sixteen accelerator cards",

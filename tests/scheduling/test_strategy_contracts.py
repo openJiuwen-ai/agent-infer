@@ -35,7 +35,7 @@ from agentinfer.scheduling import (
 )
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 @dataclass(frozen=True)

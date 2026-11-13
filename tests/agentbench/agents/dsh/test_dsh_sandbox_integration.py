@@ -22,7 +22,7 @@ from tests.agentbench.helpers.dsh_mock_server import write_chat_completion_strea
 from tests.helpers.marks import test_marks
 
 pytestmark = [
-    *test_marks(hardware={"cpu": "cpu"}, ci="ready"),
+    *test_marks(hardware="cpu", ci="ready"),
     pytest.mark.skipif(os.name != "posix", reason="DSH native Linux sandbox is unavailable"),
 ]
 

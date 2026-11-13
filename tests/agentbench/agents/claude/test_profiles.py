@@ -13,7 +13,7 @@ from agentinfer.agentbench.agents.claude import (
 from agentinfer.agentbench.benchkit.dataset import Task
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _task() -> Task:

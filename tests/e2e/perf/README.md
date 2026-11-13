@@ -24,7 +24,7 @@ pytest -s -v tests/e2e/perf/run_benchmark.py \
 {
   "test_name": "glm52_8x4_plan_subagent",
   "scenario": "agentinfer",
-  "mark": {"hardware": {"npu": "A3"}, "num_cards": 16},
+  "mark": {"hardware": "A3", "num_cards": 16},
   "description": "…",
   "serve_env": { "…": "…" },
   "server_params": {

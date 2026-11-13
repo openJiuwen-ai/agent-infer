@@ -2,9 +2,7 @@
   "test_name": "glm52_32x16_inferact_replay",
   "scenario": "baseline",
   "mark": {
-    "hardware": {
-      "npu": "A3"
-    },
+    "hardware": "A3",
     "num_cards": 16
   },
   "description": "GLM-5.2 Inferact Codex trace replay, 32 tasks x 16 concurrency (full codex_swebenchpro.json)",

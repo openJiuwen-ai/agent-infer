@@ -16,7 +16,7 @@ from agentinfer.agentbench.agents.claude.runtime import ClaudeRuntime
 from agentinfer.agentbench.agents.jiuwenswarm.runtime import JiuwenSwarmRuntime
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 async def _pass_through_check(_exec, _args, **_kwargs):
