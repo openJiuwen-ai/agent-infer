@@ -14,14 +14,59 @@ steps:
       - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose -f docker/docker-compose.yml build --pull agentinfer-ci
       - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-ci-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu"
 
-  - group: ":card_index_dividers: GPU Tests"
+  # GPU smoke for the AgentInfer serve flag. Not the tests/e2e suite.
+  - label: "smoke: agentinfer serve"
+    depends_on: ci-image
+    commands:
+      - AGENTINFER_E2E_MODEL=Qwen/Qwen3-0.6B pytest -sv -m gpu_test tests/agentcache/entrypoints/test_serve_flag_e2e.py
+    timeout_in_minutes: 25
+    mirror_hardwares: l20_1
+
+  # Functional E2E. l20_1 and l20_2 share one Docker daemon, so reuse ci-image.
+  # DSH still runs on the l20_2 queue to reserve both GPUs.
+  # e2e accuracy has no ready step yet, so that group is omitted.
+  - group: ":card_index_dividers: e2e function"
     depends_on: ci-image
     steps:
-      - label: "e2e · serve-flag"
+      # One step on the 2-GPU queue: test-user, then both 2x1 profiles.
+      # The case uses the Hugging Face repo id; vLLM downloads into HF_HOME
+      # (/home/models). Skip useradd when test-user exists. The step stays
+      # root so plan-subagent can sudo -u test-user. single stays root.
+      # DSH is /usr/local/bin/dsh.
+      - label: "dsh swebench"
+        mirror_hardwares: l20_2
+        env:
+          AGENTINFER_CI_AS_ROOT: "1"
+        timeout_in_minutes: 90
         commands:
-          - AGENTINFER_E2E_MODEL=Qwen/Qwen3-0.6B pytest -sv -m gpu_test tests/agentcache/entrypoints/test_serve_flag_e2e.py
-        timeout_in_minutes: 25
-        mirror_hardwares: l20_1
+          # pipeline upload expands $NAME. $$ is the literal $ the container shell needs.
+          - |
+            checkout_uid=$$(stat -c %u .)
+            checkout_gid=$$(stat -c %g .)
+            restore_checkout_owner() {
+              status=$$?
+              trap - EXIT
+              if [ "$$checkout_uid" != 0 ]; then
+                if ! chown -R "$$checkout_uid:$$checkout_gid" .; then
+                  echo "ERROR: failed to restore checkout ownership" >&2
+                  if [ "$$status" = 0 ]; then status=1; fi
+                fi
+              fi
+              exit "$$status"
+            }
+            trap restore_checkout_owner EXIT
+            if id test-user >/dev/null 2>&1; then
+              echo "test-user exists, skip useradd"
+            else
+              useradd -m -s /bin/bash test-user
+            fi
+            for extra in video render; do
+              if getent group "$$extra" >/dev/null 2>&1; then
+                usermod -aG "$$extra" test-user
+              fi
+            done
+            pytest -s -v tests/e2e/function/agentbench/dsh/test_dsh_swebench.py::test_dsh_swebench --test-config-file tests/e2e/function/agentbench/dsh/cases/qwen3_coder_dsh_2x1.json
+            pytest -s -v tests/e2e/function/agentbench/dsh/test_dsh_swebench.py::test_dsh_swebench --test-config-file tests/e2e/function/agentbench/dsh/cases/qwen3_coder_dsh_2x1_plan_subagent.json
 
   # cpu_small is another machine, so it builds the same Dockerfile itself.
   - label: ":docker: Build CI image (cpu)"
@@ -33,7 +78,7 @@ steps:
       - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose -f docker/docker-compose.yml build --pull agentinfer-cpu
       - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-cpu-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-cpu"
 
-  - group: ":card_index_dividers: Unit Tests"
+  - group: ":card_index_dividers: ut"
     depends_on: ci-image-cpu
     steps:
       - label: "ut"
