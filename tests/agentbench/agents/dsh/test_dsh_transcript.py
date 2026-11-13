@@ -16,6 +16,9 @@ from agentinfer.agentbench.agents.dsh.transcript import (
     load_session_log,
     session_is_root,
 )
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
 
 
 def _event(event_type: str, data: dict) -> dict:

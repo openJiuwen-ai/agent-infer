@@ -1,14 +1,12 @@
 {
   "test_name": "glm52_16x8_inferact_replay",
   "scenario": "baseline",
-  "mark": [
-    {
-      "hardware_marks": {
-        "res": {"npu": "A3"},
-        "num_cards": 16
-      }
-    }
-  ],
+  "mark": {
+    "hardware": {
+      "npu": "A3"
+    },
+    "num_cards": 16
+  },
   "description": "GLM-5.2 Inferact Codex trace replay, 16 tasks x 8 concurrency (full codex_swebenchpro.json)",
   "serve_env": {
     "HCCL_OP_EXPANSION_MODE": "AIV",

@@ -16,6 +16,9 @@ from agentinfer.agentbench.agents.claude.tmux import (
     remove_global_environment,
     start_session,
 )
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
 
 
 def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess[str]:

@@ -33,8 +33,9 @@ from agentinfer.scheduling import (
     TransitionRequest,
     TransitionResult,
 )
+from tests.helpers.marks import test_marks
 
-pytestmark = [pytest.mark.cpu, pytest.mark.ready]
+pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
 
 
 @dataclass(frozen=True)

@@ -12,6 +12,9 @@ import pytest
 
 from agentinfer.agentbench.benchkit.session_analysis import analyze_sessions, main
 from agentinfer.agentbench.request_proxy.request_trace import RequestFact
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
 
 
 def _fact(

@@ -9,11 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.e2e.helpers.hardware_marks import (
-    registered_hardware_platforms,
-    registered_names,
-    resolve_pytest_marks,
-)
+from tests.helpers.marks import resolve_pytest_marks
 
 _SELECTED_CASE = pytest.StashKey[Path | None]()
 
@@ -54,8 +50,6 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     cases_dir = (Path(metafunc.definition.path).parent / "cases").resolve()
     selected = metafunc.config.stash.get(_SELECTED_CASE, None)
     paths = [selected] if selected else sorted(path.resolve() for path in cases_dir.rglob("*.json"))
-    registered = registered_names(metafunc.config)
-    platforms = registered_hardware_platforms(metafunc.config)
     params = []
     for path in paths:
         try:
@@ -65,7 +59,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
             payload = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError("case JSON must be an object")
-            marks = resolve_pytest_marks(payload.get("mark", []), registered, platforms=platforms)
+            marks = resolve_pytest_marks(payload.get("mark"), metafunc.config)
             case_id = path.relative_to(cases_dir).with_suffix("").as_posix()
             params.append(pytest.param(path, marks=marks, id=case_id))
         except (OSError, ValueError, TypeError) as exc:

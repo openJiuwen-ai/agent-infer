@@ -8,6 +8,9 @@ import pytest
 
 from agentinfer.agentbench.replay.config import ReplayBenchConfig
 from agentinfer.agentbench.replay.local_tokenizer import LocalTokenizerCounter, discover_local_tokenizer
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
 
 
 class _Encoding:

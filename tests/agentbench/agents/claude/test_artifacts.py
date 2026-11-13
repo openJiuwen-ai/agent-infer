@@ -11,6 +11,9 @@ import pytest
 from agentinfer.agentbench.agents import AgentRunRequest
 from agentinfer.agentbench.agents.claude import runner
 from agentinfer.agentbench.benchkit.dataset import Task
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
 
 
 def test_runtime_artifacts_exclude_auth_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

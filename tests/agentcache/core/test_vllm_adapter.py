@@ -18,8 +18,9 @@ from agentinfer.agentcache.core.scheduler import (
 from agentinfer.scheduling.backend import DispatchTarget
 from agentinfer.scheduling.request_pool import RequestPool, RequestPoolEntry
 from agentinfer.scheduling.runtime import ProgramScheduler
+from tests.helpers.marks import test_marks
 
-pytestmark = pytest.mark.cpu
+pytestmark = test_marks(hardware={"cpu": "cpu"})
 
 
 class _Controller:

@@ -72,7 +72,7 @@ npm install --global @deepseek-ai/dsh@0.2.1-rc.2
 export DSH_TEST_EXECUTABLE="$(command -v dsh)"
 python -m pytest -q -m "cpu and ready" \
   tests/agentbench/agents/dsh/test_dsh_benchmark_integration.py \
-  tests/agentbench/agents/dsh/test_dsh_sandbox_integration.py --timeout=180
+  tests/agentbench/agents/dsh/test_dsh_sandbox_integration.py
 ```
 
 The existing CPU CI collects the adapter tests. Real DSH tests skip when DSH is not installed;

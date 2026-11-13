@@ -7,11 +7,13 @@ import json
 
 import pytest
 
+from tests.helpers.marks import test_marks
+
 from .helpers.cold_start import run_round
 from .helpers.fixtures import SOURCES, build_fixture
 from .helpers.validation import compare_rounds, validate_round
 
-pytestmark = [pytest.mark.cpu, pytest.mark.ready]
+pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
 
 
 @pytest.mark.parametrize("source", SOURCES)

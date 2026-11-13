@@ -12,6 +12,9 @@ from agentinfer.agentbench.benchkit.config import (
     load_config,
     resolve_config_paths,
 )
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
 
 
 def test_defaults_and_nested_overrides() -> None:

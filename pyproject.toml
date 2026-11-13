@@ -13,7 +13,6 @@ readme = { file = "README.md", content-type = "text/markdown" }
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
-    "pytest-timeout>=2.3",
 ]
 
 [tool.pytest.ini_options]
@@ -29,7 +28,6 @@ markers = [
     "cards_16: sixteen accelerator cards",
     "ready: selected by the ready pipeline",
     "nightly: reserved for a future nightly pipeline",
-    "timeout: per-test timeout override supplied by pytest-timeout",
 ]
 
 [tool.setuptools.packages.find]

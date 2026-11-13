@@ -15,6 +15,9 @@ from agentinfer.agentbench.benchkit.metrics.request import LatencyStats, Request
 from agentinfer.agentbench.benchkit.metrics.schema import SourceHealth
 from agentinfer.agentbench.benchkit.metrics.task import TaskMetrics
 from agentinfer.agentbench.benchkit.metrics.vllm import VllmMetrics
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
 
 
 def write_run(

@@ -17,6 +17,9 @@ from agentinfer.agentbench.request_proxy.lifecycle import (
 )
 from agentinfer.agentbench.request_proxy.process import ProcessExit, RequestProxyProcess
 from agentinfer.agentbench.request_proxy.server import RequestProxyLaunchConfig, run_request_proxy
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
 
 
 def launch_config(tmp_path: Path) -> RequestProxyLaunchConfig:

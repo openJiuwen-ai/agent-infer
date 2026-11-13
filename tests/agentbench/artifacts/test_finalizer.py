@@ -12,6 +12,9 @@ from agentinfer.agentbench.benchkit.artifacts.finalizer import FinalizationConte
 from agentinfer.agentbench.benchkit.common import atomic_write_json
 from agentinfer.agentbench.benchkit.metrics.schema import EvidenceCapture
 from agentinfer.agentbench.request_proxy.request_trace import RequestFact
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
 
 
 def _manifest(run_id: str):

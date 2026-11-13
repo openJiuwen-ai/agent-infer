@@ -8,8 +8,9 @@ import pytest
 
 from agentinfer.scheduling import AgentIdentity, encode_agent_identity
 from agentinfer.scheduling.identity import MetadataError, parse_agent_identity
+from tests.helpers.marks import test_marks
 
-pytestmark = [pytest.mark.cpu, pytest.mark.ready]
+pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
 
 
 def test_public_identity_encoder_round_trips_explicit_taskless_context() -> None:

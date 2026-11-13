@@ -20,6 +20,9 @@ from agentinfer.agentbench.benchkit.workspace import (
     verify_workspace,
     workspace_has_changes,
 )
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
 
 
 @pytest.mark.parametrize(

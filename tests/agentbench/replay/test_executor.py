@@ -14,6 +14,9 @@ from agentinfer.agentbench.replay.config import ReplayBenchConfig
 from agentinfer.agentbench.replay.executor import ReplayExecutor
 from agentinfer.agentbench.replay.prompt import PromptBuilder, SyntheticPrompt, TokenizerClient
 from agentinfer.agentbench.replay.transport import TransportResult
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
 
 
 @pytest.mark.parametrize("concurrency", [1, 3])

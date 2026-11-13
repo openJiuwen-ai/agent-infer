@@ -10,8 +10,9 @@ import sys
 import pytest
 
 from agentinfer.agentcache.core.vllm_logging import attach_agentinfer_to_vllm_logging
+from tests.helpers.marks import test_marks
 
-pytestmark = pytest.mark.cpu
+pytestmark = test_marks(hardware={"cpu": "cpu"})
 
 
 @pytest.fixture

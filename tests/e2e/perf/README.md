@@ -24,6 +24,7 @@ pytest -s -v tests/e2e/perf/run_benchmark.py \
 {
   "test_name": "glm52_8x4_plan_subagent",
   "scenario": "agentinfer",
+  "mark": {"hardware": {"npu": "A3"}, "num_cards": 16},
   "description": "…",
   "serve_env": { "…": "…" },
   "server_params": {
@@ -47,7 +48,7 @@ pytest -s -v tests/e2e/perf/run_benchmark.py \
 | Field | Purpose |
 | ----- | ------- |
 | `scenario` | `baseline` or `agentinfer` (legacy JSON key `arm` still accepted) |
-| `mark` | Hardware object plus optional model/card-count/lane strings; validated during collection |
+| `mark` | Unified object: `hardware`, `num_cards`, optional `ci`; validated during collection |
 | `wait_for_vllm_ready` | Optional. Poll `/v1/models` after vLLM start (default: `true`; omit in JSON) |
 | `serve_env` | vLLM serve subprocess environment variables |
 | `server_params` | Model path, middleware, and `vllm serve` CLI flags |

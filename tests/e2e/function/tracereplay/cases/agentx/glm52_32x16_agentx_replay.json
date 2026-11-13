@@ -1,14 +1,12 @@
 {
   "test_name": "glm52_32x16_agentx_replay",
   "scenario": "baseline",
-  "mark": [
-    {
-      "hardware_marks": {
-        "res": {"npu": "A3"},
-        "num_cards": 16
-      }
-    }
-  ],
+  "mark": {
+    "hardware": {
+      "npu": "A3"
+    },
+    "num_cards": 16
+  },
   "description": "GLM-5.2 AgentX hash-block snapshot replay, 32 sessions x 16 concurrency",
   "serve_env": {
     "HCCL_OP_EXPANSION_MODE": "AIV",

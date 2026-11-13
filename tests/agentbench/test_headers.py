@@ -8,6 +8,9 @@ from agentinfer.scheduling.headers import (
     parse_agent_identity,
     select_router_headers,
 )
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
 
 
 def test_router_receives_session_and_agent_headers() -> None:

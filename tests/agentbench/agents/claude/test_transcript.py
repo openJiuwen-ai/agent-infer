@@ -16,6 +16,9 @@ from agentinfer.agentbench.agents.claude.transcript import (
     is_transcript_complete,
 )
 from agentinfer.agentbench.agents.contracts import TerminationReason
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
 
 
 def test_loader_reads_only_json_objects(tmp_path: Path) -> None:

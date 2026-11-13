@@ -12,8 +12,9 @@ from tests.agentbench.helpers.mock_server.process import read_rows
 from tests.agentbench.replay.helpers.cold_start import run_round
 from tests.agentbench.replay.helpers.fixtures import build_fixture
 from tests.agentbench.replay.helpers.validation import validate_round
+from tests.helpers.marks import test_marks
 
-pytestmark = [pytest.mark.cpu, pytest.mark.ready]
+pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
 
 
 @pytest.fixture(scope="module")

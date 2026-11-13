@@ -93,30 +93,43 @@ have no card-count label. Add other positive card counts to the registry when
 needed. Scenes are selected through directories (`function/`, `perf/`, and any
 future `acc/`), with no scene markers.
 
-Unit tests without model or card-count labels default to `cpu`, adding `ready`
-only when no CI lane is explicit. Explicit hardware prevents these defaults:
-`agentcache/core` has only `cpu`; the serve smoke has `L20`, `cards_1`, and
-`ready`. Smaller test groups are selected by file path. CPU labels describe
-hardware; real DSH tests still require DSH and its native sandbox.
+Every Python test module outside E2E declares its labels explicitly through
+`tests.helpers.marks.test_marks`; no classification labels are injected by default:
 
-E2E case JSON retains the hardware object:
+```python
+from tests.helpers.marks import test_marks
 
-```json
-"mark": [
-  {"hardware_marks": {"res": {"npu": "A3"}, "num_cards": 16}}
-]
+# CPU unit tests (including smoke and real DSH integration tests)
+pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+
+# Single-card serve smoke
+pytestmark = test_marks(hardware={"cuda": "L20"}, num_cards=1, ci="ready")
 ```
 
-This generates two independent markers, `A3` and `cards_16`. CUDA uses
-`res: {"cuda": "L20"}`; CPU uses the string `cpu`. Optional lane labels are
-strings in the same list. Unknown labels, conflicting dimension values,
-malformed hardware objects, and CPU/card-count combinations fail collection.
-Hardware model descriptions register their platform with `[cuda]` or `[npu]`;
-this is registry metadata, not an additional pytest marker. Platform/model
-mismatches are rejected. `timeout` is registered as a mechanism marker so
-collection works without pytest-timeout; enforcement still requires the plugin.
-The case id includes its relative directory to distinguish baseline and
-AgentInfer files with the same name. `--test-config-file` selects one case.
+`agentcache/core` uses `test_marks(hardware={"cpu": "cpu"})`, without a CI lane.
+Mechanism marks such as `skipif` and `parametrize` remain unchanged;
+combine them with `[*test_marks(...), pytest.mark.skipif(...)]` when necessary.
+Test execution time is bounded by the CI job timeout, without per-test timeout marks.
+CPU labels describe hardware; real DSH tests still require DSH and its native sandbox.
+
+E2E JSON uses the same fields in one object:
+
+```json
+"mark": {
+  "hardware": {"npu": "A3"},
+  "num_cards": 16
+}
+```
+
+Add `"ci": "ready"` or `"ci": "nightly"` inside this object when needed;
+omitting `ci` assigns no CI lane. This produces standard independent markers
+`A3`, `cards_16`, and an optional lane, using exactly the same converter as Python.
+`-m` selection is unchanged. Each E2E item gets its declaration from its JSON case.
+
+Collection rejects missing model declarations, unknown markers, conflicting
+values in one dimension, missing accelerator card counts, CPU card counts,
+and platform/model mismatches. Platform metadata is registered with `[cuda]`
+or `[npu]` in `pyproject.toml`; these are not extra pytest markers.
 
 ```bash
 pytest -q -m "cpu and ready" tests

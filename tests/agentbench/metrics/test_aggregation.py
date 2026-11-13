@@ -9,6 +9,9 @@ from agentinfer.agentbench.agents import AgentRunOutcome, AgentRunResult, Termin
 from agentinfer.agentbench.benchkit.metrics.schema import EvidenceCapture
 from agentinfer.agentbench.benchkit.metrics.source_health import evaluate_captures
 from agentinfer.agentbench.benchkit.metrics.task import aggregate_task_results
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
 
 
 def test_aggregate_task_results_uses_execution_outcomes_and_patch_evidence() -> None:
