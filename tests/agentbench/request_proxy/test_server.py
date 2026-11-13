@@ -20,6 +20,9 @@ from agentinfer.agentbench.request_proxy.server import (
 )
 from agentinfer.scheduling.headers import CLAUDE_AGENT_HEADER, CLAUDE_SESSION_HEADER
 from agentinfer.scheduling.identity import AgentIdentity, encode_agent_identity
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _runner_fakes(

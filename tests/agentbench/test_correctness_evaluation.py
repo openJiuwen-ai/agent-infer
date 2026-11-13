@@ -25,6 +25,9 @@ from agentinfer.agentbench.benchkit.evaluation.config import EvaluationConfig, l
 from agentinfer.agentbench.benchkit.evaluation.inputs import digest, prepare_inputs
 from agentinfer.agentcache.entrypoints.bench import _normalize_delegated_argv, main as benchmark_main
 from tests.agentbench.test_compare import write_run
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 @pytest.fixture

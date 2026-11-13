@@ -47,6 +47,7 @@ repos:
     args: [--fix]
 # manual keeps these out of git commit and `pre-commit run --all-files`.
 # CI invokes them only for files added in a pull request.
+# The local mypy-added hook below invokes mypy for staged Python additions.
 - repo: https://github.com/pre-commit/mirrors-mypy
   rev: v2.4.1
   hooks:
@@ -62,6 +63,13 @@ repos:
     stages: [manual]
 - repo: local
   hooks:
+  - id: mypy-added
+    name: Mypy for staged Python additions
+    entry: python tools/pre_commit/check_added_mypy.py
+    language: system
+    pass_filenames: false
+    always_run: true
+    stages: [pre-commit]
   - id: signoff-commit
     name: Sign-off Commit
     entry: bash

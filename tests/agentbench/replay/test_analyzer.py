@@ -6,6 +6,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from agentinfer.agentbench.replay.analyzer import analyze_replay_trace, replay_analysis_to_dict
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 _REQUIRED_ROW_ANALYSIS_COUNTERS = {
     "invalid_json",

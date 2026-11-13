@@ -4,8 +4,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from ...helpers.case_loader import load_case_file
 from .helpers.replay_e2e_config import ReplaySuiteSpec
 from .helpers.replay_repeatability import run_replay_repeatability_e2e
 
@@ -45,16 +48,15 @@ _REPLAY_SUITES: tuple[tuple[ReplaySuiteSpec, str], ...] = (
 )
 
 
-@pytest.mark.parametrize(
-    ("suite", "suite_label"),
-    _REPLAY_SUITES,
-    ids=["inferact", "tracelab", "agentx"],
-)
 def test_trace_replay(
     pytestconfig: pytest.Config,
-    suite: ReplaySuiteSpec,
-    suite_label: str,
+    case_file: Path,
 ) -> None:
     """Run a case N times (cold vLLM each time), then compare run 1 vs run 2 for repeatability."""
 
-    run_replay_repeatability_e2e(pytestconfig, suite=suite, suite_label=suite_label)
+    workload = load_case_file(case_file).benchmark_params.get("workload")
+    for suite, suite_label in _REPLAY_SUITES:
+        if suite.workload == workload:
+            run_replay_repeatability_e2e(pytestconfig, suite=suite, suite_label=suite_label, case_path=case_file)
+            return
+    raise pytest.UsageError(f"{case_file}: unsupported replay workload {workload!r}")

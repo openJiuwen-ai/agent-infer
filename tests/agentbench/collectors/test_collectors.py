@@ -16,8 +16,11 @@ from agentinfer.agentbench.benchkit.collectors.correctness import load_correctne
 from agentinfer.agentbench.benchkit.collectors.environment import collect_environment
 from agentinfer.agentbench.benchkit.collectors.source_control import collect_source_control
 from agentinfer.agentbench.benchkit.collectors.vllm import capture_vllm_metrics
+from tests.helpers.marks import test_marks
 
 from .http_fakes import FakeClient, FakeResponse
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def test_load_correctness_artifact_returns_raw_object(tmp_path) -> None:

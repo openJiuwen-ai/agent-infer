@@ -13,6 +13,9 @@ from agentinfer.agentbench.agents import AgentRunOutcome, AgentRunRequest, Termi
 from agentinfer.agentbench.agents.claude import runner
 from agentinfer.agentbench.agents.claude.interaction import InteractionAction
 from agentinfer.agentbench.benchkit.dataset import Task
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _request(

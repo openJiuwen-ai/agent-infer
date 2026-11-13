@@ -14,8 +14,9 @@ from pydantic import ValidationError
 from tests.agentbench.helpers.mock_server import MockServerProcess
 from tests.agentbench.helpers.mock_server.process import read_rows
 from tests.agentbench.helpers.mock_server.protocol import Scenario
+from tests.helpers.marks import test_marks
 
-pytestmark = pytest.mark.cpu_test
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def body(request_id="r", *, chat=False, **overrides):

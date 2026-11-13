@@ -19,10 +19,11 @@ def run_replay_repeatability_e2e(
     *,
     suite: ReplaySuiteSpec,
     suite_label: str,
+    case_path: Path | None = None,
 ) -> None:
     """Run N cold replays, then compare run 1 vs run 2 for repeatability."""
 
-    test_config_file = pytestconfig.getoption("--test-config-file")
+    test_config_file = case_path or pytestconfig.getoption("--test-config-file")
     if not test_config_file:
         raise pytest.UsageError(f"--test-config-file is required for {suite_label} replay E2E")
 

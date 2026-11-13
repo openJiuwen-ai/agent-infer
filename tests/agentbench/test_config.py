@@ -15,6 +15,9 @@ from agentinfer.agentbench.benchkit.config import (
     load_config,
     resolve_config_paths,
 )
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def test_zcode_subagent_limits():

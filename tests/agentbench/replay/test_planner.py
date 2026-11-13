@@ -17,6 +17,9 @@ from agentinfer.agentbench.replay.executor import NodeExecution, ReplayTaskExecu
 from agentinfer.agentbench.replay.planner import ReplayPlan, ReplayPlanNode, ReplayTaskPlan, build_replay_plan
 from agentinfer.agentbench.replay.runner import _execution_metadata, run_replay
 from agentinfer.agentbench.request_proxy.request_trace import RequestFact
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _row(

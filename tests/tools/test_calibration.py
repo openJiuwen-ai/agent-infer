@@ -12,6 +12,7 @@ from collections.abc import Callable
 import httpx
 import pytest
 
+from tests.helpers.marks import test_marks
 from tools.calibration.calibrate_decode import fit_decode, parser as decode_parser
 from tools.calibration.calibrate_prefill import fit_prefill, parser as prefill_parser
 from tools.calibration.metadata import (
@@ -23,6 +24,8 @@ from tools.calibration.metadata import (
     persist_metadata,
     resolve_calibration_engine,
 )
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 METRICS = """
 # TYPE vllm:cache_config_info gauge

@@ -23,6 +23,9 @@ from agentinfer.agentbench.benchkit.cli import (
 )
 from agentinfer.agentbench.benchkit.config import AgentBenchConfig, load_config
 from agentinfer.agentbench.replay.config import ReplayBenchConfig
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _config(path: Path) -> None:

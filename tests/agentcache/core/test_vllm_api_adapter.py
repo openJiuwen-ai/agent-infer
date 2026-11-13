@@ -25,8 +25,9 @@ from agentinfer.agentcache.core.api_adapter import (
 )
 from agentinfer.scheduling.identity import parse_agent_identity
 from agentinfer.scheduling.lifecycle import ProgramLifecycle
+from tests.helpers.marks import test_marks
 
-pytestmark = pytest.mark.cpu_test
+pytestmark = test_marks(hardware="cpu")
 
 
 def test_anthropic_replay_sampling_metadata_is_strictly_validated() -> None:

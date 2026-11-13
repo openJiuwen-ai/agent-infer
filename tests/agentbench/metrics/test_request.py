@@ -10,6 +10,9 @@ from agentinfer.agentbench.benchkit.metrics.request import (
     request_tpot,
 )
 from agentinfer.agentbench.request_proxy.request_trace import RequestFact
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _fact(**changes: object) -> RequestFact:

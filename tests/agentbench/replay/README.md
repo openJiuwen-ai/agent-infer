@@ -10,19 +10,26 @@ run 冒烟还需要 Node.js 20；Replay 测试只需要 Python 和回环 HTTP �
 
 ```bash
 # 后端 HTTP 契约；不依赖 Replay 的构造或解析代码。
-python -m pytest --timeout=120 -q tests/agentbench/test_mock_server.py
+python -m pytest -q tests/agentbench/test_mock_server.py
 
 # 四来源 × 并发度 1/4 × 两轮冷启动。
-python -m pytest --timeout=120 -q tests/agentbench/replay/test_cold_start.py
+python -m pytest -q tests/agentbench/replay/test_cold_start.py
 
 # HTTP 依赖、故障传播和校验器反例。
-python -m pytest --timeout=120 -q -m replay_smoke tests/agentbench/replay
+python -m pytest -q -m "cpu and ready" \
+  tests/agentbench/replay/test_cold_start.py \
+  tests/agentbench/replay/test_http_dependencies.py \
+  tests/agentbench/replay/test_validation.py
 
 # 精确时间和已有单元测试。
-python -m pytest --timeout=120 -q -m 'not replay_smoke' tests/agentbench/replay
+python -m pytest -q -m "cpu and ready" \
+  tests/agentbench/replay \
+  --ignore=tests/agentbench/replay/test_cold_start.py \
+  --ignore=tests/agentbench/replay/test_http_dependencies.py \
+  --ignore=tests/agentbench/replay/test_validation.py
 
 # 完整 CPU CI 范围。
-python -m pytest --timeout=120 -q tests/agentbench tests/scheduling tests/agentcache/test_entrypoints.py
+python -m pytest -q tests/agentbench tests/scheduling tests/agentcache/test_entrypoints.py
 ```
 
 需要保留产物时，给 pytest 增加 `--basetemp=/tmp/replay-ci-review`。

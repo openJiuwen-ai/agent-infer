@@ -11,6 +11,9 @@ import pytest
 from agentinfer.agentbench.replay.analyzer import analyze_replay_trace
 from agentinfer.agentbench.replay.config import ReplayBenchConfig
 from agentinfer.agentbench.replay.timing import build_interval_model, effective_interval_seconds
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _same_agent_followup(tmp_path: Path):

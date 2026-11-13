@@ -10,6 +10,9 @@ import pytest
 
 from agentinfer.agentcache.entrypoints.bench import _normalize_delegated_argv
 from agentinfer.agentcache.entrypoints.cli import main as cli_main
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def test_only_explicit_agentinfer_benchmark_is_intercepted() -> None:

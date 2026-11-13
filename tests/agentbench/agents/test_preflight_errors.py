@@ -14,6 +14,9 @@ import pytest
 from agentinfer.agentbench.agents.dsh import runtime as dsh
 from agentinfer.agentbench.agents.preflight import check_executable_output
 from agentinfer.agentbench.agents.zcode import runtime as zcode
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 @pytest.fixture(params=["exit", "timeout", "permission"])

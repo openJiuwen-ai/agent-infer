@@ -7,6 +7,9 @@ from agentinfer.agentbench.agents.claude.profiles import get_profile as get_clau
 from agentinfer.agentbench.agents.dsh.profiles import get_profile as get_dsh_profile
 from agentinfer.agentbench.agents.jiuwenswarm.profiles import get_profile as get_jiuwenswarm_profile
 from agentinfer.agentbench.benchkit.dataset import IMPLEMENTATION_CONSTRAINTS, Task, task_context
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _task() -> Task:

@@ -11,6 +11,9 @@ import pytest
 from agentinfer.agentbench.agents.contracts import AgentRunOutcome, AgentRunRequest, TerminationReason
 from agentinfer.agentbench.agents.jiuwenswarm.runner import _JsonlStatusTracker
 from agentinfer.agentbench.benchkit.dataset import Task
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _event(event: str, payload: dict) -> bytes:

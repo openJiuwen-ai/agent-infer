@@ -26,10 +26,12 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers.marks import test_marks
+
 if importlib.util.find_spec("vllm") is None:
     pytest.skip("vllm is not installed; serve e2e requires a vLLM environment", allow_module_level=True)
 
-pytestmark = pytest.mark.gpu_test
+pytestmark = test_marks(hardware="L20", num_cards=1, ci="ready")
 
 MODEL = os.environ.get("AGENTINFER_E2E_MODEL", "Qwen/Qwen3-0.6B")
 STARTUP_TIMEOUT = int(os.environ.get("AGENTINFER_E2E_STARTUP_TIMEOUT", "300"))

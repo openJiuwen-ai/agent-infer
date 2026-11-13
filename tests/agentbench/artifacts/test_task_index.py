@@ -18,6 +18,9 @@ from agentinfer.agentbench.benchkit.artifacts.task_result import (
     TaskResultArtifact,
 )
 from agentinfer.agentbench.benchkit.metrics.request import ObservedTopology
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _topology(session_id: str = "s") -> ObservedTopology:
