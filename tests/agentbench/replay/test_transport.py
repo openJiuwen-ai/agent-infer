@@ -16,7 +16,7 @@ from agentinfer.agentbench.replay.transport import ReplayTransport
 from agentinfer.agentbench.request_proxy.request_trace import RequestTraceWriter, load_request_facts
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def test_replay_transport_disables_keepalive_reuse(tmp_path: Path) -> None:

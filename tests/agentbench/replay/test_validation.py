@@ -14,7 +14,7 @@ from tests.agentbench.replay.helpers.fixtures import build_fixture
 from tests.agentbench.replay.helpers.validation import validate_round
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 @pytest.fixture(scope="module")

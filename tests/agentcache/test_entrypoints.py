@@ -9,7 +9,7 @@ import pytest
 from agentinfer.agentcache.entrypoints.cli import main as cli_main
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _install_vllm(monkeypatch: pytest.MonkeyPatch, entrypoint: object) -> None:

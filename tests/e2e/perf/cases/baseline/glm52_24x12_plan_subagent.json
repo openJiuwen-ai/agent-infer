@@ -2,9 +2,7 @@
   "test_name": "glm52_24x12_plan_subagent",
   "scenario": "baseline",
   "mark": {
-    "hardware": {
-      "npu": "A3"
-    },
+    "hardware": "A3",
     "num_cards": 16
   },
   "description": "GLM-5.2 Ascend baseline AsyncScheduler serve profile (16 TP), 24 tasks x 12 concurrency",

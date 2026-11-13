@@ -78,6 +78,12 @@ CPU CI 沿用现有 Python 3.10/3.12 任务，通过 `cpu and ready` 选择单�
 
 ## Pytest labels
 
+Local commits run mypy for staged new Python files through the `mypy-added`
+pre-commit hook; modified existing files are excluded. It reuses the manual
+`mypy` hook configuration, which CI applies to files added across the PR.
+Run `pre-commit run mypy-added` to check staged additions locally. For committed
+PR additions, pass their paths to `pre-commit run mypy --hook-stage manual --files ...`.
+
 See [RFC #81](https://github.com/openJiuwen-ai/agent-infer/issues/81).
 Labels are registered only in `pyproject.toml`. Each dimension is optional,
 with at most one value per dimension:
@@ -100,13 +106,13 @@ Every Python test module outside E2E declares its labels explicitly through
 from tests.helpers.marks import test_marks
 
 # CPU unit tests (including smoke and real DSH integration tests)
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 # Single-card serve smoke
-pytestmark = test_marks(hardware={"cuda": "L20"}, num_cards=1, ci="ready")
+pytestmark = test_marks(hardware="L20", num_cards=1, ci="ready")
 ```
 
-`agentcache/core` uses `test_marks(hardware={"cpu": "cpu"})`, without a CI lane.
+`agentcache/core` uses `test_marks(hardware="cpu")`, without a CI lane.
 Mechanism marks such as `skipif` and `parametrize` remain unchanged;
 combine them with `[*test_marks(...), pytest.mark.skipif(...)]` when necessary.
 Test execution time is bounded by the CI job timeout, without per-test timeout marks.
@@ -116,7 +122,7 @@ E2E JSON uses the same fields in one object:
 
 ```json
 "mark": {
-  "hardware": {"npu": "A3"},
+  "hardware": "A3",
   "num_cards": 16
 }
 ```
@@ -128,8 +134,9 @@ omitting `ci` assigns no CI lane. This produces standard independent markers
 
 Collection rejects missing model declarations, unknown markers, conflicting
 values in one dimension, missing accelerator card counts, CPU card counts,
-and platform/model mismatches. Platform metadata is registered with `[cuda]`
-or `[npu]` in `pyproject.toml`; these are not extra pytest markers.
+and invalid hardware names. Hardware model names are registered with
+`[hardware]` in the marker descriptions in `pyproject.toml`; this is registry
+metadata, not an extra pytest marker. No CUDA/NPU platform field is needed.
 
 ```bash
 pytest -q -m "cpu and ready" tests

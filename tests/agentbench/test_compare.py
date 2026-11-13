@@ -17,7 +17,7 @@ from agentinfer.agentbench.benchkit.metrics.task import TaskMetrics
 from agentinfer.agentbench.benchkit.metrics.vllm import VllmMetrics
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def write_run(

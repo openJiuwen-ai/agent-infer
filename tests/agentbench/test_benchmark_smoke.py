@@ -22,7 +22,7 @@ from tests.helpers.marks import test_marks
 
 from .helpers.benchmark_smoke import FakeAgentRuntime, FakeModelServer, ThreadBarrier, ThreadRequestProxyProcess
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 @pytest.fixture(autouse=True)

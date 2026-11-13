@@ -9,7 +9,7 @@ import pytest
 from agentinfer.agentbench.benchkit import dataset
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def test_load_tasks_reads_swebench_uppercase_test_fields(tmp_path: Path) -> None:

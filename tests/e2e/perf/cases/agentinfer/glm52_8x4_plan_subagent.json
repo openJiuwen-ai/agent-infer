@@ -2,9 +2,7 @@
   "test_name": "glm52_8x4_plan_subagent",
   "scenario": "agentinfer",
   "mark": {
-    "hardware": {
-      "npu": "A3"
-    },
+    "hardware": "A3",
     "num_cards": 16
   },
   "description": "GLM-5.2 AgentInfer scheduler bridge, SWE-bench 8 tasks x 4 concurrency",

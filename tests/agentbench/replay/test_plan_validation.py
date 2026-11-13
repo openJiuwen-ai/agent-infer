@@ -13,7 +13,7 @@ from agentinfer.agentbench.replay.planner import _validate_plan, build_replay_pl
 from tests.agentbench.replay.helpers.fixtures import build_fixture, config
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 @pytest.mark.parametrize("mutation,message", [("missing", "missing"), ("self", "cycle"), ("cycle", "cycle")])

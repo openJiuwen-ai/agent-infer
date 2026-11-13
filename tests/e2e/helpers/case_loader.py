@@ -370,10 +370,8 @@ def _fetch_hardware_slug_from_platform(device_id: int = 0) -> str | None:
 
 def _hardware_slug_from_mark(mark: dict[str, Any]) -> str | None:
     hardware = mark.get("hardware")
-    if isinstance(hardware, dict):
-        for value in hardware.values():
-            if isinstance(value, str) and value.strip():
-                return _sanitize_hardware_slug(value.strip())
+    if isinstance(hardware, str) and hardware.strip():
+        return _sanitize_hardware_slug(hardware.strip())
     return None
 
 

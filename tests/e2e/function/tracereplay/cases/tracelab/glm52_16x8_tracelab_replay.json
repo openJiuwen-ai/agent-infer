@@ -2,9 +2,7 @@
   "test_name": "glm52_16x8_tracelab_replay",
   "scenario": "baseline",
   "mark": {
-    "hardware": {
-      "npu": "A3"
-    },
+    "hardware": "A3",
     "num_cards": 16
   },
   "description": "GLM-5.2 TraceLab normalized JSONL replay, 16 sessions x 8 concurrency",

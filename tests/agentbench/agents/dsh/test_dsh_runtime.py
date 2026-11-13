@@ -13,7 +13,7 @@ import pytest
 from agentinfer.agentbench.agents.dsh.runtime import DshRuntime, _probe_sandbox, _runtime_report
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def test_dsh_preflight_requires_zstandard(monkeypatch: pytest.MonkeyPatch) -> None:

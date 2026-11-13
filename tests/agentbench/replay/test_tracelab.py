@@ -24,7 +24,7 @@ from agentinfer.agentbench.replay.unified_trace_ir import (
 )
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _round(index: int, *, input_tokens: int, prefix_tokens: int, start: int, end: int) -> dict[str, object]:

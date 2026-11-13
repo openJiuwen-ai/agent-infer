@@ -2,9 +2,7 @@
   "test_name": "glm52_24x12_agentx_replay",
   "scenario": "baseline",
   "mark": {
-    "hardware": {
-      "npu": "A3"
-    },
+    "hardware": "A3",
     "num_cards": 16
   },
   "description": "GLM-5.2 AgentX hash-block snapshot replay, 24 sessions x 12 concurrency",

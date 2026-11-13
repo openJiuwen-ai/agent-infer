@@ -11,7 +11,7 @@ import pytest
 from agentinfer.agentbench.request_proxy.request_trace import RequestFact, RequestTraceWriter, load_request_facts
 from tests.helpers.marks import test_marks
 
-pytestmark = test_marks(hardware={"cpu": "cpu"}, ci="ready")
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def fact(request_id: str = "r1") -> RequestFact:
