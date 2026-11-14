@@ -8,7 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from agentinfer.agentcache.entrypoints.bench import _normalize_delegated_argv
+from agentinfer.agentcache.entrypoints.bench import (
+    _normalize_delegated_argv,
+    _normalize_direct_argv,
+    main as bench_main,
+)
 from agentinfer.agentcache.entrypoints.cli import main as cli_main
 
 
@@ -61,6 +65,51 @@ def test_delegated_argv_normalizes_implicit_and_explicit_commands() -> None:
     assert explicit == ["compare"]
     assert replay == ["replay", "--config", "r"]
     assert metadata["entrypoint"] == "vllm bench serve --agentinfer"
+
+
+def test_direct_agentinfer_bench_normalizes_its_own_entrypoint() -> None:
+    argv, metadata = _normalize_direct_argv(["agentinfer-bench", "compare", "--baseline", "a", "--candidate", "b"])
+    assert argv == ["compare", "--baseline", "a", "--candidate", "b"]
+    assert metadata == {
+        "entrypoint": "agentinfer-bench",
+        "argv": ["agentinfer-bench", "compare", "--baseline", "a", "--candidate", "b"],
+    }
+    # The direct command names no upstream command, so unrecognized arguments still go to BenchKit, which reports
+    # them through its own parser rather than the delegating entry point's ValueError.
+    assert _normalize_direct_argv(["agentinfer-bench", "--help"]) == (
+        ["--help"],
+        {"entrypoint": "agentinfer-bench", "argv": ["agentinfer-bench", "--help"]},
+    )
+
+
+def test_declared_console_scripts_include_the_bench_entrypoint() -> None:
+    import tomllib
+
+    scripts = tomllib.loads((Path(__file__).parents[2] / "pyproject.toml").read_text())["project"]["scripts"]
+    assert scripts["agentinfer-bench"] == "agentinfer.agentcache.entrypoints.bench:main"
+    # The delegating `vllm` script and the standalone benchmark entry point must reach different mains: an upstream
+    # vLLM install also declares `vllm`, and whichever package installs last overwrites the script.
+    assert scripts["vllm"] == "agentinfer.agentcache.entrypoints.cli.main:main"
+
+
+def test_direct_entrypoint_dispatches_to_benchkit(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[tuple[list[str], dict[str, object]]] = []
+    fake = types.ModuleType("agentinfer.agentbench.benchkit.cli")
+    fake.main = lambda argv, *, cli_metadata: seen.append((list(argv), cli_metadata)) or 0
+    monkeypatch.setitem(sys.modules, "agentinfer.agentbench.benchkit.cli", fake)
+
+    assert bench_main(["agentinfer-bench", "summarize", "run-a", "run-b"]) == 0
+    assert bench_main(["agentinfer-bench", "not-a-command"]) == 0
+    assert seen == [
+        (
+            ["summarize", "run-a", "run-b"],
+            {"entrypoint": "agentinfer-bench", "argv": ["agentinfer-bench", "summarize", "run-a", "run-b"]},
+        ),
+        (["not-a-command"], {"entrypoint": "agentinfer-bench", "argv": ["agentinfer-bench", "not-a-command"]}),
+    ]
+    # The delegating entry point still refuses anything that is not an explicit AgentInfer benchmark.
+    with pytest.raises(ValueError, match="expected an explicit AgentInfer benchmark invocation"):
+        bench_main(["vllm", "bench", "serve", "--model", "m"])
 
 
 def test_vllm_delegation_restores_sys_argv(monkeypatch: pytest.MonkeyPatch) -> None:

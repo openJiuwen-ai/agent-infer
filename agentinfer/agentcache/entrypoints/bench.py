@@ -35,10 +35,27 @@ def _normalize_delegated_argv(argv: list[str]) -> tuple[list[str], dict[str, obj
     return normalized, None
 
 
+def _normalize_direct_argv(argv: list[str]) -> tuple[list[str], dict[str, object]]:
+    """Normalize a direct ``agentinfer-bench`` invocation for BenchKit."""
+
+    normalized = _strip_program_name(list(argv))
+    # ``agentinfer-bench`` names no upstream command, so every argument belongs to BenchKit; its parser owns
+    # ``--help``, the required subcommand, and invalid-command errors.
+    return normalized, {
+        "entrypoint": "agentinfer-bench",
+        "argv": ["agentinfer-bench", *normalized],
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     """Dispatch an explicit AgentInfer benchmark invocation."""
 
-    normalized, metadata = _normalize_delegated_argv(list(sys.argv if argv is None else argv))
+    raw_argv = list(sys.argv if argv is None else argv)
+    direct = bool(raw_argv) and Path(raw_argv[0]).name == "agentinfer-bench"
+    if direct:
+        normalized, metadata = _normalize_direct_argv(raw_argv)
+    else:
+        normalized, metadata = _normalize_delegated_argv(raw_argv)
     if metadata is None:
         raise ValueError("expected an explicit AgentInfer benchmark invocation")
     from agentinfer.agentbench.benchkit.cli import main as benchkit_main

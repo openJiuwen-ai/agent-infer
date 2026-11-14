@@ -38,6 +38,7 @@ agentinfer = ["agentbench/configs/*.yaml", "agentbench/data/*.jsonl", "agentbenc
 
 [project.scripts]
 vllm = "agentinfer.agentcache.entrypoints.cli.main:main"
+agentinfer-bench = "agentinfer.agentcache.entrypoints.bench:main"
 
 [tool.ruff]
 target-version = "py310"

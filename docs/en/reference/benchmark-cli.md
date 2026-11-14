@@ -9,6 +9,19 @@ vllm bench serve --agentinfer
 
 Other `vllm` commands are delegated unchanged to the upstream vLLM CLI.
 
+AgentInfer also installs `agentinfer-bench`, which passes its arguments straight to BenchKit. Use it when the `vllm`
+script cannot be relied on: upstream vLLM declares a `vllm` console script too, and installing either package last
+overwrites the other's script. The two entry points run the same commands:
+
+```text
+agentinfer-bench compare --baseline DIR [DIR ...] --candidate DIR [DIR ...] [OPTIONS]
+vllm bench serve --agentinfer compare --baseline DIR [DIR ...] --candidate DIR [DIR ...] [OPTIONS]
+```
+
+The implicit `run` command is the one difference. Through `agentinfer-bench`, arguments are never rewritten, so an
+explicit `run` is required. `vllm bench serve --agentinfer` keeps inserting `run` when no BenchKit command follows
+`--agentinfer`.
+
 For post-run correctness, use `evaluate --result-path RUN_DIR [--config YAML] [--output-dir DIR]`
 and `compare-correctness --baseline JSON --candidate JSON`.
 Omitting `--output-dir` creates a unique directory under the source run's `evaluations/`;
