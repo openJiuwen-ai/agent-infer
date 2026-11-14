@@ -15,6 +15,16 @@ from agentinfer.agentcache.entrypoints.bench import (
 )
 from agentinfer.agentcache.entrypoints.cli import main as cli_main
 
+try:  # `tomllib` entered the standard library in 3.11; the package still supports 3.10.
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised on the 3.10 floor
+    import tomli as tomllib  # type: ignore[no-redef]
+
+
+def _declared_scripts() -> dict[str, str]:
+    pyproject = Path(__file__).parents[2] / "pyproject.toml"
+    return tomllib.loads(pyproject.read_text())["project"]["scripts"]
+
 
 def test_only_explicit_agentinfer_benchmark_is_intercepted() -> None:
     assert cli_main._is_bench_delegation(["vllm", "bench", "serve", "--model", "m"]) is False
@@ -82,10 +92,24 @@ def test_direct_agentinfer_bench_normalizes_its_own_entrypoint() -> None:
     )
 
 
-def test_declared_console_scripts_include_the_bench_entrypoint() -> None:
-    import tomllib
+@pytest.mark.parametrize("launcher", ["agentinfer-bench.exe", "agentinfer-bench.EXE"])
+def test_direct_agentinfer_bench_is_reachable_through_a_windows_launcher(
+    monkeypatch: pytest.MonkeyPatch, launcher: str
+) -> None:
+    # `pip` writes console scripts as `<name>.exe` on Windows, so the bare name comparison would send the standalone
+    # entry point down the delegating path, where it raises ValueError.
+    fake = types.ModuleType("agentinfer.agentbench.benchkit.cli")
+    fake.main = lambda argv, *, cli_metadata: 0
+    monkeypatch.setitem(sys.modules, "agentinfer.agentbench.benchkit.cli", fake)
 
-    scripts = tomllib.loads((Path(__file__).parents[2] / "pyproject.toml").read_text())["project"]["scripts"]
+    argv, metadata = _normalize_direct_argv([f"C:\\Python\\Scripts\\{launcher}", "compare"])
+    assert argv == ["compare"]
+    assert metadata["entrypoint"] == "agentinfer-bench"
+    assert bench_main([f"C:\\Python\\Scripts\\{launcher}", "compare"]) == 0
+
+
+def test_declared_console_scripts_include_the_bench_entrypoint() -> None:
+    scripts = _declared_scripts()
     assert scripts["agentinfer-bench"] == "agentinfer.agentcache.entrypoints.bench:main"
     # The delegating `vllm` script and the standalone benchmark entry point must reach different mains: an upstream
     # vLLM install also declares `vllm`, and whichever package installs last overwrites the script.

@@ -4,15 +4,26 @@
 """Delegate explicit AgentInfer benchmark invocations to BenchKit."""
 
 import sys
-from pathlib import Path
 
 _BENCHKIT_COMMANDS = frozenset({"compare", "compare-correctness", "evaluate", "prepare", "replay", "run", "summarize"})
+
+
+def _program_name(arg: str) -> str:
+    """Return the console-script name ``arg`` refers to, without a launcher suffix.
+
+    ``pip`` writes console scripts as ``<name>.exe`` on Windows, so comparing ``argv[0]`` to the bare script name
+    would miss the entry point on that platform. Both separators are handled so the result does not depend on the
+    platform the check happens to run on.
+    """
+
+    name = arg.replace("\\", "/").rsplit("/", 1)[-1]
+    return name[:-4] if name.lower().endswith(".exe") else name
 
 
 def _strip_program_name(argv: list[str]) -> list[str]:
     """Remove a supported console-script name from an argument vector."""
 
-    if argv and Path(argv[0]).name in {"agentinfer-bench", "vllm"}:
+    if argv and _program_name(argv[0]) in {"agentinfer-bench", "vllm"}:
         return argv[1:]
     return argv
 
@@ -51,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     """Dispatch an explicit AgentInfer benchmark invocation."""
 
     raw_argv = list(sys.argv if argv is None else argv)
-    direct = bool(raw_argv) and Path(raw_argv[0]).name == "agentinfer-bench"
+    direct = bool(raw_argv) and _program_name(raw_argv[0]) == "agentinfer-bench"
     if direct:
         normalized, metadata = _normalize_direct_argv(raw_argv)
     else:
