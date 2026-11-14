@@ -8,6 +8,17 @@ vllm bench serve --agentinfer
 
 未列出的 `vllm` 命令会原样委托给上游 vLLM CLI。
 
+AgentInfer 同时安装 `agentinfer-bench`，其参数直接交给 BenchKit。当 `vllm` 脚本不可靠时使用它：上游 vLLM 也声明了
+名为 `vllm` 的 console script，两个包中后安装的一方会覆盖先安装的脚本。两个入口执行相同的命令：
+
+```text
+agentinfer-bench compare --baseline DIR [DIR ...] --candidate DIR [DIR ...] [OPTIONS]
+vllm bench serve --agentinfer compare --baseline DIR [DIR ...] --candidate DIR [DIR ...] [OPTIONS]
+```
+
+只有隐式 `run` 不同。经 `agentinfer-bench` 时参数不会被改写，因此必须显式给出 `run`；
+`vllm bench serve --agentinfer` 在 `--agentinfer` 后没有 BenchKit 命令时仍会补上 `run`。
+
 运行后的精度评测使用 `evaluate --result-path RUN_DIR [--config YAML] [--output-dir DIR]`；
 逐题回归比较使用 `compare-correctness --baseline JSON --candidate JSON`，不允许任务退化。
 省略 `--output-dir` 时，在源运行的 `evaluations/` 下创建唯一目录；已有目标目录不覆盖。
