@@ -15,6 +15,7 @@ import pytest
 from tools.calibration.calibrate_decode import fit_decode, parser as decode_parser
 from tools.calibration.calibrate_prefill import fit_prefill, parser as prefill_parser
 from tools.calibration.metadata import (
+    KV_CAPACITY_OVERRIDE_ENV,
     assemble_profile,
     collect_metadata,
     collect_throughput_counters,
@@ -23,6 +24,13 @@ from tools.calibration.metadata import (
     persist_metadata,
     resolve_calibration_engine,
 )
+
+
+@pytest.fixture(autouse=True)
+def clear_capacity_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep calibration tests independent of the operator's shell environment."""
+    monkeypatch.delenv(KV_CAPACITY_OVERRIDE_ENV, raising=False)
+
 
 METRICS = """
 # TYPE vllm:cache_config_info gauge
@@ -75,6 +83,7 @@ def test_http_metadata_discovers_homogeneous_internal_dp() -> None:
     assert metadata["deployment"] == {
         "engine_count": 2,
         "cache_config": {"block_size": "16", "num_gpu_blocks": "100"},
+        "kv_capacity": {"tokens": 800, "source": "block_arithmetic"},
         "throughput_metric_names": [
             "vllm:generation_tokens_total",
             "vllm:prompt_tokens_cached_total",
@@ -107,15 +116,16 @@ def test_capacity_prefers_reported_logical_tokens() -> None:
     assert infer_kv_capacity_tokens(metadata) == 1457130
 
 
-def test_capacity_ignores_placeholder_logical_tokens() -> None:
-    """Placeholder label values fall back to the block arithmetic."""
+@pytest.mark.parametrize("value", ["None", "", "null", "inf", "Infinity", "-inf", "1e400", "nan"])
+def test_capacity_ignores_invalid_logical_tokens(value: str) -> None:
+    """Placeholder and non-finite labels fall back to block arithmetic."""
     metadata = {
         "deployment": {
             "engine_count": 2,
             "cache_config": {
                 "block_size": "16",
                 "num_gpu_blocks": "100",
-                "kv_cache_size_tokens": "None",
+                "kv_cache_size_tokens": value,
             },
         }
     }
@@ -136,6 +146,46 @@ def test_capacity_override_environment_wins(monkeypatch: pytest.MonkeyPatch) -> 
         }
     }
     assert infer_kv_capacity_tokens(metadata) == 999999
+
+
+@pytest.mark.parametrize(
+    "value", ["", " ", "0", "-1", "1457130 tokens", "1,457,130", "inf", "Infinity", "1e400", "nan", "1.5"]
+)
+def test_capacity_rejects_invalid_override(value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicitly configured invalid capacity must never silently fall back."""
+    monkeypatch.setenv(KV_CAPACITY_OVERRIDE_ENV, value)
+    metadata = {
+        "deployment": {
+            "engine_count": 2,
+            "cache_config": {"block_size": "16", "num_gpu_blocks": "100", "kv_cache_size_tokens": "1457130"},
+        }
+    }
+    with pytest.raises(ValueError, match=KV_CAPACITY_OVERRIDE_ENV) as exc:
+        infer_kv_capacity_tokens(metadata)
+    assert repr(value) in str(exc.value)
+
+
+def test_capacity_override_is_captured_and_hashed(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Changing the override must reject mixing stages in the same results directory."""
+
+    async def collect() -> dict[str, object]:
+        async with httpx.AsyncClient(base_url="http://test", transport=httpx.MockTransport(_transport)) as client:
+            metadata, _ = await collect_metadata(client, "model-a")
+            return metadata
+
+    baseline = asyncio.run(collect())
+    monkeypatch.setenv(KV_CAPACITY_OVERRIDE_ENV, "999999")
+    overridden = asyncio.run(collect())
+    assert overridden["deployment"]["kv_capacity"] == {"tokens": 999999, "source": KV_CAPACITY_OVERRIDE_ENV}
+    assert metadata_hash(baseline) != metadata_hash(overridden)
+    persist_metadata(tmp_path, overridden)
+    monkeypatch.setenv(KV_CAPACITY_OVERRIDE_ENV, "1000000")
+    assert infer_kv_capacity_tokens(overridden) == 999999
+    with pytest.raises(ValueError, match="metadata do not match"):
+        persist_metadata(tmp_path, asyncio.run(collect()))
+    # Even an override equal to the derived capacity records a different source.
+    monkeypatch.setenv(KV_CAPACITY_OVERRIDE_ENV, "800")
+    assert metadata_hash(baseline) != metadata_hash(asyncio.run(collect()))
 
 
 def test_cli_uses_repository_results_and_observed_capacity() -> None:

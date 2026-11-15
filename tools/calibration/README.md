@@ -85,14 +85,19 @@ of every request context and does not subtract shared physical prefix blocks.
 `kv-capacity-tokens` is intentionally not a user parameter. The tool derives one EngineCore rank's capacity from the
 common `vllm:cache_config_info` exposed by `/metrics`, in this order:
 
-1. `kv_cache_size_tokens`, the backend-reported logical capacity of one EngineCore, used as-is;
-2. `num_gpu_blocks * block_size`, divided by the homogeneous `engine_count` for internal DP, where `/metrics` repeats
- the deployment-wide block count under every engine label;
-3. the `AGENTINFER_KV_CAPACITY_TOKENS` environment variable, an explicit operator override that takes precedence over
- both labels.
+1. `AGENTINFER_KV_CAPACITY_TOKENS`, an explicit operator override;
+2. `kv_cache_size_tokens`, the backend-reported logical capacity of one EngineCore, used as-is;
+3. `num_gpu_blocks * block_size`, divided by the homogeneous `engine_count` for internal DP, where `/metrics` repeats
+ the deployment-wide block count under every engine label.
 
-Step 1 exists because `block_size` is not always a count of logical tokens. Compressed or sparse attention layouts can
-report a per-block token count that makes step 2 an order of magnitude too small; because cases with
+An override must be a positive integer. An explicitly set empty, nonpositive, non-finite, or malformed value fails with
+a `ValueError` naming the variable and its value; unset the variable to use backend metadata. Placeholder or non-finite
+backend logical-size labels fall back to block arithmetic. Both stages capture the resolved capacity and its source
+in `metadata.deployment.kv_capacity` (`tokens` and `source`), which participates in the metadata hash. Changing the
+override or capacity source between stages therefore requires a separate results directory.
+
+Step 2 exists because `block_size` is not always a count of logical tokens. Compressed or sparse attention layouts can
+report a per-block token count that makes step 3 an order of magnitude too small; because cases with
 `batch * context > max_kv_fraction * capacity` are skipped, that error silently truncates the decode matrix to short
 contexts and the fitted context coefficient collapses towards zero. Record the resolved value as
 `observed_kv_capacity_tokens` and verify it against the engine's own `GPU KV cache size` log line before trusting the

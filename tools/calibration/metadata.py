@@ -64,6 +64,8 @@ async def collect_metadata(client: httpx.AsyncClient, model: str) -> tuple[dict[
             "throughput_metric_names": metric_names,
         },
     }
+    capacity, source = _resolve_kv_capacity_tokens(metadata)
+    metadata["deployment"]["kv_capacity"] = {"tokens": capacity, "source": source}
     return metadata, engine_ids
 
 
@@ -165,12 +167,20 @@ def _positive_int(value: object) -> int | None:
     except ValueError:
         try:
             parsed = int(float(text))
-        except ValueError:
+        except (ValueError, OverflowError):
             return None
     return parsed if parsed > 0 else None
 
 
 def infer_kv_capacity_tokens(metadata: dict[str, object]) -> int:
+    """Return the capacity captured with metadata, or resolve uncaptured metadata."""
+    deployment = metadata.get("deployment")
+    if isinstance(deployment, dict) and "kv_capacity" in deployment:
+        return deployment["kv_capacity"]["tokens"]
+    return _resolve_kv_capacity_tokens(metadata)[0]
+
+
+def _resolve_kv_capacity_tokens(metadata: dict[str, object]) -> tuple[int, str]:
     """Return one EngineCore rank's logical HBM KV capacity in tokens.
 
     Resolution order:
@@ -193,14 +203,20 @@ def infer_kv_capacity_tokens(metadata: dict[str, object]) -> int:
     if not isinstance(cache_config, dict):
         raise ValueError("/metrics does not expose vllm:cache_config_info")
 
-    override = _positive_int(os.environ.get(KV_CAPACITY_OVERRIDE_ENV))
-    if override is not None:
-        return override
+    raw_override = os.environ.get(KV_CAPACITY_OVERRIDE_ENV)
+    if raw_override is not None:
+        try:
+            override = int(raw_override)
+        except ValueError:
+            override = 0
+        if override <= 0:
+            raise ValueError(f"{KV_CAPACITY_OVERRIDE_ENV} must be a positive integer, got {raw_override!r}")
+        return override, KV_CAPACITY_OVERRIDE_ENV
 
     logical = _positive_int(cache_config.get("kv_cache_size_tokens"))
     if logical is not None:
         # vLLM reports this per EngineCore, so it is already the pinned rank's capacity.
-        return logical
+        return logical, "kv_cache_size_tokens"
 
     try:
         block_size = int(str(cache_config["block_size"]))
@@ -217,7 +233,7 @@ def infer_kv_capacity_tokens(metadata: dict[str, object]) -> int:
     capacity = block_size * num_gpu_blocks // engine_count
     if capacity <= 0:
         raise ValueError("derived KV capacity must be positive")
-    return capacity
+    return capacity, "block_arithmetic"
 
 
 def _parse_samples(text: str) -> list[tuple[str, dict[str, str], float]]:
