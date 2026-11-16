@@ -44,6 +44,59 @@ vllm bench serve --agentinfer prepare swebench \
 
 命令会生成 `instances.jsonl`、`task-lists/default.txt` 和 `manifest.json`。
 
+## Terminal-Bench 4.1.0 实验性单题运行
+
+当前支持 Claude Code 的 `single` 模式，以及 DSH 的 `single`、`plan-subagent` 模式，
+通过 Harbor 在 Docker 中运行任务与官方评分。
+先确认 `docker compose version` 可用；Harbor 需要单独的 Python 3.12 环境，
+例如 `uv tool install --python 3.12 harbor==0.25.0`。准备已发布的数据：
+
+```bash
+vllm bench serve --agentinfer prepare terminalbench \
+  --output-dir agentinfer/agentbench/data/terminalbench
+```
+
+准备命令固定下载 `terminal-bench/terminal-bench@4.1.0`。已有 4.0.0 数据不会自动升级；
+请使用新的空输出目录重新准备，并同步配置中的数据路径。
+
+在 `agentinfer/agentbench/configs/terminalbench_vllm.yaml` 中设置实际模型地址和模型名，然后运行：
+
+```bash
+vllm bench serve --agentinfer run \
+  --config agentinfer/agentbench/configs/terminalbench_vllm.yaml \
+  --agent-type claude --agent-profile single \
+  --agent-executable claude --endpoint /v1/messages \
+  --task-num 1 --result-dir results/claude-smoke
+```
+
+结果目录必须尚不存在。数据准备输出全部任务包；`task-lists/selected.txt` 当前由任务资源字段筛选出本地 CPU 候选，
+并非已完成全量 oracle 验证的正式子集。运行会保存 Harbor 原始日志、逐题 `verifier.json`、
+`correctness.json`、请求记录与汇总。汇总中的 `correctness.available` 仅在全部选中任务有有效奖励时为真；
+Agent 正常结束不代表答对。容器需要能访问 Docker bridge 网关上的模型入口，真实网络和镜像应先用单题验证。
+JiuwenSwarm、其他模式、GPU 和多服务任务仍待适配。
+
+已有 Terminal-Bench 数据目录若使用 `task-lists/default.txt`，请将该文件重命名为 `selected.txt`，以匹配更新后的配置。
+
+数据准备的 `manifest.json` 将 `selection_status` 记录为 `candidate`，并将独立的
+`validation.oracle` 和 `validation.agent` 初始化为 `not_run`。这些字段只记录数据集验证状态，
+当前不会随 benchmark 运行自动更新；本次运行的官方评分仍以结果目录中的产物为准。
+
+DSH 的 `single` 与 `plan-subagent` 使用同一份数据和 `run` 命令。每次运行前，运行器会把固定版本
+`0.2.1-rc.2` 的 DSH 与受支持的 Node 从宿主机复制进任务容器。若默认 `node` 版本较旧，
+设置 `DSH_NODE_EXECUTABLE` 指向 Node 22.19+。两题验证时设置 `--task-num 2`、
+`--agent-type dsh --agent-executable dsh --endpoint /v1/chat/completions`，
+再分别指定 `--agent-profile single` 和 `--agent-profile plan-subagent`；两次运行使用不同的 `--result-dir`。
+宿主机上的 `dsh` 可执行文件也必须对应 `0.2.1-rc.2`。
+
+Terminal-Bench 的运行前检查独立于 SWE-bench：共同检查 Harbor、Docker Compose 和 Docker bridge 网关；
+Claude 检查宿主机 CLI 版本，容器安装由 Harbor 完成，不要求宿主机安装 `tmux`、`bwrap` 或 `socat`；
+DSH 检查安装包版本、指定的 Node 版本，并用该 Node 执行 DSH 版本探测。
+通过后保存 `evidence/claude-runtime.json` 或 `evidence/dsh-runtime.json`。
+这些宿主机检查不代表容器安装或容器到模型入口的连通性已经验证，仍需实际运行确认。
+ZCode 尚无 Terminal-Bench 的 Harbor 适配器，运行前检查会明确拒绝；SWE-bench 的 ZCode 检查与运行保持不变。
+
+设计范围与后续 Agent 适配见 [RFC #76](https://github.com/openJiuwen-ai/agent-infer/issues/76)。
+
 ## 运行一次冷启动对比
 
 仓库脚本会依次启动基线服务、运行任务、彻底停止服务，再启动候选服务并输出比较报告：

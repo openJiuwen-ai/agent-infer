@@ -249,6 +249,11 @@ async def _run_tasks(
 ) -> None:
     owner = owner or WorkspaceProcessOwner()
     config = context.config
+    if config.dataset.name == "terminalbench":
+        from .terminalbench import run_terminalbench_tasks
+
+        await run_terminalbench_tasks(context, api_base_url, results)
+        return
     cache = config.dataset.cache_dir.resolve()
     for task in context.tasks:
         await asyncio.to_thread(ensure_repo_cache, task, cache, owner)
@@ -440,7 +445,12 @@ def _trace_capture(path: Path, close_result) -> EvidenceCapture:
 
 
 async def check_preflight(config: AgentBenchConfig) -> AgentPreflightReport | None:
-    report = await check_agent_preflight(config.agent.type, config.agent.executable)
+    if config.dataset.name == "terminalbench":
+        from .terminalbench import check_terminalbench_preflight
+
+        report = await asyncio.to_thread(check_terminalbench_preflight, config)
+    else:
+        report = await check_agent_preflight(config.agent.type, config.agent.executable)
     url = f"{config.backend.base_url.rstrip('/')}/v1/models"
     try:
         async with httpx.AsyncClient(timeout=10, trust_env=False) as client:

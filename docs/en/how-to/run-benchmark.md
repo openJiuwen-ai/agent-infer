@@ -46,6 +46,61 @@ vllm bench serve --agentinfer prepare swebench \
 
 The command creates `instances.jsonl`, `task-lists/default.txt`, and `manifest.json`.
 
+## Experimental Terminal-Bench 4.1.0 single-task run
+
+The current path supports Claude Code `single` and DSH `single` or `plan-subagent` through Harbor and Docker.
+Confirm `docker compose version` works.
+Install Harbor in a separate Python 3.12 environment, for example with
+`uv tool install --python 3.12 harbor==0.25.0`, then prepare the pinned dataset:
+
+```bash
+vllm bench serve --agentinfer prepare terminalbench \
+  --output-dir agentinfer/agentbench/data/terminalbench
+```
+
+Preparation pins `terminal-bench/terminal-bench@4.1.0`. Existing 4.0.0 data is not upgraded automatically;
+prepare into a new empty output directory and update the dataset paths in the config.
+
+Set the actual model URL and name in `agentinfer/agentbench/configs/terminalbench_vllm.yaml`, then run one task:
+
+```bash
+vllm bench serve --agentinfer run \
+  --config agentinfer/agentbench/configs/terminalbench_vllm.yaml \
+  --agent-type claude --agent-profile single \
+  --agent-executable claude --endpoint /v1/messages \
+  --task-num 1 --result-dir results/claude-smoke
+```
+
+Use a result directory that does not exist yet. Preparation exports all task packages; `task-lists/selected.txt` is currently
+a CPU candidate set selected from task resource fields, not a fully oracle-validated subset. The run retains raw
+Harbor logs, per-task `verifier.json`, `correctness.json`, request facts, and the summary. Summary
+`correctness.available` is true only when every selected task has a valid reward; agent completion does not imply
+task success. The container must reach the model gateway on the Docker bridge. Validate networking and image
+availability with one task first; JiuwenSwarm, other profiles, GPU, and multi-service tasks still need adapters.
+
+For existing Terminal-Bench data directories, rename `task-lists/default.txt` to `selected.txt` to match the updated config.
+
+The preparation `manifest.json` records `selection_status` as `candidate` and initializes the separate
+`validation.oracle` and `validation.agent` fields to `not_run`. These fields describe dataset validation status
+and are currently not updated automatically by benchmark runs; official scores remain in the run output directory.
+
+DSH `single` and `plan-subagent` use the same dataset and run command. The runner copies pinned DSH
+`0.2.1-rc.2` and a supported host Node runtime into each task container. Set `DSH_NODE_EXECUTABLE`
+to a Node 22.19+ binary if the default `node` is older. For a two-task run, set `--task-num 2`,
+`--agent-type dsh --agent-executable dsh --endpoint /v1/chat/completions`, and either
+`--agent-profile single` or `--agent-profile plan-subagent`. Use a separate `--result-dir` for each profile.
+The host `dsh` executable must also resolve to version `0.2.1-rc.2`.
+
+Terminal-Bench preflight is separate from SWE-bench: it checks Harbor, Docker Compose, and the Docker bridge gateway.
+For Claude it probes the host CLI version; Harbor handles container installation, so host `tmux`, `bwrap`, and `socat`
+are not required. For DSH it checks the package and selected Node versions, then probes DSH with that Node.
+Successful checks are recorded in `evidence/claude-runtime.json` or `evidence/dsh-runtime.json`.
+These host checks do not verify container installation or connectivity from the container to the model gateway;
+an actual run is still required. ZCode has no Terminal-Bench Harbor adapter yet and is rejected during preflight.
+SWE-bench ZCode checks and execution remain unchanged.
+
+See [RFC #76](https://github.com/openJiuwen-ai/agent-infer/issues/76) for the design scope and additional agent adapters.
+
 ## Run One Cold Comparison
 
 The repository script starts the baseline, runs the workload, stops the service completely, starts the candidate,
