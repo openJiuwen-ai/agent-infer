@@ -1,5 +1,5 @@
 {
-  "test_name": "qwen3_8b_claude_2x1_single",
+  "test_name": "qwen3_coder_claude_2x1_single",
   "scenario": "baseline",
   "mark": [
     {
@@ -7,23 +7,23 @@
         "res": {
           "cuda": "L20"
         },
-        "num_cards": 1
+        "num_cards": 2
       }
     }
   ],
-  "description": "Qwen3-8B on 1x L20 + Claude Code single functional smoke, 2 tasks x 1 concurrency",
+  "description": "Qwen3-Coder-30B-A3B-Instruct BF16 on 2x L20 + Claude Code single functional smoke, 2 tasks x 1 concurrency",
   "server_params": {
-    "model": "Qwen/Qwen3-8B",
+    "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
     "serve_args": {
-      "served-model-name": "Qwen/Qwen3-8B",
+      "served-model-name": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
       "enable-prefix-caching": true,
-      "tensor-parallel-size": 1,
-      "tool-call-parser": "hermes",
+      "tensor-parallel-size": 2,
+      "tool-call-parser": "qwen3_coder",
       "enable-auto-tool-choice": true,
-      "max-model-len": 32768,
-      "max-num-seqs": 4,
+      "max-model-len": 65536,
+      "max-num-seqs": 2,
       "gpu-memory-utilization": 0.9,
-      "reasoning-parser": "deepseek_r1"
+      "dtype": "bfloat16"
     }
   },
   "result_root": "test-results/function/claude",
@@ -32,7 +32,7 @@
     "prepare_dataset": "swebench",
     "prepare_output_dir": "agentinfer/agentbench/data/swebench",
     "host": "127.0.0.1",
-    "model": "Qwen/Qwen3-8B",
+    "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
     "agent-executable": "claude",
     "agent-profile": "single",
     "task-num": 2,

@@ -14,7 +14,7 @@ dataset:
   cache_dir: ../data/swebench/repo-cache
 
 agent:
-  context_window: 32768
+  context_window: 65536
   max_tokens: 8192
   type: jiuwenswarm
   profile: code.normal
@@ -23,7 +23,7 @@ agent:
 backend:
   type: vllm
   base_url: http://127.0.0.1:8000
-  model: Qwen/Qwen3-8B
+  model: Qwen/Qwen3-Coder-30B-A3B-Instruct
   endpoint: /v1/chat/completions
   api_key_env: null
 

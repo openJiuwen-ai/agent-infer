@@ -22,12 +22,14 @@ launching the run.
 
 Run on Linux with GPU access, vLLM, Git, and dataset/model access. Edit the case
 model path, serving options, executable, and hardware marks for your host.
-All examples use `Qwen/Qwen3-8B` on one L20, tensor parallelism one, a 32K context limit,
-and at most four active sequences. The model uses its Hugging Face repository ID.
+All examples use `Qwen/Qwen3-Coder-30B-A3B-Instruct` in BF16 on two L20s,
+tensor parallelism two, a 64K context limit, and at most two active sequences.
+The model uses its Hugging Face repository ID.
 The `2x1` in case names means two tasks and one concurrent task, not two GPUs.
 Cases omit a fixed serving port so the shared helper selects an available
 loopback port when jobs share a host.
-Qwen3 uses the `hermes` tool-call parser and `deepseek_r1` reasoning parser.
+The model natively supports 64K, so these cases do not use YaRN scaling.
+They use the `qwen3_coder` tool-call parser without a reasoning parser.
 
 | Agent | Additional requirements |
 | --- | --- |
@@ -49,25 +51,26 @@ ZCode requires external sandboxing for production benchmarks; see the
 
 ```bash
 pytest -s tests/e2e/function/agentbench/test_swebench.py \
-  --test-config-file tests/e2e/function/agentbench/cases/claude/qwen3_8b_claude_2x1_single.json
+  --test-config-file tests/e2e/function/agentbench/cases/claude/qwen3_coder_claude_2x1_single.json
 pytest -s tests/e2e/function/agentbench/test_swebench.py \
-  --test-config-file tests/e2e/function/agentbench/cases/dsh/qwen3_8b_dsh_2x1_plan_subagent.json
+  --test-config-file tests/e2e/function/agentbench/cases/dsh/qwen3_coder_dsh_2x1_plan_subagent.json
 pytest -s tests/e2e/function/agentbench/test_swebench.py \
-  --test-config-file tests/e2e/function/agentbench/cases/jiuwenswarm/qwen3_8b_jiuwenswarm_2x1_code_normal.json
+  --test-config-file tests/e2e/function/agentbench/cases/jiuwenswarm/qwen3_coder_jiuwenswarm_2x1_code_normal.json
 pytest -s tests/e2e/function/agentbench/test_swebench.py \
-  --test-config-file tests/e2e/function/agentbench/cases/zcode/qwen3_8b_zcode_2x1_plan_subagent.json \
+  --test-config-file tests/e2e/function/agentbench/cases/zcode/qwen3_coder_zcode_2x1_plan_subagent.json \
   --benchmark-run-as-user test-user
 ```
 
 Use `--task-num` and `--max-concurrency` to override the load, and
-`-m 'cuda and cards_1'` to select by case hardware marks. Without a case
+`-m 'cuda and cards_2'` to select by case hardware marks. Without a case
 file the test skips. Missing prerequisites fail an explicitly selected case.
 
 ## Validation and evidence
 
 The Buildkite ready pipeline has separate DSH, Claude Code, JiuwenSwarm, and
-ZCode jobs on the `l20_1` preset. Each uses the unified entry and the
-`cuda and cards_1` marker selection. Claude Code and ZCode each run both
+ZCode jobs on the `l20_2` preset. The dual-GPU queue must share the image build host's Docker daemon.
+Each uses the unified entry and the
+`cuda and cards_2` marker selection. Claude Code and ZCode each run both
 profiles; JiuwenSwarm runs code.normal. All four jobs explicitly invoke pytest
 as root in the pipeline YAML. Dataset preparation and vLLM remain root;
 only plan-subagent bench subprocesses switch to `test-user` through the
