@@ -1,0 +1,47 @@
+{
+  "test_name": "qwen3_coder_dsh_2x1",
+  "scenario": "baseline",
+  "mark": [
+    {
+      "hardware_marks": {
+        "res": {
+          "cuda": "L20"
+        },
+        "num_cards": 2
+      }
+    }
+  ],
+  "description": "Qwen3-Coder-30B-A3B-Instruct-FP8 on 2x L20 + DSH single, SWE-bench Verified 2 tasks x 1 concurrency",
+  "serve_env": {
+    "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1"
+  },
+  "server_params": {
+    "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+    "middleware": [],
+    "serve_args": {
+      "served-model-name": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+      "tensor-parallel-size": 2,
+      "async-scheduling": true,
+      "scheduler-cls": "vllm.v1.core.sched.async_scheduler.AsyncScheduler",
+      "enable-prefix-caching": true,
+      "enable-prompt-tokens-details": true,
+      "enable-auto-tool-choice": true,
+      "tool-call-parser": "qwen3_coder"
+    }
+  },
+  "result_root": "test-results/vllm",
+  "benchmark_params": {
+    "config": "agentinfer/agentbench/configs/swebench_vllm_dsh.yaml",
+    "prepare_dataset": "swebench",
+    "prepare_output_dir": "agentinfer/agentbench/data/swebench",
+    "host": "127.0.0.1",
+    "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+    "agent-type": "dsh",
+    "agent-executable": "/usr/local/bin/dsh",
+    "agent-profile": "single",
+    "endpoint": "/v1/chat/completions",
+    "task-num": 2,
+    "max-concurrency": 1,
+    "timeout": 14400
+  }
+}

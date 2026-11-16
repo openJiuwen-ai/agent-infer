@@ -9,6 +9,7 @@ import asyncio
 import json
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from agentinfer.agentbench.agents.registry import RUNTIMES
 from agentinfer.agentbench.benchkit.cli import main
 from agentinfer.agentbench.benchkit.config import AgentBenchConfig
 from agentinfer.agentbench.benchkit.runner import run_benchmark
+from agentinfer.agentbench.request_proxy import RequestProxyLifecycle, RequestTraceWriter
 
 from .helpers.benchmark_smoke import FakeAgentRuntime, FakeModelServer, ThreadBarrier, ThreadRequestProxyProcess
 
@@ -123,6 +125,22 @@ def _json(path: Path) -> dict[str, object]:
 def test_benchmark_cli_runs_full_contract_with_fake_agent_and_backend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    release = threading.Event()
+    pending = {}
+    original_append = RequestTraceWriter._append
+    original_close = RequestProxyLifecycle.close
+
+    def append(writer, fact):
+        assert release.wait(20), "trace writer was not released during finalization"
+        original_append(writer, fact)
+
+    async def close(lifecycle):
+        release.set()
+        pending.update(_json(lifecycle.output_dir / "tasks" / "task-a" / "result.json"))
+        return await original_close(lifecycle)
+
+    monkeypatch.setattr(RequestTraceWriter, "_append", append)
+    monkeypatch.setattr(RequestProxyLifecycle, "close", close)
     runtime = FakeAgentRuntime()
     monkeypatch.setitem(RUNTIMES, "jiuwenswarm", runtime)
     with FakeModelServer(tmp_path / "backend") as backend:
@@ -130,7 +148,10 @@ def test_benchmark_cli_runs_full_contract_with_fake_agent_and_backend(
         config_path = tmp_path / "benchmark.yaml"
         _write_config(config, config_path)
 
-        assert main(["run", "--config", str(config_path)]) == 0
+        try:
+            assert main(["run", "--config", str(config_path)]) == 0
+        finally:
+            release.set()
 
     run_dir = tmp_path / "run"
     result = _json(run_dir / "tasks" / "task-a" / "result.json")
@@ -165,6 +186,8 @@ def test_benchmark_cli_runs_full_contract_with_fake_agent_and_backend(
     assert result["outcome"] == "completed"
     assert result["has_patch"] is True
     assert result["topology"] == {"session_id": session_id, "agent_ids": ["lead"], "agent_roles": {"lead": "lead"}}
+    assert pending["topology"]["agent_ids"] == []
+    assert result == {**pending, "topology": result["topology"]}
     assert task_index["tasks"][0]["instance_id"] == "task-a"
     assert task_index["tasks"][0]["session_id"] == session_id
     assert summary["tasks"]["completed"] == 1
@@ -208,6 +231,12 @@ def test_two_tasks_overlap_keep_identity_and_finalize_partial_failure(
     assert second["outcome"] == "failed"
     assert second["termination_reason"] == "interrupted"
     assert second["error"] is None
+    for result in (first, second):
+        assert result["topology"] == {
+            "session_id": result["session_id"],
+            "agent_ids": ["lead"],
+            "agent_roles": {"lead": "lead"},
+        }
     assert [row["instance_id"] for row in task_index["tasks"]] == ["task-a", "task-b"]
     assert [row["task_position"] for row in task_index["tasks"]] == [0, 1]
     assert summary["tasks"]["completed"] == 1

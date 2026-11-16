@@ -45,10 +45,8 @@ def test_single_profile_enforces_one_agent_tool_policy() -> None:
         "tool-subagent-fork",
         "tool-subagent-control",
         "tool-subagent-list-agents",
-        "tool-subagent-report",
         "tool-workflow",
-        "workflow-worker-thread",
-        "tool-ralph",
+        "workflow-ptc",
         "tool-goal",
         "goal-round-driver",
         "command-goal",
@@ -72,14 +70,9 @@ def test_plan_subagent_profile_requires_read_only_exploration() -> None:
     assert "Each subagent is read-only" in prompt
     assert "Do not delegate implementation" in prompt
     assert "Do not ask the user questions" in prompt
-    assert "backgroundMode: one-shot" in profile.policy_patch
     assert "maxDepth: 1" in profile.policy_patch
-    assert "You are a focused Explore subagent" in profile.policy_patch
-    assert "    toolFilter:\n      allow:" in profile.policy_patch
-    for tool in ("glob", "grep", "read"):
-        assert f"        - {tool}" in profile.policy_patch
-    assert "        - subagent\n" not in profile.policy_patch
-    assert "        - bash\n" not in profile.policy_patch
+    assert "persona:" not in profile.policy_patch
+    assert "toolFilter:" not in profile.policy_patch
 
 
 def test_unknown_profile_is_rejected() -> None:

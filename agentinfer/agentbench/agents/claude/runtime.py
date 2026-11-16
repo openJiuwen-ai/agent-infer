@@ -18,6 +18,7 @@ class ClaudeRuntime:
 
     agent_type = "claude"
     required_endpoint = REQUIRED_ENDPOINT
+    supports_api_key_env = True
     usage_observer_class = _AnthropicSSEUsageObserver
 
     def get_profile(self, name: str) -> AgentProfile:

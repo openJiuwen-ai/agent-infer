@@ -1,0 +1,38 @@
+# SWE-bench Verified on vLLM with DeepSeek Harness (DSH).
+#
+# Pair with CLI overrides:
+#   --agent-type dsh --agent-executable dsh --agent-profile single|plan-subagent
+#   --endpoint /v1/chat/completions
+
+experiment:
+  task_num: null
+  result_dir: ../result_vllm
+  max_concurrency: 1
+  task_timeout_seconds: 3600
+  run_timeout_seconds: null
+  patch_flush_seconds: 15
+  prompt_delivery_timeout_seconds: 30
+
+dataset:
+  name: swebench_verified
+  index_path: ../data/swebench/instances.jsonl
+  selection_path: ../data/swebench/task-lists/default.txt
+  cache_dir: ../data/swebench/repo-cache
+
+agent:
+  type: dsh
+  profile: single
+  executable: dsh
+
+backend:
+  type: vllm
+  base_url: http://127.0.0.1:8000
+  model: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8
+  endpoint: /v1/chat/completions
+  api_key_env: null
+
+request_proxy:
+  listen_url: http://127.0.0.1:0
+  request_timeout_seconds: 3600
+  startup_timeout_seconds: 120
+  shutdown_timeout_seconds: 30

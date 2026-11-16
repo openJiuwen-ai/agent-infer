@@ -23,6 +23,7 @@ class ExperimentConfig(StrictModel):
     task_timeout_seconds: int = Field(3600, ge=1, json_schema_extra={"cli": {"flag": "--timeout"}})
     run_timeout_seconds: int | None = Field(None, ge=1)
     patch_flush_seconds: int = Field(15, ge=0)
+    cleanup_timeout_seconds: float = Field(10.0, gt=0, allow_inf_nan=False)
     prompt_delivery_timeout_seconds: int = Field(30, ge=1)
 
 
@@ -36,7 +37,7 @@ class DatasetConfig(StrictModel):
 
 
 class AgentConfig(StrictModel):
-    type: Literal["claude", "jiuwenswarm", "dsh"] = Field(
+    type: Literal["claude", "jiuwenswarm", "dsh", "zcode"] = Field(
         "claude", json_schema_extra={"cli": {"flag": "--agent-type", "dest": "agent_type"}}
     )
     profile: str = Field("single", json_schema_extra={"cli": {"flag": "--agent-profile", "dest": "agent_profile"}})
@@ -45,6 +46,20 @@ class AgentConfig(StrictModel):
     )
     tmux_startup_seconds: float = Field(2.0, ge=0)
     terminal_capture_interval_seconds: int = Field(30, ge=1)
+    context_window: int = Field(262144, ge=1)
+    max_tokens: int = Field(8192, ge=1)
+    max_subagents: int = Field(
+        1,
+        ge=1,
+        description="Maximum child launches per task for profiles supporting subagent limits",
+        json_schema_extra={"cli": True},
+    )
+    max_concurrent_subagents: int = Field(
+        1,
+        ge=1,
+        description="Maximum concurrent children per task for profiles supporting subagent limits",
+        json_schema_extra={"cli": True},
+    )
 
     @model_validator(mode="after")
     def validate_runtime_profile(self) -> "AgentConfig":
@@ -52,10 +67,17 @@ class AgentConfig(StrictModel):
 
         from ..agents.registry import get_runtime
 
+        if self.max_concurrent_subagents > self.max_subagents:
+            raise ValueError("agent.max_concurrent_subagents must not exceed agent.max_subagents")
         try:
-            get_runtime(self.type).get_profile(self.profile)
+            profile = get_runtime(self.type).get_profile(self.profile)
         except ValueError as exc:
             raise ValueError(f"agent.profile {self.profile!r} is invalid for agent.type {self.type!r}") from exc
+        # Defaults are also serialized by CLI overrides for profiles without limit support.
+        if (self.max_subagents, self.max_concurrent_subagents) != (1, 1) and not profile.supports_subagent_limits:
+            raise ValueError(
+                f"agent.profile {self.profile!r} for agent.type {self.type!r} does not support subagent limits"
+            )
         return self
 
 
@@ -117,15 +139,21 @@ class AgentBenchConfig(StrictModel):
 
     @model_validator(mode="after")
     def validate_agent_endpoint(self) -> "AgentBenchConfig":
-        """Require the model protocol used by the selected runtime."""
+        """Validate the selected runtime's backend protocol and authentication."""
 
         from ..agents.registry import get_runtime
 
-        required_endpoint = get_runtime(self.agent.type).required_endpoint
+        runtime = get_runtime(self.agent.type)
+        required_endpoint = runtime.required_endpoint
         if self.backend.endpoint != required_endpoint:
             raise ValueError(
                 f"backend.endpoint {self.backend.endpoint!r} is invalid for "
                 f"agent.type {self.agent.type!r}; expected {required_endpoint!r}"
+            )
+        if self.backend.api_key_env and not runtime.supports_api_key_env:
+            raise ValueError(
+                f"agent.type {self.agent.type!r} does not yet support backend.api_key_env; "
+                "use an unauthenticated local backend"
             )
         return self
 

@@ -5,8 +5,8 @@
 
 The harness dispatches profile lookup, preflight, endpoint requirement, and
 execution through this interface. Concrete runtimes keep their own policy
-fields (e.g. Claude's ``tool_policy``) on the concrete profile type; only the
-common denominator (``name`` + ``build_prompt``) is declared here.
+fields (e.g. Claude's ``tool_policy``) on the concrete profile type; only shared
+profile fields and capabilities are declared here.
 """
 
 from collections.abc import Callable
@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from ..benchkit.dataset import Task
 
 if TYPE_CHECKING:
-    from .contracts import AgentRunRequest, AgentRunResult
+    from .contracts import AgentPreflightReport, AgentRunRequest, AgentRunResult
 
 
 @runtime_checkable
@@ -25,6 +25,7 @@ class AgentProfile(Protocol):
 
     name: str
     build_prompt: Callable[[Task], str]
+    supports_subagent_limits: bool
 
 
 @runtime_checkable
@@ -39,10 +40,11 @@ class AgentRuntime(Protocol):
 
     agent_type: str
     required_endpoint: str
+    supports_api_key_env: bool
     usage_observer_class: type
 
     def get_profile(self, name: str) -> AgentProfile: ...
 
-    async def preflight(self, executable: Path) -> None: ...
+    async def preflight(self, executable: Path) -> "AgentPreflightReport | None": ...
 
     async def run(self, request: "AgentRunRequest") -> "AgentRunResult": ...

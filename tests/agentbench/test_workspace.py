@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 
+import os
 import subprocess
 import sys
 import time
@@ -247,3 +248,24 @@ def test_run_command_failure_includes_command_context(tmp_path: Path, monkeypatc
     assert f"cwd: {tmp_path}" in message
     assert "exit code 7" in message
     assert "fatal: nope" in message
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process groups")
+def test_owner_kills_descendant_after_group_leader_exits(tmp_path):
+    child_pid = tmp_path / "child.pid"
+    script = (
+        "import subprocess,sys; from pathlib import Path; "
+        "p=subprocess.Popen([sys.executable,'-c','import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(60)']); "
+        f"Path({str(child_pid)!r}).write_text(str(p.pid))"
+    )
+    owner = WorkspaceProcessOwner(time.monotonic() + 0.3)
+    with pytest.raises(TimeoutError):
+        owner.run([sys.executable, "-c", script], cwd=tmp_path)
+    pid = int(child_pid.read_text())
+    # The group leader is already reaped; an orphan zombie is awaiting init,
+    # whereas a sleeping descendant would still own the capture pipe.
+    status = Path(f"/proc/{pid}/stat")
+    deadline = time.monotonic() + 1
+    while status.exists() and status.read_text().split()[2] != "Z":
+        assert time.monotonic() < deadline, "descendant survived process-group cleanup"
+        time.sleep(0.01)

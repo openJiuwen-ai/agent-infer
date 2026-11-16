@@ -28,6 +28,7 @@ from .mock_server import MockServerProcess
 @dataclass(frozen=True)
 class FakeProfile:
     name: str = "code.normal"
+    supports_subagent_limits: bool = False
 
     @staticmethod
     def build_prompt(task: Task) -> str:
@@ -136,6 +137,7 @@ class FakeAgentRuntime:
 
     agent_type = "jiuwenswarm"
     required_endpoint = "/v1/chat/completions"
+    supports_api_key_env = True
     usage_observer_class = _OpenAISSEUsageObserver
 
     def __init__(

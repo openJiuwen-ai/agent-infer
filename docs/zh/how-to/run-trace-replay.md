@@ -26,7 +26,7 @@ tokenizer 文件，并且本地与后端的原始文本和聊天模板 token ID 
 
 ```bash
 vllm bench serve --agentinfer replay \
-  --config agentinfer/agentbench/configs/replay_benchmark.yaml \
+  --config agentinfer/agentbench/configs/replay_agentinfer.yaml \
   --base-url http://127.0.0.1:8000 \
   --model MODEL_NAME --task-num 8 --max-concurrency 4 \
   --result-dir results/replay-smoke
@@ -34,6 +34,9 @@ vllm bench serve --agentinfer replay \
 
 结果目录必须不存在。CLI 路径相对于当前目录，YAML 路径相对于配置文件目录。
 默认配置包含用于样例的合成前缀预算；换用其他录制源时需重新标定，后端上下文长度须容纳请求目标。
+
+AgentInfer 模板使用 token-ID 提示词：配置端点为 `/v1/chat/completions`，实际请求发送到
+`/v1/completions`。后端须支持流式返回输出 token IDs 和 usage。
 
 ## 回放 TraceLab
 
@@ -199,7 +202,7 @@ Replay 同时设置 `max_tokens` 和 `min_tokens` 为源 trace 的输出目标�
 | `replay.request_timeout_seconds` | 单请求超时。 |
 
 完整字段、默认值和约束见[Replay 配置模型](../../../agentinfer/agentbench/replay/config.py)与
-[示例 YAML](../../../agentinfer/agentbench/configs/replay_benchmark.yaml)。运行
+[AgentInfer 模板](../../../agentinfer/agentbench/configs/replay_agentinfer.yaml)。运行
 `vllm bench serve --agentinfer replay --help` 查看支持的 CLI 覆盖参数。
 
 ### 回放 AgentX Hash 快照

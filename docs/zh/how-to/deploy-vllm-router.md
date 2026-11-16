@@ -420,10 +420,10 @@ docker run -d --name vllm-router \
     --add-host=host.docker.internal:host-gateway \
     vllm-router:v0.1.15-amd64 \
     --worker-urls http://host.docker.internal:8000 ...
-  
+
   # 写法2：直接填宿主机局域网 IP
   --worker-urls http://192.168.x.x:8000
-  
+
   # 写法3：host 网络模式（此时 127.0.0.1 真的指宿主机；不能再用 -p 映射）
   docker run -d --name vllm-router --network host ... --worker-urls http://127.0.0.1:8000 ...
   ```

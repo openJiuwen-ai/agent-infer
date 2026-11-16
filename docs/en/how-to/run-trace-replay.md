@@ -111,7 +111,7 @@ Run from the repository root, replacing `MODEL_NAME` with the actual served mode
 
 ```bash
 vllm bench serve --agentinfer replay \
-  --config agentinfer/agentbench/configs/replay_benchmark.yaml \
+  --config agentinfer/agentbench/configs/replay_agentinfer.yaml \
   --base-url http://127.0.0.1:8000 \
   --model MODEL_NAME --task-num 8 --max-concurrency 4 \
   --result-dir results/replay-smoke
@@ -120,6 +120,9 @@ vllm bench serve --agentinfer replay \
 The result directory must not exist. CLI paths resolve from the current directory; YAML paths resolve from the
 configuration directory. The example includes synthetic prefix budgets for the sample; recalibrate these for other
 recording sources. The backend context window must accommodate the request targets.
+
+The AgentInfer template uses token-ID prompts: its configured endpoint is `/v1/chat/completions`, while requests
+are sent to `/v1/completions`. The backend must stream output token IDs and usage.
 
 ## Inputs and configuration
 
@@ -137,7 +140,7 @@ recording sources. The backend context window must accommodate the request targe
 
 For all fields, defaults, and constraints see the [Replay configuration
 model](../../../agentinfer/agentbench/replay/config.py)
-and [example YAML](../../../agentinfer/agentbench/configs/replay_benchmark.yaml).
+and [AgentInfer template](../../../agentinfer/agentbench/configs/replay_agentinfer.yaml).
 Run `vllm bench serve --agentinfer replay --help` to list supported CLI overrides.
 
 ### Replay AgentX hash snapshots

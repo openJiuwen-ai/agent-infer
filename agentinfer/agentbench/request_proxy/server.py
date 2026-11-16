@@ -244,7 +244,9 @@ class RequestProxyServer:
                     if observed is not None and usage_parser.observe(observed) and first is None:
                         first = time.monotonic() - started_clock
                 except asyncio.CancelledError:
-                    error = "request cancelled"
+                    # SDKs can close HTTP immediately after the protocol's final
+                    # event. Only cancellation before that event is a failed request.
+                    error = None if usage_parser.completed else "request cancelled"
                     raise
                 except Exception as exc:
                     error = f"{type(exc).__name__}: {exc}"

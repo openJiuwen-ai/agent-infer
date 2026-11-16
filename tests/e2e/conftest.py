@@ -30,3 +30,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=None,
         help="Override benchmark_params max-concurrency",
     )
+    group.addoption(
+        "--benchmark-run-as-user",
+        action="store",
+        default=None,
+        metavar="USER",
+        help="For plan-subagent only: run bench subprocess as USER via sudo when pytest runs as root",
+    )

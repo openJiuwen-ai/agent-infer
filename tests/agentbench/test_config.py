@@ -1,17 +1,87 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from agentinfer.agentbench.agents.registry import get_runtime
 from agentinfer.agentbench.benchkit.config import (
     AgentBenchConfig,
+    AgentConfig,
     RequestProxyConfig,
     load_config,
     resolve_config_paths,
 )
+
+
+def test_zcode_subagent_limits():
+    config = AgentConfig(type="zcode", profile="plan-subagent", max_subagents=4, max_concurrent_subagents=2)
+    assert (config.max_subagents, config.max_concurrent_subagents) == (4, 2)
+    assert (AgentConfig().max_subagents, AgentConfig().max_concurrent_subagents) == (1, 1)
+
+
+@pytest.mark.parametrize(
+    ("agent_type", "profile_name", "supports_limits"),
+    [
+        ("claude", "single", False),
+        ("claude", "plan-subagent", False),
+        ("dsh", "single", False),
+        ("dsh", "plan-subagent", False),
+        ("jiuwenswarm", "code.normal", False),
+        ("zcode", "single", False),
+        ("zcode", "plan-subagent", True),
+    ],
+)
+def test_subagent_limits_preserve_profile_defaults(agent_type: str, profile_name: str, supports_limits: bool) -> None:
+    config = AgentConfig.model_validate({"type": agent_type, "profile": profile_name})
+    payload = config.model_dump(mode="python")
+    assert (config.max_subagents, config.max_concurrent_subagents) == (1, 1)
+    assert AgentConfig.model_validate(payload) == config
+
+    payload.update(max_subagents=4, max_concurrent_subagents=2)
+    if supports_limits:
+        updated = AgentConfig.model_validate(payload)
+        assert (updated.max_subagents, updated.max_concurrent_subagents) == (4, 2)
+    else:
+        with pytest.raises(ValidationError, match="does not support subagent limits"):
+            AgentConfig.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("agent_type", "profile_name", "supports_limits"), [("dsh", "single", True), ("zcode", "plan-subagent", False)]
+)
+def test_subagent_limits_follow_profile_capability(
+    agent_type: str, profile_name: str, supports_limits: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = get_runtime(agent_type)
+    profile = replace(runtime.get_profile(profile_name), supports_subagent_limits=supports_limits)
+    monkeypatch.setattr(runtime, "get_profile", lambda name: profile)
+    payload = {"type": agent_type, "profile": profile_name, "max_subagents": 4, "max_concurrent_subagents": 2}
+
+    if supports_limits:
+        config = AgentConfig.model_validate(payload)
+        assert (config.max_subagents, config.max_concurrent_subagents) == (4, 2)
+    else:
+        with pytest.raises(ValidationError, match="does not support subagent limits"):
+            AgentConfig.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"max_subagents": 0},
+        {"max_concurrent_subagents": 0},
+        {"max_subagents": 1, "max_concurrent_subagents": 2},
+        {"type": "dsh", "max_subagents": 4},
+        {"profile": "single", "max_subagents": 4},
+    ],
+)
+def test_invalid_subagent_limits(values):
+    with pytest.raises(ValueError):
+        AgentConfig.model_validate({"type": "zcode", "profile": "plan-subagent", **values})
 
 
 def test_defaults_and_nested_overrides() -> None:
@@ -74,6 +144,25 @@ def test_dsh_profile_and_openai_endpoint() -> None:
     assert config.agent.type == "dsh"
     assert config.agent.profile == "plan-subagent"
     assert config.backend.endpoint == "/v1/chat/completions"
+
+
+def test_dsh_authenticated_backend_is_rejected_before_execution(tmp_path: Path) -> None:
+    output = tmp_path / "run"
+    with pytest.raises(ValidationError, match="does not yet support backend.api_key_env"):
+        AgentBenchConfig.model_validate(
+            {
+                "experiment": {"result_dir": output},
+                "agent": {"type": "dsh"},
+                "backend": {"endpoint": "/v1/chat/completions", "api_key_env": "TEST_SECRET_NAME"},
+            }
+        )
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("budget", [0, -1, float("inf"), float("nan")])
+def test_cleanup_budget_must_be_positive_and_finite(budget: float) -> None:
+    with pytest.raises(ValidationError, match="cleanup_timeout_seconds"):
+        AgentBenchConfig.model_validate({"experiment": {"cleanup_timeout_seconds": budget}})
 
 
 @pytest.mark.parametrize(
@@ -223,3 +312,28 @@ def test_sample_yaml_loads(
     assert config.backend.metrics_url == metrics_url
     assert config.agent.type == agent_type
     assert config.backend.endpoint == endpoint
+
+
+@pytest.mark.parametrize(
+    "agent_type,profile,endpoint",
+    [
+        ("claude", "single", "/v1/messages"),
+        ("jiuwenswarm", "code.normal", "/v1/chat/completions"),
+    ],
+)
+def test_authenticated_backend_is_allowed_by_runtime(agent_type, profile, endpoint):
+    config = AgentBenchConfig.model_validate(
+        {
+            "agent": {"type": agent_type, "profile": profile},
+            "backend": {"endpoint": endpoint, "api_key_env": "TEST_SECRET_NAME"},
+        }
+    )
+    assert config.backend.api_key_env == "TEST_SECRET_NAME"
+
+
+def test_authentication_validation_uses_runtime_capability(monkeypatch):
+    from agentinfer.agentbench.agents.registry import get_runtime
+
+    monkeypatch.setattr(get_runtime("claude"), "supports_api_key_env", False)
+    with pytest.raises(ValidationError, match="does not yet support backend.api_key_env"):
+        AgentBenchConfig.model_validate({"backend": {"api_key_env": "TEST_SECRET_NAME"}})

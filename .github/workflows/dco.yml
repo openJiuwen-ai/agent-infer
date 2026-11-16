@@ -1,0 +1,35 @@
+name: DCO
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+# Requires a Signed-off-by trailer on every non-merge commit in the pull request.
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check DCO sign-off
+        run: |
+          commits=$(git rev-list --no-merges "origin/${{ github.base_ref }}..HEAD")
+          for commit in $commits; do
+            if ! git log -1 --format="%B" "$commit" | grep -q "^Signed-off-by:"; then
+              echo "::error::Commit $commit is missing Signed-off-by"
+              exit 1
+            fi
+          done

@@ -89,12 +89,15 @@ class WorkspaceProcessOwner:
 
     @staticmethod
     def _terminate(process: subprocess.Popen) -> None:
-        if process.poll() is not None:
-            return
         if os.name == "nt":
+            if process.poll() is not None:
+                return
             process.send_signal(signal.CTRL_BREAK_EVENT)
         else:
-            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                return
         try:
             process.wait(timeout=0.2)
         except subprocess.TimeoutExpired:
@@ -113,6 +116,13 @@ class WorkspaceProcessOwner:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
+        finally:
+            # A reaped group leader can leave descendants holding our pipes.
+            if os.name != "nt":
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
 
 def _output_snippet(value: bytes | str | None) -> str:
@@ -294,12 +304,12 @@ def workspace_has_changes(workspace: Path) -> bool:
     return bool(result.stdout)
 
 
-def export_patch(workspace: Path) -> str:
+def export_patch(workspace: Path, owner: WorkspaceProcessOwner | None = None) -> str:
     """Export tracked and untracked workspace changes from the base commit."""
 
     with tempfile.TemporaryDirectory() as temp_dir:
         env = {**os.environ, "GIT_INDEX_FILE": str(Path(temp_dir) / "index")}
-        _run_git(["read-tree", "HEAD"], cwd=workspace, env=env)
-        _run_git(["add", "-N", "-A"], cwd=workspace, env=env)
-        result = _run_git(["diff", "HEAD", "--binary"], cwd=workspace, env=env, text=True)
+        _run_git(["read-tree", "HEAD"], cwd=workspace, env=env, owner=owner)
+        _run_git(["add", "-N", "-A"], cwd=workspace, env=env, owner=owner)
+        result = _run_git(["diff", "HEAD", "--binary"], cwd=workspace, env=env, text=True, owner=owner)
     return result.stdout
