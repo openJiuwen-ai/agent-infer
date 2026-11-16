@@ -32,6 +32,7 @@ vllm_router_workflow_prediction_profile_keys{predictor="output_length"} 12
 
     result = aggregate_router_prediction_metrics(start, end)
     output = result["output_length"]
+    assert isinstance(output, dict)
 
     assert result["available"] is True
     assert output["observations"] == 10
