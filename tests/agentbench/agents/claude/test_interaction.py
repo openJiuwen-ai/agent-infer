@@ -18,6 +18,9 @@ from agentinfer.agentbench.agents.claude.interaction import (
     YesConfirmationHandler,
     handler_types_for_profile,
 )
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 _ASK_USER_QUESTION_TERMINAL = """
 Does the failing test expect properties to inherit docstrings?
