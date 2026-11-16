@@ -19,7 +19,7 @@ FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/vllm/vllm-openai:v0.23.0
 # sudo is required when the DSH step stays root and wraps plan-subagent
 # with `sudo -u test-user`.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl git sudo xz-utils bubblewrap \
+ && apt-get install -y --no-install-recommends ca-certificates curl git sudo xz-utils tmux bubblewrap \
  && rm -rf /var/lib/apt/lists/*
 
 # DSH 0.2.1-rc.2 for the unified AgentBench functional suite. Install under /usr/local
@@ -38,6 +38,13 @@ RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-l
       @deepseek-ai/dsh@0.2.1-rc.2 \
  && node --version \
  && dsh --version
+
+ARG CLAUDE_CODE_VERSION=2.1.323
+RUN npm install --global --prefix /usr/local \
+      --registry https://registry.npmjs.org \
+      --allow-scripts=@anthropic-ai/claude-code \
+      "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+ && claude --version
 
 # Keep the workspace and adjacent resources: the CLI bundles external runtime assets.
 COPY --from=zcode-build /opt/zcode /opt/zcode

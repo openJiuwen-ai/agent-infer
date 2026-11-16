@@ -10,6 +10,6 @@ Default CI skips all of `tests/e2e` (`pytest --ignore=tests/e2e`).
 | Feature | Documentation |
 | ------- | --------------- |
 | Trace replay (Inferact / TraceLab / AgentX) | [`tracereplay/README.md`](tracereplay/README.md) |
-| AgentBench (DSH / JiuwenSwarm / ZCode) | [`agentbench/README.md`](agentbench/README.md) |
+| AgentBench (Claude Code / DSH / JiuwenSwarm / ZCode) | [`agentbench/README.md`](agentbench/README.md) |
 
 Future functional suites can add a row here and their own subdirectory + README.

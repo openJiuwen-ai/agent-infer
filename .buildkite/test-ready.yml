@@ -59,6 +59,17 @@ steps:
           - pytest -s -v -m "cuda and cards_1" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/dsh/qwen3_coder_dsh_2x1.json
           - pytest -s -v -m "cuda and cards_1" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/dsh/qwen3_coder_dsh_2x1_plan_subagent.json --benchmark-run-as-user test-user
 
+      - label: "claude swebench"
+        key: function-claude
+        mirror_hardwares: l20_1
+        env:
+          AGENTINFER_CI_AS_ROOT: "1"
+        timeout_in_minutes: 300
+        commands:
+          - *agentbench_user_setup
+          - pytest -s -v -m "cuda and cards_1" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/claude/qwen3_coder_claude_2x1_single.json
+          - pytest -s -v -m "cuda and cards_1" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/claude/qwen3_coder_claude_2x1_plan_subagent.json --benchmark-run-as-user test-user
+
       - label: "jiuwenswarm swebench"
         key: function-jiuwenswarm
         mirror_hardwares: l20_1

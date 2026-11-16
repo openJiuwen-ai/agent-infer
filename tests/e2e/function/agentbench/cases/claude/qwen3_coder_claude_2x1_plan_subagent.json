@@ -1,0 +1,43 @@
+{
+  "test_name": "qwen3_coder_claude_2x1_plan_subagent",
+  "scenario": "baseline",
+  "description": "Claude Code plan-subagent functional smoke, 2 tasks x 1 concurrency",
+  "server_params": {
+    "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+    "serve_args": {
+      "served-model-name": "qwen3-coder",
+      "enable-prefix-caching": true,
+      "tensor-parallel-size": 1,
+      "tool-call-parser": "qwen3_coder",
+      "enable-auto-tool-choice": true,
+      "max-model-len": 32768,
+      "max-num-seqs": 4,
+      "gpu-memory-utilization": 0.9
+    }
+  },
+  "result_root": "test-results/function/claude",
+  "benchmark_params": {
+    "config": "agentinfer/agentbench/configs/swebench_vllm.yaml",
+    "prepare_dataset": "swebench",
+    "prepare_output_dir": "agentinfer/agentbench/data/swebench",
+    "host": "127.0.0.1",
+    "model": "qwen3-coder",
+    "agent-executable": "claude",
+    "agent-profile": "plan-subagent",
+    "task-num": 2,
+    "max-concurrency": 1,
+    "timeout": 3600,
+    "agent-type": "claude",
+    "endpoint": "/v1/messages"
+  },
+  "mark": [
+    {
+      "hardware_marks": {
+        "res": {
+          "cuda": "L20"
+        },
+        "num_cards": 1
+      }
+    }
+  ]
+}
