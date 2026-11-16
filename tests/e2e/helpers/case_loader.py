@@ -485,18 +485,22 @@ def benchmark_params_to_run_args(params: dict[str, Any], result_dir: Path, repo:
         "task-num": "--task-num",
         "max-concurrency": "--max-concurrency",
         "timeout": "--timeout",
+        "evaluation-config": "--evaluation-config",
     }
     for key, flag in flag_map.items():
         if key not in params:
             continue
         value = params[key]
-        if key == "config":
+        if key in {"config", "evaluation-config"}:
             path = Path(str(value)).expanduser()
             if not path.is_absolute():
                 path = (repo / path).resolve()
             argv.extend([flag, str(path)])
         else:
             argv.extend([flag, str(value)])
+
+    if params.get("with-correctness", False):
+        argv.append("--with-correctness")
 
     host = params.get("host", "127.0.0.1")
     port = int(params.get("port", 8000))

@@ -8,6 +8,7 @@ Shared helpers for case JSON and vLLM lifecycle: [`helpers/`](helpers/).
 
 | Subtree | Purpose |
 | ------- | ------- |
+| [`acc/`](acc/README.md) | SWE-bench Verified accuracy scoring and per-task regression checks |
 | [`perf/`](perf/README.md) | Baseline vs AgentInfer performance benchmarks (plan-subagent / BenchKit) |
 | [`function/`](function/README.md) | Functional E2E (`agentbench/dsh`, `tracereplay/inferact`, TraceLab, AgentX) |
 
