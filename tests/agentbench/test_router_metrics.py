@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
 """Router workflow-prediction Prometheus aggregation tests."""
 
 import pytest
