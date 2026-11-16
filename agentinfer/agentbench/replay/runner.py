@@ -422,11 +422,7 @@ async def _run_replay(
         router_start: str | None = None
         if config.backend.router_metrics_url:
             router_start_capture = await capture_vllm_metrics(config.backend.router_metrics_url)
-            router_start = (
-                str(router_start_capture.metadata.get("text"))
-                if router_start_capture.available
-                else None
-            )
+            router_start = str(router_start_capture.metadata.get("text")) if router_start_capture.available else None
             router_start_path = evidence_dir / "router_metrics_start.prom"
             if router_start is not None:
                 write_text(router_start_path, router_start)
@@ -528,11 +524,7 @@ async def _run_replay(
         router_end: str | None = None
         if config.backend.router_metrics_url:
             router_end_capture = await capture_vllm_metrics(config.backend.router_metrics_url)
-            router_end = (
-                str(router_end_capture.metadata.get("text"))
-                if router_end_capture.available
-                else None
-            )
+            router_end = str(router_end_capture.metadata.get("text")) if router_end_capture.available else None
             router_end_path = evidence_dir / "router_metrics_end.prom"
             if router_end is not None:
                 write_text(router_end_path, router_end)
