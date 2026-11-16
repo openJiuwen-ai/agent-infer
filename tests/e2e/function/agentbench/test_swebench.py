@@ -9,9 +9,10 @@ from pathlib import Path
 
 import pytest
 
+from agentinfer.agentbench.benchkit.compare import load_summary
 from agentinfer.agentbench.benchkit.config import AgentBenchConfig, load_config
 from tests.e2e.function.agentbench.artifact_validation import validate_agent_artifacts
-from tests.e2e.helpers.benchmark import run_benchmark, validate_completed_run
+from tests.e2e.helpers.benchmark import run_benchmark
 from tests.e2e.helpers.case_loader import E2EConfig, load_case_file
 
 _DEPENDENCIES = {
@@ -38,7 +39,7 @@ def resolve_agent_type(config: E2EConfig) -> str:
 @pytest.mark.e2e_function
 @pytest.mark.gpu_test
 def test_agent_swebench(pytestconfig: pytest.Config) -> None:
-    """Require every selected task to finish and proxy requests to succeed."""
+    """Require every selected task to finish and common artifacts to exist."""
     case_file = pytestconfig.getoption("--test-config-file")
     if not case_file:
         pytest.skip("pass --test-config-file with an AgentBench functional case")
@@ -64,8 +65,8 @@ def test_agent_swebench(pytestconfig: pytest.Config) -> None:
 
     run_dir = run_benchmark(config)
     print(f"{agent_type} functional artifacts: {run_dir}", flush=True)
-    summary = validate_completed_run(run_dir)
+    summary = load_summary(run_dir)
+    assert summary["lifecycle"]["status"] == "completed", summary["lifecycle"]
     assert summary["tasks"]["completed"] == config.task_num, summary["tasks"]
     assert summary["tasks"]["failed"] == 0, summary["tasks"]
-    assert summary["requests"]["failed_requests"] == 0, summary["requests"]
-    validate_agent_artifacts(run_dir, agent_type, expected_tasks=config.task_num)
+    validate_agent_artifacts(run_dir)

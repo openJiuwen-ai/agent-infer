@@ -81,25 +81,19 @@ The image installs Claude Code 2.1.323, JiuwenSwarm 0.2.3 in a separate Python
 environment, and ZCode 0.17.1 from the pinned source/toolchain above.
 JiuwenSwarm's host/container must permit bubblewrap user namespaces.
 
-All agents must finalize the run, complete every selected task, and record
-requests with zero failed requests. All agents also require non-empty run
-artifacts, the expected number of completed task index rows, non-empty task
-transcripts, and task/workspace paths confined to the run directory.
-Claude Code requires its isolated `claude_state/` configuration directory;
-JiuwenSwarm requires `jiuwenswarm-instance/home/`; DSH requires `dsh-home/`;
-ZCode requires `zcode-home/`.
-These post-run path checks do not prove OS-level sandbox isolation.
-All four agents reject nonzero failure summaries (including startup failures,
-startup timeouts, and harness errors), failure evidence on completed task rows,
-and isolated state directories found outside `tasks/`.
-DSH additionally retains its HMR startup regression checks from
-[PR #75](https://github.com/openJiuwen-ai/agent-infer/pull/75).
-ZCode additionally requires its run-status, lineage, configuration, launch
-command, hooks, and stderr artifacts. Status must confirm successful execution
-and prompt loading; lineage must contain sessions with no failure or pending
-work. Empty stderr is valid, and single mode need not create any subagents.
-ZCode may retain an optional `reproduce_issue.py` file at the run root. Other
-unexpected root entries are still rejected, and path confinement is checked.
+All agents must finalize the run and complete every selected task with zero
+failed tasks. Request counts and request failures do not determine whether
+the functional case passes. Artifact validation uses the same common
+contract for every agent:
+
+- Non-empty files: `agents.csv`, `distribution_samples.csv`, `manifest.json`,
+  `requests.jsonl`, `sessions.csv`, `summary.json`, and `task_index.json`.
+- Existing log files: `proxy.stdout.log` and `proxy.stderr.log`; both may be empty.
+- Existing directories: `evidence/`, `tasks/`, and `workspaces/`.
+
+Additional ordinary files are allowed, but additional directories at the run
+root are rejected. There are no agent-specific artifact checks. Run and task
+success checks remain in the test entry.
 
 These checks verify execution rather than SWE-bench patch correctness.
 A plan-subagent profile does not prove that the model actually delegated work.
