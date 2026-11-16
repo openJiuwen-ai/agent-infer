@@ -78,15 +78,16 @@ CPU CI 沿用现有 Python 3.10/3.12 任务，通过 `cpu and ready` 选择单�
 
 ## Pytest labels
 
-Local commits run mypy for staged new Python files through the `mypy-added`
-pre-commit hook; modified existing files are excluded. It reuses the manual
+The optional manual `mypy-added` hook checks staged new Python files;
+modified existing files are excluded. It does not run automatically on commits. It reuses the manual
 `mypy` hook configuration, which CI applies to files added across the PR.
-Run `pre-commit run mypy-added` to check staged additions locally. For committed
+Run `pre-commit run mypy-added --hook-stage manual` to check staged additions locally. For committed
 PR additions, pass their paths to `pre-commit run mypy --hook-stage manual --files ...`.
 
 See [RFC #81](https://github.com/openJiuwen-ai/agent-infer/issues/81).
-Labels are registered only in `pyproject.toml`. Each dimension is optional,
-with at most one value per dimension:
+Labels are registered only in `pyproject.toml`. A hardware model is required;
+accelerators also require a card count. The CI lane is optional.
+Each dimension accepts at most one value:
 
 | Dimension | Values |
 | --- | --- |
@@ -115,7 +116,8 @@ pytestmark = test_marks(hardware="L20", num_cards=1, ci="ready")
 `agentcache/core` uses `test_marks(hardware="cpu")`, without a CI lane.
 Mechanism marks such as `skipif` and `parametrize` remain unchanged;
 combine them with `[*test_marks(...), pytest.mark.skipif(...)]` when necessary.
-Test execution time is bounded by the CI job timeout, without per-test timeout marks.
+Real-runtime tests retain per-test `timeout` limits through `pytest-timeout`;
+the CI job timeout also bounds the full lane. Timeout is a mechanism, not a classification label.
 CPU labels describe hardware; real DSH tests still require DSH and its native sandbox.
 
 E2E JSON uses the same fields in one object:
@@ -131,6 +133,29 @@ Add `"ci": "ready"` or `"ci": "nightly"` inside this object when needed;
 omitting `ci` assigns no CI lane. This produces standard independent markers
 `A3`, `cards_16`, and an optional lane, using exactly the same converter as Python.
 `-m` selection is unchanged. Each E2E item gets its declaration from its JSON case.
+
+Python and JSON declarations both support optional per-case timeouts in seconds:
+
+```python
+pytestmark = test_marks(hardware="cpu", ci="ready", timeout=180)
+```
+
+JSON cases use the same `timeout` field:
+
+```json
+"mark": {
+  "hardware": "L20",
+  "num_cards": 2,
+  "ci": "ready",
+  "timeout": 180
+}
+```
+
+`timeout` must be a finite positive number and requires `pytest-timeout`
+(included in `agentinfer[dev]`). It adds `pytest.mark.timeout(180)` to that case;
+omitting it adds no timeout marker and preserves pytest-timeout's global defaults.
+This limits the whole test, including service startup and evaluation, independently
+of the benchmark's per-task `timeout` setting. It is not a classification dimension.
 
 Collection rejects missing model declarations, unknown markers, conflicting
 values in one dimension, missing accelerator card counts, CPU card counts,
@@ -172,3 +197,18 @@ pytest -q -m "cpu and ready" \
   tests/agentbench/agents/dsh/test_dsh_benchmark_integration.py \
   tests/agentbench/agents/dsh/test_dsh_sandbox_integration.py
 ```
+
+### Implementation differences from the initial RFC #81 proposal
+
+The implementation uses separate model and card-count labels (`L20` + `cards_2`,
+`A3` + `cards_16`) instead of composite names such as `L20_2` or `A3_16`.
+Scenes are selected by directory, without `function`, `perf`, or `acc` markers.
+Declarations are explicit: Python modules call `test_marks(...)`; JSON cases use
+one flat `mark` object with `hardware`, `num_cards`, and optional `ci` fields.
+The earlier nested `res` / `num_cards` schema is not supported.
+
+For example, select ready functional cases with
+`pytest -sv -m "L20 and cards_2 and ready" tests/e2e/function`.
+Classification does not replace pytest mechanisms such as `timeout`, `skipif`,
+or `parametrize`. The optional manual mypy check is a separate developer tool;
+it is not part of marker validation or the default commit workflow.

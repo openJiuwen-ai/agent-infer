@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Iterable
 from typing import Any
@@ -27,7 +28,9 @@ def registered_hardware_names(config: pytest.Config) -> set[str]:
     return names
 
 
-def test_marks(*, hardware: str, num_cards: int | None = None, ci: str | None = None) -> list[pytest.MarkDecorator]:
+def test_marks(
+    *, hardware: str, num_cards: int | None = None, ci: str | None = None, timeout: int | float | None = None
+) -> list[pytest.MarkDecorator]:
     """Return standard pytest markers from the same fields used by case JSON."""
     if not isinstance(hardware, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", hardware):
         raise ValueError("hardware must be a model name starting with a letter, containing only letters and digits")
@@ -38,16 +41,25 @@ def test_marks(*, hardware: str, num_cards: int | None = None, ci: str | None = 
         raise ValueError("accelerators require a non-CPU model and a positive integer num_cards")
     if ci is not None and (not isinstance(ci, str) or ci not in LANES):
         raise ValueError("ci must be ready, nightly, or omitted")
+    if timeout is not None:
+        _validate_timeout(timeout)
     marks = [getattr(pytest.mark, hardware)]
     if num_cards is not None:
         marks.append(getattr(pytest.mark, f"cards_{num_cards}"))
     if ci is not None:
         marks.append(getattr(pytest.mark, ci))
+    if timeout is not None:
+        marks.append(pytest.mark.timeout(timeout))
     return marks
 
 
 # Imported by test modules as their declaration helper, not a test function.
 vars(test_marks)["__test__"] = False
+
+
+def _validate_timeout(seconds: Any) -> None:
+    if type(seconds) not in {int, float} or not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError("timeout must be a finite positive number of seconds")
 
 
 def validate_marks(marks: Iterable[pytest.Mark], config: pytest.Config) -> None:
@@ -77,10 +89,14 @@ def validate_marks(marks: Iterable[pytest.Mark], config: pytest.Config) -> None:
 
 
 def resolve_pytest_marks(mark_field: Any, config: pytest.Config) -> list[pytest.MarkDecorator]:
-    if not isinstance(mark_field, dict) or not set(mark_field) <= {"hardware", "num_cards", "ci"}:
-        raise ValueError("mark must be an object containing hardware and optional num_cards/ci")
+    if not isinstance(mark_field, dict) or not set(mark_field) <= {"hardware", "num_cards", "ci", "timeout"}:
+        raise ValueError("mark must be an object containing hardware and optional num_cards/ci/timeout")
     if "hardware" not in mark_field:
         raise ValueError("mark requires hardware")
+    if "timeout" in mark_field:
+        _validate_timeout(mark_field["timeout"])
+        if not config.pluginmanager.hasplugin("timeout"):
+            raise ValueError("mark.timeout requires pytest-timeout; install agentinfer[dev]")
     marks = test_marks(**mark_field)
     validate_marks([mark.mark for mark in marks], config)
     return marks

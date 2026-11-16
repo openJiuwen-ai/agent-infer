@@ -13,6 +13,7 @@ readme = { file = "README.md", content-type = "text/markdown" }
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
+    "pytest-timeout>=2.3",
 ]
 
 [tool.pytest.ini_options]

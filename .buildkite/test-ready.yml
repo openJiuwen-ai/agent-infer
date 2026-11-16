@@ -65,7 +65,8 @@ steps:
                 usermod -aG "$$extra" test-user
               fi
             done
-            pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function
+            pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/dsh --test-config-file tests/e2e/function/agentbench/dsh/cases/qwen3_coder_dsh_2x1.json
+            pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/dsh --test-config-file tests/e2e/function/agentbench/dsh/cases/qwen3_coder_dsh_2x1_plan_subagent.json
 
   # cpu_small is another machine, so it builds the same Dockerfile itself.
   - label: ":docker: Build CI image (cpu)"
