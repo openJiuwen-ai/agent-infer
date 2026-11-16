@@ -1,14 +1,10 @@
 {
   "test_name": "glm52_8x4_plan_subagent",
   "scenario": "agentinfer",
-  "mark": [
-    {
-      "hardware_marks": {
-        "res": {"npu": "Ascend"},
-        "num_cards": 16
-      }
-    }
-  ],
+  "mark": {
+    "hardware": "A3",
+    "num_cards": 16
+  },
   "description": "GLM-5.2 AgentInfer scheduler bridge, SWE-bench 8 tasks x 4 concurrency",
   "serve_env": {
     "HCCL_OP_EXPANSION_MODE": "AIV",

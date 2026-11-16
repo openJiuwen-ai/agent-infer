@@ -7,6 +7,9 @@ from pathlib import Path
 import pytest
 
 from tests.e2e.function.agentbench.artifact_validation import validate_agent_artifacts
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 _DATA_FILES = (
     "agents.csv",

@@ -11,6 +11,10 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
+
 
 def _extension_modules() -> dict[str, ModuleType]:
     class AscendAffinityModelClient:

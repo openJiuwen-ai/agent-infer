@@ -36,14 +36,9 @@ def resolve_agent_type(config: E2EConfig) -> str:
     return AgentBenchConfig.model_validate(bench).agent.type
 
 
-@pytest.mark.e2e_function
-@pytest.mark.gpu_test
-def test_agent_swebench(pytestconfig: pytest.Config) -> None:
+def test_agent_swebench(pytestconfig: pytest.Config, case_file: Path) -> None:
     """Require every selected task to finish and common artifacts to exist."""
-    case_file = pytestconfig.getoption("--test-config-file")
-    if not case_file:
-        pytest.skip("pass --test-config-file with an AgentBench functional case")
-    config = E2EConfig.from_case(load_case_file(Path(case_file))).with_benchmark_load(
+    config = E2EConfig.from_case(load_case_file(case_file)).with_benchmark_load(
         task_num=pytestconfig.getoption("--task-num"),
         max_concurrency=pytestconfig.getoption("--max-concurrency"),
     )

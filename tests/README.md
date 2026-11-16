@@ -30,7 +30,7 @@ Unit tests for the `vllm serve MODEL --agentinfer` takeover in
 ### `tests/agentcache/entrypoints/test_serve_flag_e2e.py`
 
 GPU e2e tests for `vllm serve MODEL --agentinfer` through the installed
-`vllm` entrypoint (requires a vLLM environment; skip-marked as `gpu_test`).
+`vllm` entrypoint (requires a vLLM environment; marked `L20`, `cards_1`, and `ready`).
 
 | Test | What it verifies |
 | ---- | ---------------- |
@@ -60,7 +60,7 @@ pytest tests/agentcache/ tests/agentbench/ -v
 ### Run E2E tests (GPU / NPU, real model)
 
 End-to-end tests live under [`tests/e2e/`](e2e/README.md) (performance benchmarks and functional suites).
-They are not part of default CPU CI (`pytest --ignore=tests/e2e`).
+They have no ready lane and are not selected by default CPU CI (`-m "cpu and ready"`).
 
 | Suite | Entry doc |
 | ----- | --------- |
@@ -73,5 +73,142 @@ They are not part of default CPU CI (`pytest --ignore=tests/e2e`).
 Run 模式和 Replay 共用独立进程 Mock Server。
 [Replay CI 说明](agentbench/replay/README.md) 包含双轮冷启动矩阵、后端契约、
 依赖与故障测试、执行命令和失败产物说明。
-CPU CI 沿用现有 Python 3.10/3.12 任务，通过 `tests/agentbench` 统一收集单元测试、
-`benchmark_smoke` 和 `replay_smoke`。
+CPU CI 沿用现有 Python 3.10/3.12 任务，通过 `cpu and ready` 选择单元测试及 Run / Replay 冒烟用例。
+单独运行冒烟用例时，使用下方的具体文件路径加 `-m "cpu and ready"` 筛选，不再使用额外的 smoke 标签。
+
+## Pytest labels
+
+The optional manual `mypy-added` hook checks staged new Python files;
+modified existing files are excluded. It does not run automatically on commits. It reuses the manual
+`mypy` hook configuration, which CI applies to files added across the PR.
+Run `pre-commit run mypy-added --hook-stage manual` to check staged additions locally. For committed
+PR additions, pass their paths to `pre-commit run mypy --hook-stage manual --files ...`.
+
+See [RFC #81](https://github.com/openJiuwen-ai/agent-infer/issues/81).
+Labels are registered only in `pyproject.toml`. A hardware model is required;
+accelerators also require a card count. The CI lane is optional.
+Each dimension accepts at most one value:
+
+| Dimension | Values |
+| --- | --- |
+| Model | `cpu`, `L20`, `A3` |
+| Card count | `cards_1`, `cards_2`, `cards_16` |
+| CI lane | `ready`, `nightly` (reserved) |
+
+Card counts describe the number of accelerators, not device indices. CPU tests
+have no card-count label. Add other positive card counts to the registry when
+needed. Scenes are selected through directories (`function/`, `perf/`, and any
+future `acc/`), with no scene markers.
+
+Every Python test module outside E2E declares its labels explicitly through
+`tests.helpers.marks.test_marks`; no classification labels are injected by default:
+
+```python
+from tests.helpers.marks import test_marks
+
+# CPU unit tests (including smoke and real DSH integration tests)
+pytestmark = test_marks(hardware="cpu", ci="ready")
+
+# Single-card serve smoke
+pytestmark = test_marks(hardware="L20", num_cards=1, ci="ready")
+```
+
+`agentcache/core` uses `test_marks(hardware="cpu")`, without a CI lane.
+Mechanism marks such as `skipif` and `parametrize` remain unchanged;
+combine them with `[*test_marks(...), pytest.mark.skipif(...)]` when necessary.
+Real-runtime tests retain per-test `timeout` limits through `pytest-timeout`;
+the CI job timeout also bounds the full lane. Timeout is a mechanism, not a classification label.
+CPU labels describe hardware; real DSH tests still require DSH and its native sandbox.
+
+E2E JSON uses the same fields in one object:
+
+```json
+"mark": {
+  "hardware": "A3",
+  "num_cards": 16
+}
+```
+
+Add `"ci": "ready"` or `"ci": "nightly"` inside this object when needed;
+omitting `ci` assigns no CI lane. This produces standard independent markers
+`A3`, `cards_16`, and an optional lane, using exactly the same converter as Python.
+`-m` selection is unchanged. Each E2E item gets its declaration from its JSON case.
+
+Python and JSON declarations both support optional per-case timeouts in seconds:
+
+```python
+pytestmark = test_marks(hardware="cpu", ci="ready", timeout=180)
+```
+
+JSON cases use the same `timeout` field:
+
+```json
+"mark": {
+  "hardware": "L20",
+  "num_cards": 2,
+  "ci": "ready",
+  "timeout": 180
+}
+```
+
+`timeout` must be a finite positive number and requires `pytest-timeout`
+(included in `agentinfer[dev]`). It adds `pytest.mark.timeout(180)` to that case;
+omitting it adds no timeout marker and preserves pytest-timeout's global defaults.
+This limits the whole test, including service startup and evaluation, independently
+of the benchmark's per-task `timeout` setting. It is not a classification dimension.
+
+Collection rejects missing model declarations, unknown markers, conflicting
+values in one dimension, missing accelerator card counts, CPU card counts,
+and invalid hardware names. Hardware model names are registered with
+`[hardware]` in the marker descriptions in `pyproject.toml`; this is registry
+metadata, not an extra pytest marker. No CUDA/NPU platform field is needed.
+
+```bash
+pytest -q -m "cpu and ready" tests
+pytest -sv -m "L20 and cards_1 and ready" tests/agentcache/entrypoints/test_serve_flag_e2e.py
+pytest --collect-only -q -m "A3 and cards_16" tests/e2e/function/tracereplay/
+pytest --collect-only -q -m "A3 and cards_16" tests/e2e/perf/run_benchmark.py
+```
+
+The 12 replay and nine perf cases have no lane and stay out of ready CI.
+The two DSH cases from PR #75 declare `L20`, `cards_2`, and `ready`; their
+GPU CI step selects `L20 and cards_2 and ready` from `tests/e2e/function/`. No nightly pipeline is introduced.
+`inferrsi/tests/` remains outside this marker policy. A single-case override
+must name an existing JSON in a suite's cases tree and match a collected suite;
+invalid overrides fail instead of silently skipping an empty parameter set.
+
+### Select smoke and real-runtime tests by path
+
+All three groups use `cpu and ready`; their file paths distinguish them.
+These commands preserve the previous groups without custom sublabels:
+
+```bash
+# Benchmark smoke
+pytest -q -m "cpu and ready" tests/agentbench/test_benchmark_smoke.py
+
+# Replay HTTP smoke
+pytest -q -m "cpu and ready" \
+  tests/agentbench/replay/test_cold_start.py \
+  tests/agentbench/replay/test_http_dependencies.py \
+  tests/agentbench/replay/test_validation.py
+
+# Real DSH runtime and sandbox
+pytest -q -m "cpu and ready" \
+  tests/agentbench/agents/dsh/test_dsh_benchmark_integration.py \
+  tests/agentbench/agents/dsh/test_dsh_sandbox_integration.py
+```
+
+### Implementation differences from the initial RFC #81 proposal
+
+The implementation uses separate model and card-count labels (`L20` + `cards_2`,
+`A3` + `cards_16`) instead of composite names such as `L20_2` or `A3_16`.
+Scenes are selected by directory, without `function`, `perf`, or `acc` markers.
+Declarations are explicit: Python modules call `test_marks(...)`; JSON cases use
+one flat `mark` object with `hardware`, `num_cards`, and optional `ci` fields.
+The earlier nested `res` / `num_cards` schema is not supported.
+
+For example, select ready functional cases with
+`pytest -sv -m "L20 and cards_2 and ready" tests/e2e/function`.
+Classification does not replace pytest mechanisms such as `timeout`, `skipif`,
+or `parametrize`. The optional manual mypy check is a separate developer tool;
+it is not part of marker validation or the default commit workflow.

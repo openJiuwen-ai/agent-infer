@@ -18,7 +18,7 @@ steps:
   - label: "smoke: agentinfer serve"
     depends_on: ci-image
     commands:
-      - AGENTINFER_E2E_MODEL=Qwen/Qwen3-0.6B pytest -sv -m gpu_test tests/agentcache/entrypoints/test_serve_flag_e2e.py
+      - AGENTINFER_E2E_MODEL=Qwen/Qwen3-0.6B pytest -sv -m "L20 and cards_1 and ready" tests/agentcache/entrypoints/test_serve_flag_e2e.py
     timeout_in_minutes: 25
     mirror_hardwares: l20_1
 
@@ -56,8 +56,8 @@ steps:
                 usermod -aG "$$extra" test-user
               fi
             done
-          - pytest -s -v -m "cuda and cards_2" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/dsh/qwen3_coder_dsh_2x1.json
-          - pytest -s -v -m "cuda and cards_2" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/dsh/qwen3_coder_dsh_2x1_plan_subagent.json --benchmark-run-as-user test-user
+          - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/dsh/qwen3_coder_dsh_2x1.json
+          - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/dsh/qwen3_coder_dsh_2x1_plan_subagent.json --benchmark-run-as-user test-user
 
       - label: "claude swebench"
         key: function-claude
@@ -67,8 +67,8 @@ steps:
         timeout_in_minutes: 300
         commands:
           - *agentbench_user_setup
-          - pytest -s -v -m "cuda and cards_2" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/claude/qwen3_coder_claude_2x1_single.json
-          - pytest -s -v -m "cuda and cards_2" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/claude/qwen3_coder_claude_2x1_plan_subagent.json --benchmark-run-as-user test-user
+          - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/claude/qwen3_coder_claude_2x1_single.json
+          - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/claude/qwen3_coder_claude_2x1_plan_subagent.json --benchmark-run-as-user test-user
 
       - label: "jiuwenswarm swebench"
         key: function-jiuwenswarm
@@ -78,7 +78,7 @@ steps:
         timeout_in_minutes: 150
         commands:
           - *agentbench_user_setup
-          - pytest -s -v -m "cuda and cards_2" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/jiuwenswarm/qwen3_coder_jiuwenswarm_2x1_code_normal.json
+          - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/jiuwenswarm/qwen3_coder_jiuwenswarm_2x1_code_normal.json
 
       - label: "zcode swebench"
         key: function-zcode
@@ -88,8 +88,8 @@ steps:
         timeout_in_minutes: 300
         commands:
           - *agentbench_user_setup
-          - pytest -s -v -m "cuda and cards_2" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/zcode/qwen3_coder_zcode_2x1_single.json
-          - pytest -s -v -m "cuda and cards_2" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/zcode/qwen3_coder_zcode_2x1_plan_subagent.json --benchmark-run-as-user test-user
+          - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/zcode/qwen3_coder_zcode_2x1_single.json
+          - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/zcode/qwen3_coder_zcode_2x1_plan_subagent.json --benchmark-run-as-user test-user
 
   # cpu_small is another machine, so it builds the same Dockerfile itself.
   - label: ":docker: Build CI image (cpu)"
@@ -106,7 +106,7 @@ steps:
     steps:
       - label: "ut"
         commands:
-          - pytest tests -sv --ignore=tests/e2e --ignore=tests/agentcache/core -m "not gpu_test and not e2e_perf"
+          - pytest tests -sv -m "cpu and ready"
         timeout_in_minutes: 20
         mirror_hardwares: cpu_small
 

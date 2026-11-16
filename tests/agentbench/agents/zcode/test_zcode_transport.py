@@ -14,6 +14,9 @@ from agentinfer.agentbench.agents.zcode import stream
 from agentinfer.agentbench.agents.zcode.runner import run_zcode
 from tests.agentbench.agents.zcode.test_zcode_integration import ZCodeMockServer
 from tests.agentbench.helpers.dsh_mock_server import seed_tasks
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def test_fragmented_sse_heartbeats_preserve_events(monkeypatch):

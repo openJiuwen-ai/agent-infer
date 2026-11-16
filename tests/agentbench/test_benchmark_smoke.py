@@ -20,10 +20,11 @@ from agentinfer.agentbench.benchkit.cli import main
 from agentinfer.agentbench.benchkit.config import AgentBenchConfig
 from agentinfer.agentbench.benchkit.runner import run_benchmark
 from agentinfer.agentbench.request_proxy import RequestProxyLifecycle, RequestTraceWriter
+from tests.helpers.marks import test_marks
 
 from .helpers.benchmark_smoke import FakeAgentRuntime, FakeModelServer, ThreadBarrier, ThreadRequestProxyProcess
 
-pytestmark = [pytest.mark.cpu_test, pytest.mark.benchmark_smoke]
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 @pytest.fixture(autouse=True)

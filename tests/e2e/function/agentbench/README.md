@@ -62,15 +62,16 @@ pytest -s tests/e2e/function/agentbench/test_swebench.py \
 ```
 
 Use `--task-num` and `--max-concurrency` to override the load, and
-`-m 'cuda and cards_2'` to select by case hardware marks. Without a case
-file the test skips. Missing prerequisites fail an explicitly selected case.
+`-m 'L20 and cards_2 and ready'` to select by case hardware marks. Without a case
+file, pytest collects every case as a separate test. Missing prerequisites fail
+a selected case.
 
 ## Validation and evidence
 
 The Buildkite ready pipeline has separate DSH, Claude Code, JiuwenSwarm, and
 ZCode jobs on the `l20_2` preset. The dual-GPU queue must share the image build host's Docker daemon.
 Each uses the unified entry and the
-`cuda and cards_2` marker selection. Claude Code and ZCode each run both
+`L20 and cards_2 and ready` marker selection. Claude Code and ZCode each run both
 profiles; JiuwenSwarm runs code.normal. All four jobs explicitly invoke pytest
 as root in the pipeline YAML. Dataset preparation and vLLM remain root;
 only plan-subagent bench subprocesses switch to `test-user` through the

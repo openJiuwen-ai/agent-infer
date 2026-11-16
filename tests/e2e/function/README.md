@@ -3,7 +3,8 @@
 Correctness-oriented GPU/NPU checks (repeatability, smoke). **Not** the performance A/B tree under
 [`../perf/`](../perf/).
 
-Default CI skips all of `tests/e2e` (`pytest --ignore=tests/e2e`).
+Ready CPU CI selects `cpu and ready`. AgentBench cases declare `L20`, `cards_2`, and `ready`;
+replay cases have no CI lane.
 
 ## Features
 

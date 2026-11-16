@@ -2,6 +2,9 @@
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 
 from agentinfer.agentbench.benchkit.artifacts.summary import ExecutionSummary, _coerce_execution
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def test_coerce_execution_provides_default_state() -> None:

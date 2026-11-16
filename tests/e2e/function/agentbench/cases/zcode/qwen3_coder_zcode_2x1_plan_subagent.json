@@ -1,16 +1,11 @@
 {
   "test_name": "qwen3_coder_zcode_2x1_plan_subagent",
   "scenario": "baseline",
-  "mark": [
-    {
-      "hardware_marks": {
-        "res": {
-          "cuda": "L20"
-        },
-        "num_cards": 2
-      }
-    }
-  ],
+  "mark": {
+    "hardware": "L20",
+    "num_cards": 2,
+    "ci": "ready"
+  },
   "description": "Qwen3-Coder-30B-A3B-Instruct BF16 on 2x L20 + ZCode plan-subagent functional smoke, 2 tasks x 1 concurrency",
   "server_params": {
     "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
