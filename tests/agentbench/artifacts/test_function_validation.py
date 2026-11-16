@@ -88,6 +88,21 @@ def test_rejects_task_count_mismatch(run_artifacts):
         validate_agent_artifacts(root, agent, expected_tasks=2)
 
 
+@pytest.mark.parametrize("present", [False, True])
+def test_zcode_reproduction_file_is_optional(tmp_path: Path, present):
+    root, agent, _, _ = _make_run_artifacts(tmp_path, "zcode")
+    if present:
+        (root / "reproduce_issue.py").write_text("print('reproduction')\n")
+    validate_agent_artifacts(root, agent, expected_tasks=1)
+
+
+def test_rejects_other_extra_root_files(run_artifacts):
+    root, agent, _, _ = run_artifacts
+    (root / "unexpected.py").write_text("print('unexpected')\n")
+    with pytest.raises(RuntimeError, match="unexpected entry"):
+        validate_agent_artifacts(root, agent, expected_tasks=1)
+
+
 def test_rejects_workspace_escape(run_artifacts):
     root, agent, _, _ = run_artifacts
     (root / "leaked-workspace").mkdir()

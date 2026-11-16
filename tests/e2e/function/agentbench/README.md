@@ -98,6 +98,8 @@ ZCode additionally requires its run-status, lineage, configuration, launch
 command, hooks, and stderr artifacts. Status must confirm successful execution
 and prompt loading; lineage must contain sessions with no failure or pending
 work. Empty stderr is valid, and single mode need not create any subagents.
+ZCode may retain an optional `reproduce_issue.py` file at the run root. Other
+unexpected root entries are still rejected, and path confinement is checked.
 
 These checks verify execution rather than SWE-bench patch correctness.
 A plan-subagent profile does not prove that the model actually delegated work.

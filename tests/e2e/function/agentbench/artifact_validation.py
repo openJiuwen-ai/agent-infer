@@ -38,6 +38,7 @@ def _confined(path: Path, root: Path) -> None:
 def validate_agent_artifacts(run_dir: Path, agent_type: str, *, expected_tasks: int) -> None:
     """Require complete task evidence and paths confined to their owning run."""
     transcript_name, state_name = _TASK_ARTIFACTS[agent_type]
+    allowed_root_files = _ROOT_FILES | ({"reproduce_issue.py"} if agent_type == "zcode" else set())
     run_dir = run_dir.resolve()
     for name in ("manifest.json", "summary.json", "task_index.json", "requests.jsonl"):
         path = run_dir / name
@@ -45,7 +46,9 @@ def validate_agent_artifacts(run_dir: Path, agent_type: str, *, expected_tasks: 
         if not path.is_file() or path.stat().st_size == 0:
             raise RuntimeError(f"missing or empty run artifact: {path}")
     for entry in run_dir.iterdir():
-        if (entry.is_file() and entry.name not in _ROOT_FILES) or (entry.is_dir() and entry.name not in _ROOT_DIRS):
+        if (entry.is_file() and entry.name not in allowed_root_files) or (
+            entry.is_dir() and entry.name not in _ROOT_DIRS
+        ):
             raise RuntimeError(f"unexpected entry at run root: {entry}")
         _confined(entry, run_dir)
     tasks_root = run_dir / "tasks"
