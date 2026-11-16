@@ -1,5 +1,5 @@
 {
-  "test_name": "qwen3_coder_dsh_2x1_plan_subagent",
+  "test_name": "qwen3_8b_dsh_2x1",
   "scenario": "baseline",
   "mark": [
     {
@@ -11,25 +11,26 @@
       }
     }
   ],
-  "description": "Qwen3-Coder-30B-A3B-Instruct-FP8 on 1x L20 + DSH plan-subagent, SWE-bench Verified 2 tasks x 1 concurrency",
+  "description": "Qwen3-8B on 1x L20 + DSH single, SWE-bench Verified 2 tasks x 1 concurrency",
   "serve_env": {
     "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1"
   },
   "server_params": {
-    "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+    "model": "Qwen/Qwen3-8B",
     "middleware": [],
     "serve_args": {
-      "served-model-name": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+      "served-model-name": "Qwen/Qwen3-8B",
       "tensor-parallel-size": 1,
       "async-scheduling": true,
       "scheduler-cls": "vllm.v1.core.sched.async_scheduler.AsyncScheduler",
       "enable-prefix-caching": true,
       "enable-prompt-tokens-details": true,
       "enable-auto-tool-choice": true,
-      "tool-call-parser": "qwen3_coder",
+      "tool-call-parser": "hermes",
       "max-model-len": 32768,
       "max-num-seqs": 4,
-      "gpu-memory-utilization": 0.9
+      "gpu-memory-utilization": 0.9,
+      "reasoning-parser": "deepseek_r1"
     }
   },
   "result_root": "test-results/vllm",
@@ -38,14 +39,13 @@
     "prepare_dataset": "swebench",
     "prepare_output_dir": "agentinfer/agentbench/data/swebench",
     "host": "127.0.0.1",
-    "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+    "model": "Qwen/Qwen3-8B",
     "agent-type": "dsh",
     "agent-executable": "/usr/local/bin/dsh",
-    "agent-profile": "plan-subagent",
-    "benchmark-run-as-user": "test-user",
+    "agent-profile": "single",
     "endpoint": "/v1/chat/completions",
     "task-num": 2,
     "max-concurrency": 1,
-    "timeout": 3600
+    "timeout": 14400
   }
 }

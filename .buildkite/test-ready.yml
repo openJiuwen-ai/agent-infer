@@ -56,8 +56,8 @@ steps:
                 usermod -aG "$$extra" test-user
               fi
             done
-          - pytest -s -v -m "cuda and cards_1" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/dsh/qwen3_coder_dsh_2x1.json
-          - pytest -s -v -m "cuda and cards_1" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/dsh/qwen3_coder_dsh_2x1_plan_subagent.json --benchmark-run-as-user test-user
+          - pytest -s -v -m "cuda and cards_1" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/dsh/qwen3_8b_dsh_2x1.json
+          - pytest -s -v -m "cuda and cards_1" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/dsh/qwen3_8b_dsh_2x1_plan_subagent.json --benchmark-run-as-user test-user
 
       - label: "claude swebench"
         key: function-claude
@@ -67,8 +67,8 @@ steps:
         timeout_in_minutes: 300
         commands:
           - *agentbench_user_setup
-          - pytest -s -v -m "cuda and cards_1" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/claude/qwen3_coder_claude_2x1_single.json
-          - pytest -s -v -m "cuda and cards_1" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/claude/qwen3_coder_claude_2x1_plan_subagent.json --benchmark-run-as-user test-user
+          - pytest -s -v -m "cuda and cards_1" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/claude/qwen3_8b_claude_2x1_single.json
+          - pytest -s -v -m "cuda and cards_1" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/claude/qwen3_8b_claude_2x1_plan_subagent.json --benchmark-run-as-user test-user
 
       - label: "jiuwenswarm swebench"
         key: function-jiuwenswarm
@@ -78,7 +78,7 @@ steps:
         timeout_in_minutes: 150
         commands:
           - *agentbench_user_setup
-          - pytest -s -v -m "cuda and cards_1" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/jiuwenswarm/qwen3_coder_jiuwenswarm_2x1_code_normal.json
+          - pytest -s -v -m "cuda and cards_1" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/jiuwenswarm/qwen3_8b_jiuwenswarm_2x1_code_normal.json
 
       - label: "zcode swebench"
         key: function-zcode
@@ -88,8 +88,8 @@ steps:
         timeout_in_minutes: 300
         commands:
           - *agentbench_user_setup
-          - pytest -s -v -m "cuda and cards_1" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/zcode/qwen3_coder_zcode_2x1_single.json
-          - pytest -s -v -m "cuda and cards_1" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/zcode/qwen3_coder_zcode_2x1_plan_subagent.json --benchmark-run-as-user test-user
+          - pytest -s -v -m "cuda and cards_1" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/zcode/qwen3_8b_zcode_2x1_single.json
+          - pytest -s -v -m "cuda and cards_1" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/zcode/qwen3_8b_zcode_2x1_plan_subagent.json --benchmark-run-as-user test-user
 
   # cpu_small is another machine, so it builds the same Dockerfile itself.
   - label: ":docker: Build CI image (cpu)"

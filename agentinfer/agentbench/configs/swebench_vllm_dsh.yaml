@@ -29,7 +29,7 @@ agent:
 backend:
   type: vllm
   base_url: http://127.0.0.1:8000
-  model: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8
+  model: Qwen/Qwen3-8B
   endpoint: /v1/chat/completions
   api_key_env: null
 
