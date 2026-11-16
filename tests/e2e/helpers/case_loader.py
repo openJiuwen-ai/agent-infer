@@ -83,7 +83,7 @@ class BenchmarkCase:
     test_name: str
     scenario: PerfScenario
     description: str
-    mark: tuple[Any, ...]
+    mark: dict[str, Any]
     deploy: VllmDeployConfig
     benchmark_params: dict[str, Any]
     wait_for_vllm_ready: bool
@@ -329,9 +329,9 @@ def _parse_case(payload: dict[str, Any], *, scenario: PerfScenario) -> Benchmark
     if not isinstance(serve_env_raw, dict):
         raise ValueError(f"{scenario.value} case {test_name!r} serve_env must be an object")
 
-    mark_raw = payload.get("mark", [])
-    if not isinstance(mark_raw, list):
-        raise ValueError(f"{scenario.value} case {test_name!r} mark must be a list")
+    mark_raw = payload.get("mark")
+    if not isinstance(mark_raw, dict):
+        raise ValueError(f"{scenario.value} case {test_name!r} mark must be an object")
 
     wait_for_vllm_ready = payload.get("wait_for_vllm_ready", True)
     if not isinstance(wait_for_vllm_ready, bool):
@@ -352,7 +352,7 @@ def _parse_case(payload: dict[str, Any], *, scenario: PerfScenario) -> Benchmark
         test_name=test_name,
         scenario=scenario,
         description=str(payload.get("description", "")),
-        mark=tuple(mark_raw),
+        mark=dict(mark_raw),
         deploy=deploy,
         benchmark_params=dict(benchmark_params),
         wait_for_vllm_ready=wait_for_vllm_ready,
@@ -390,22 +390,10 @@ def _fetch_hardware_slug_from_platform(device_id: int = 0) -> str | None:
         return None
 
 
-def _hardware_slug_from_mark(mark: tuple[Any, ...]) -> str | None:
-    for entry in mark:
-        if not isinstance(entry, dict):
-            continue
-        hardware_marks = entry.get("hardware_marks")
-        if not isinstance(hardware_marks, dict):
-            continue
-        for key in ("slug", "model", "device"):
-            raw = hardware_marks.get(key)
-            if isinstance(raw, str) and raw.strip():
-                return _sanitize_hardware_slug(raw.strip())
-        res = hardware_marks.get("res")
-        if isinstance(res, dict):
-            for value in res.values():
-                if isinstance(value, str) and value.strip():
-                    return _sanitize_hardware_slug(value.strip())
+def _hardware_slug_from_mark(mark: dict[str, Any]) -> str | None:
+    hardware = mark.get("hardware")
+    if isinstance(hardware, str) and hardware.strip():
+        return _sanitize_hardware_slug(hardware.strip())
     return None
 
 

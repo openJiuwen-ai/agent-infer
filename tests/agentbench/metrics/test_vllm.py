@@ -7,6 +7,9 @@ from agentinfer.agentbench.benchkit.metrics.vllm import (
     parse_prometheus,
     vllm_capture_reason,
 )
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def test_parse_prometheus_preserves_labels_and_timestamps() -> None:

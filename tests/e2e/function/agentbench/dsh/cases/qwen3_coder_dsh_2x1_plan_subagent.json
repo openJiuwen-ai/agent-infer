@@ -1,16 +1,11 @@
 {
   "test_name": "qwen3_coder_dsh_2x1_plan_subagent",
   "scenario": "baseline",
-  "mark": [
-    {
-      "hardware_marks": {
-        "res": {
-          "cuda": "L20"
-        },
-        "num_cards": 2
-      }
-    }
-  ],
+  "mark": {
+    "hardware": "L20",
+    "num_cards": 2,
+    "ci": "ready"
+  },
   "description": "Qwen3-Coder-30B-A3B-Instruct-FP8 on 2x L20 + DSH plan-subagent, SWE-bench Verified 2 tasks x 1 concurrency",
   "serve_env": {
     "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1"

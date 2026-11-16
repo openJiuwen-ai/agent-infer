@@ -24,6 +24,9 @@ from agentinfer.agentbench.replay.schema import AgentXSourceDetails
 from agentinfer.agentbench.replay.transport import ReplayTransport
 from agentinfer.agentbench.replay.unified_trace_ir import validate_trace_ir, write_trace_ir_manifest
 from agentinfer.agentbench.request_proxy.request_trace import RequestTraceWriter, load_request_facts
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _request(t: float, duration: float, hashes: list[int], *, output: int = 3, model: str = "model-a") -> dict:

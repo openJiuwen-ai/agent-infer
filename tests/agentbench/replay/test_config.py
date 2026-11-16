@@ -11,6 +11,9 @@ from agentinfer.agentbench.replay.config import (
     builtin_replay_config_path,
     load_replay_config,
 )
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def test_replay_config_resolves_paths(
