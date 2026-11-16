@@ -1,6 +1,16 @@
 {
   "test_name": "qwen3_coder_claude_2x1_single",
   "scenario": "baseline",
+  "mark": [
+    {
+      "hardware_marks": {
+        "res": {
+          "cuda": "L20"
+        },
+        "num_cards": 1
+      }
+    }
+  ],
   "description": "Claude Code single functional smoke, 2 tasks x 1 concurrency",
   "server_params": {
     "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
@@ -29,15 +39,5 @@
     "timeout": 3600,
     "agent-type": "claude",
     "endpoint": "/v1/messages"
-  },
-  "mark": [
-    {
-      "hardware_marks": {
-        "res": {
-          "cuda": "L20"
-        },
-        "num_cards": 1
-      }
-    }
-  ]
+  }
 }
