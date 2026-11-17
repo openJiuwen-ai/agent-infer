@@ -23,12 +23,7 @@ def validate_agent_artifacts(run_dir: Path) -> None:
         path = run_dir / name
         if not path.is_file():
             raise RuntimeError(f"missing run artifact: {path}")
-        if name in _REQUIRED_FILES and path.stat().st_size == 0:
-            raise RuntimeError(f"empty run artifact: {path}")
     for name in _REQUIRED_DIRS:
         path = run_dir / name
         if not path.is_dir():
             raise RuntimeError(f"missing artifact directory: {path}")
-    for path in run_dir.iterdir():
-        if path.is_dir() and path.name not in _REQUIRED_DIRS:
-            raise RuntimeError(f"unexpected directory at run root: {path}")

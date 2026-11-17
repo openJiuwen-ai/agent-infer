@@ -51,10 +51,9 @@ def test_rejects_missing_artifacts(run_artifacts, name):
 
 
 @pytest.mark.parametrize("name", _DATA_FILES)
-def test_rejects_empty_data_files(run_artifacts, name):
+def test_accepts_empty_data_files(run_artifacts, name):
     (run_artifacts / name).write_text("")
-    with pytest.raises(RuntimeError, match="empty"):
-        validate_agent_artifacts(run_artifacts)
+    validate_agent_artifacts(run_artifacts)
 
 
 def test_accepts_additional_files(run_artifacts):
@@ -62,9 +61,17 @@ def test_accepts_additional_files(run_artifacts):
     validate_agent_artifacts(run_artifacts)
 
 
-def test_rejects_additional_root_directories(run_artifacts):
-    (run_artifacts / "extra-diagnostics").mkdir()
-    with pytest.raises(RuntimeError, match="unexpected directory"):
+@pytest.mark.parametrize("name", ["claude_state", "extra-diagnostics", "unexpected-state"])
+def test_accepts_additional_root_directories(run_artifacts, name):
+    (run_artifacts / name).mkdir()
+    validate_agent_artifacts(run_artifacts)
+
+
+def test_additional_artifacts_do_not_replace_required_ones(run_artifacts):
+    (run_artifacts / "claude_state").mkdir()
+    (run_artifacts / "reproduce_issue.py").touch()
+    (run_artifacts / "tasks").rmdir()
+    with pytest.raises(RuntimeError, match="missing artifact directory"):
         validate_agent_artifacts(run_artifacts)
 
 

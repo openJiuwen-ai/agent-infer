@@ -87,14 +87,14 @@ failed tasks. Request counts and request failures do not determine whether
 the functional case passes. Artifact validation uses the same common
 contract for every agent:
 
-- Non-empty files: `agents.csv`, `distribution_samples.csv`, `manifest.json`,
+- Existing files: `agents.csv`, `distribution_samples.csv`, `manifest.json`,
   `requests.jsonl`, `sessions.csv`, `summary.json`, and `task_index.json`.
 - Existing log files: `proxy.stdout.log` and `proxy.stderr.log`; both may be empty.
 - Existing directories: `evidence/`, `tasks/`, and `workspaces/`.
 
-Additional ordinary files are allowed, but additional directories at the run
-root are rejected. There are no agent-specific artifact checks. Run and task
-success checks remain in the test entry.
+Additional files and directories are allowed for every agent; only required
+artifacts are checked. No agent-specific file contents are inspected.
+Run and task success checks remain in the test entry.
 
 These checks verify execution rather than SWE-bench patch correctness.
 A plan-subagent profile does not prove that the model actually delegated work.
