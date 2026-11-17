@@ -1,67 +1,34 @@
 {
-  "test_name": "glm52_2x1_agentinfer_correctness",
+  "test_name": "qwen3_coder_2x1_agentinfer_correctness",
   "scenario": "agentinfer",
-  "mark": [
-    {
-      "hardware_marks": {
-        "res": {
-          "npu": "Ascend"
-        },
-        "num_cards": 16
-      }
-    }
-  ],
-  "description": "GLM-5.2 agentinfer: 2 tasks, 1 concurrency, automatic SWE-bench Verified scoring (PR #64)",
-  "serve_env": {
-    "HCCL_OP_EXPANSION_MODE": "AIV",
-    "OMP_PROC_BIND": "false",
-    "OMP_NUM_THREADS": "1",
-    "HCCL_BUFFSIZE": "200",
-    "PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True",
-    "VLLM_ASCEND_ENABLE_FLASHCOMM1": "1",
-    "VLLM_ASCEND_ENABLE_FUSED_MC2": "0",
-    "VLLM_ASCEND_MODEL_EXECUTE_TIME_OBSERVE": "1"
+  "mark": {
+    "hardware": "L20",
+    "num_cards": 2
   },
+  "description": "Qwen3-Coder-30B-A3B-Instruct BF16 on 2x L20, agentinfer: 2 tasks, 1 concurrency, automatic SWE-bench Verified scoring (PR #64)",
+  "serve_env": {},
   "server_params": {
-    "model": "Eco-Tech/GLM-5.2-w4a8c8",
+    "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
     "middleware": [
       "agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware",
       "agentinfer.agentcache.core.api_adapter.AgentCacheLifecycleMiddleware"
     ],
     "serve_args": {
-      "served-model-name": "glm-5",
-      "enable-prefix-caching": true,
-      "api-server-count": 1,
-      "data-parallel-size": 1,
-      "enable-expert-parallel": true,
-      "tensor-parallel-size": 16,
+      "served-model-name": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "dtype": "bfloat16",
+      "tensor-parallel-size": 2,
       "seed": 1024,
-      "tool-call-parser": "glm47",
-      "reasoning-parser": "glm45",
+      "enable-prefix-caching": true,
       "enable-auto-tool-choice": true,
+      "tool-call-parser": "qwen3_coder",
       "max-num-seqs": 12,
-      "max-model-len": 180000,
+      "max-model-len": 65536,
       "max-num-batched-tokens": 8192,
-      "trust-remote-code": true,
       "gpu-memory-utilization": 0.92,
-      "quantization": "ascend",
-      "compilation-config": {
-        "cudagraph_mode": "FULL_DECODE_ONLY"
-      },
-      "speculative-config": {
-        "num_speculative_tokens": 3,
-        "method": "deepseek_mtp",
-        "enforce_eager": true
-      },
       "enable-prompt-tokens-details": true,
       "async-scheduling": true,
       "scheduler-cls": "agentinfer.agentcache.core.scheduler.AgentCacheAsyncSchedulerBridge",
       "additional-config": {
-        "enable_dsa_cp": true,
-        "enable_sparse_sfa_c8": false,
-        "enable_sparse_li_c8": true,
-        "enable_balance_scheduling": true,
-        "multistream_overlap_shared_expert": true,
         "agentcache": {
           "observability": {
             "enabled": true,
@@ -95,20 +62,21 @@
       }
     }
   },
-  "result_root": "test-results/agentinfer",
+  "result_root": "test-results/acc/claude/agentinfer",
   "benchmark_params": {
     "config": "agentinfer/agentbench/configs/swebench_vllm.yaml",
     "prepare_dataset": "swebench",
     "prepare_output_dir": "agentinfer/agentbench/data/swebench",
     "host": "127.0.0.1",
     "port": 8000,
-    "model": "glm-5",
-    "agent-executable": "/path/to/claude",
+    "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+    "agent-executable": "claude",
     "agent-profile": "plan-subagent",
     "benchmark-run-as-user": "test-user",
     "task-num": 2,
     "max-concurrency": 1,
     "timeout": 3600,
-    "with-correctness": true
+    "with-correctness": true,
+    "agent-type": "claude"
   }
 }

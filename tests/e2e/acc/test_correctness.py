@@ -15,8 +15,6 @@ from agentinfer.agentbench.benchkit.evaluation.inputs import digest
 from tests.e2e.helpers.benchmark import run_benchmark, validate_completed_run
 from tests.e2e.helpers.case_loader import E2EConfig, load_case_file
 
-pytestmark = pytest.mark.e2e_function
-
 
 def _cli(*args: str) -> str:
     completed = subprocess.run(
@@ -52,12 +50,8 @@ def _validate(run_dir: Path, evaluation: Path) -> None:
     print(f"[correctness] counts={summary.counts.model_dump()} resolved_rate={summary.resolved_rate} {evaluation}")
 
 
-@pytest.mark.gpu_test
-def test_run_with_correctness(pytestconfig: pytest.Config) -> None:
-    raw = pytestconfig.getoption("--test-config-file")
-    if not raw:
-        pytest.skip("select a correctness case with --test-config-file")
-    case = load_case_file(Path(raw))
+def test_run_with_correctness(pytestconfig: pytest.Config, case_file: Path) -> None:
+    case = load_case_file(case_file)
     assert case.benchmark_params.get("with-correctness") is True
     config = E2EConfig.from_case(case).with_benchmark_load(
         task_num=pytestconfig.getoption("--task-num"),
@@ -75,6 +69,7 @@ def test_run_with_correctness(pytestconfig: pytest.Config) -> None:
     _validate(run_dir, evaluations[0])
 
 
+@pytest.mark.cpu
 def test_evaluate_existing_run(pytestconfig: pytest.Config) -> None:
     raw = pytestconfig.getoption("--correctness-run-dir")
     if not raw:
@@ -91,6 +86,7 @@ def test_evaluate_existing_run(pytestconfig: pytest.Config) -> None:
     _validate(run_dir, created.pop())
 
 
+@pytest.mark.cpu
 def test_compare_correctness(pytestconfig: pytest.Config) -> None:
     baseline = pytestconfig.getoption("--correctness-baseline")
     candidate = pytestconfig.getoption("--correctness-candidate")
