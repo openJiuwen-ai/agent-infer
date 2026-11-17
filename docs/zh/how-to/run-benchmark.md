@@ -219,7 +219,8 @@ vllm bench serve --agentinfer compare-correctness \
 ## 选择 Agent 与透明 Router
 
 默认配置位于 `agentinfer/agentbench/configs/swebench_vllm.yaml`。Claude Code 使用 `single` 或 `plan-subagent`，需要 Claude CLI 和
-tmux。JiuwenSwarm 使用 `agent.code.normal` 或 `team.code.normal`，需要 WorkSwarm 0.2.8 CLI；DSH 使用 `single` 或 `plan-subagent`，需要 DeepSeek Harness
+tmux。JiuwenSwarm 使用 `agent.code.normal` 或 `team.code.normal`，需要 WorkSwarm 0.2.8 CLI；
+DSH 使用 `single` 或 `plan-subagent`，需要 DeepSeek Harness
 CLI。切换运行时时同时指定类型、profile、可执行文件和匹配端点：
 
 ```bash
