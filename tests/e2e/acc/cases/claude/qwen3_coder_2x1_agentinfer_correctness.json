@@ -22,7 +22,7 @@
       "enable-auto-tool-choice": true,
       "tool-call-parser": "qwen3_coder",
       "max-num-seqs": 12,
-      "max-model-len": 65536,
+      "max-model-len": 125536,
       "max-num-batched-tokens": 8192,
       "gpu-memory-utilization": 0.92,
       "enable-prompt-tokens-details": true,
