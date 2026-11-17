@@ -9,6 +9,9 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 from agentinfer.agentbench.agents.jiuwenswarm.limits import TaskBudget
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _load_extension(monkeypatch, actor):

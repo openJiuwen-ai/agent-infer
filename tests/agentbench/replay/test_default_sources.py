@@ -13,6 +13,9 @@ from agentinfer.agentbench.replay.agentinfer_source import builtin_agentinfer_so
 from agentinfer.agentbench.replay.config import ReplayBenchConfig
 from agentinfer.agentbench.replay.inferact_source import materialize_inferact_source
 from agentinfer.agentbench.replay.runner import _resolve_replay_source
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def test_builtin_agentinfer_source_is_packaged() -> None:
