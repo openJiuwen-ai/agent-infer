@@ -30,6 +30,9 @@ from agentinfer.agentbench.replay.planner import (
 from agentinfer.agentbench.replay.prompt import PromptBuilder, TokenizerClient
 from agentinfer.agentbench.replay.transport import TransportResult
 from agentinfer.agentbench.replay.unified_trace_ir import PromptReference
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _row(
