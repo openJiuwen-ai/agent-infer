@@ -70,6 +70,10 @@ BenchKit 将每次运行写入一个全新的结果目录。原始请求事实�
 | `claude-runner-error.log` | Claude 执行异常的堆栈。 |
 | `claude-evidence-error.log` | Claude 收尾时收集对话、终端或补丁失败的堆栈。 |
 | `jiuwenswarm-patch-error.log` | JiuwenSwarm 补丁导出失败的堆栈。 |
+| `jiuwenswarm-agent-limits.jsonl` | 子执行实例创建和模型/工具并发事件，用于核对累计额度与执行峰值。 |
+| `jiuwenswarm-runtime.json` | 实际 WorkSwarm/OpenJiuwen 版本、规范模式名和配额配置。 |
+| `jiuwenswarm-worker/` | 常驻运行进程的日志目录；通过短 socket 路径引用，停止后保留日志。 |
+| `jiuwenswarm-worker-stop.log` | 上游常驻运行进程停止函数的执行日志。 |
 
 这些错误日志仅在对应步骤失败时生成。Claude 的执行超时在任务期限已耗尽时归为 `timeout`；独立终端操作
 超时若未耗尽任务总期限，仍归为 `harness_error`。补丁导出失败会将原先完成的任务改为失败，并保留已有的任务失败原因。

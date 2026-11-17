@@ -219,16 +219,27 @@ vllm bench serve --agentinfer compare-correctness \
 ## 选择 Agent 与透明 Router
 
 默认配置位于 `agentinfer/agentbench/configs/swebench_vllm.yaml`。Claude Code 使用 `single` 或 `plan-subagent`，需要 Claude CLI 和
-tmux。JiuwenSwarm 使用 `code.normal`，需要 JiuwenSwarm CLI；DSH 使用 `single` 或 `plan-subagent`，需要 DeepSeek Harness
+tmux。JiuwenSwarm 使用 `agent.code.normal` 或 `team.code.normal`，需要 WorkSwarm 0.2.8 CLI；
+DSH 使用 `single` 或 `plan-subagent`，需要 DeepSeek Harness
 CLI。切换运行时时同时指定类型、profile、可执行文件和匹配端点：
 
 ```bash
 vllm bench serve --agentinfer run \
   --config agentinfer/agentbench/configs/swebench_vllm.yaml \
-  --agent-type jiuwenswarm --agent-profile code.normal \
+  --agent-type jiuwenswarm --agent-profile agent.code.normal \
   --agent-executable jiuwenswarm --endpoint /v1/chat/completions \
   --task-num 1 --result-dir results/jiuwenswarm-smoke
 ```
+
+JiuwenSwarm 运行环境安装 `workswarm==0.2.8`（依赖 `openjiuwen==0.1.20`，Python 3.11–3.13），
+并在该环境安装 AgentInfer；入口命令仍为 `jiuwenswarm`。主 Agent、团队成员和后代统一使用本次配置的模型。
+`code.normal`、`code.team` 分别归一为 `agent.code.normal`、`team.code.normal`。
+
+两个模式均支持 `--max-subagents N --max-concurrent-subagents C`（默认 1/1，要求 C ≤ N）。
+N 统计整个任务累计成功启动的子执行实例，包含团队成员和后代，不包含主 Agent/Leader；
+关闭实例不返还累计额度，同一实例恢复不重复计数。C 限制同时执行模型或实际工具工作的子执行实体，
+排队、空闲和纯等待不占槽位。团队动态组队、成员可以继续委派；队员共享任务工作区，关闭独立 worktree。
+配额耗尽时工具返回失败，Agent 可以改为自行处理剩余工作。
 
 DSH live run 固定支持 **0.2.1-rc.2**，Node 要求为 `^22.19.0 || >=24`。
 先将受支持的 Node 加入 `PATH`；激活 Python 虚拟环境不会自动切换 Node。
@@ -446,3 +457,22 @@ ZCode 的原生 `turn.failed` 错误保存在 `zcode-run-status.json` 的 `nativ
 `last_model_error`；即使最终超时，也能查看此前的 SDK 流错误及日志位置。
 辅助日志中的损坏行、缺字段和读取异常记录到 `model_log_warnings`，不覆盖任务状态或取消结果。
 错误计数只包含成功解析的记录；有解析告警时，不能将计数为 0 理解为没有模型错误。
+
+### JiuwenSwarm 0.2.8 适配验证
+
+无需模型服务的适配器测试：
+
+```bash
+python -m pytest tests/agentbench/agents/jiuwenswarm -q
+```
+
+在安装了 WorkSwarm 0.2.8 和 AgentInfer 的运行环境中执行真实依赖、受控 HTTP 模型、服务启动及取消测试：
+
+```bash
+AGENTBENCH_JIUWEN_NATIVE=1 python -m pytest tests/e2e/function/agentbench/jiuwenswarm/test_native_runtime.py -q
+```
+
+真实 SWE-bench 测试使用 `AGENTBENCH_VLLM_URL`、`AGENTBENCH_VLLM_MODEL`、
+`AGENTBENCH_JIUWENSWARM_EXECUTABLE`，以及可选的 `AGENTBENCH_JIUWEN_TEST_CONFIG`。
+准备数据与官方评测环境后执行 `test_live_swebench.py`；两个模式使用同一任务清单的第一题。
+缺少真实模型服务时，该项跳过，不代表已完成实题精度验证。

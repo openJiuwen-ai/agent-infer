@@ -249,7 +249,7 @@ executable, and endpoint together:
 ```bash
 vllm bench serve --agentinfer run \
   --config agentinfer/agentbench/configs/swebench_vllm.yaml \
-  --agent-type jiuwenswarm --agent-profile code.normal \
+  --agent-type jiuwenswarm --agent-profile agent.code.normal \
   --agent-executable jiuwenswarm --endpoint /v1/chat/completions \
   --task-num 1 --result-dir results/jiuwenswarm-smoke
 ```
@@ -448,3 +448,15 @@ Heartbeats produce no model content; task deadlines and ZCode's model progress c
 Malformed auxiliary log records, missing fields and read errors are reported in `model_log_warnings` without
 overriding task outcomes or cancellation. Error counts cover successfully parsed records only; a zero count with
 parsing warnings does not establish that no model error occurred.
+
+### WorkSwarm 0.2.8 Code modes
+
+Install `workswarm==0.2.8` (`openjiuwen==0.1.20`, Python 3.11–3.13) and AgentInfer in the agent environment.
+The executable remains `jiuwenswarm`. The aliases `code.normal` and `code.team` normalize to
+`agent.code.normal` and `team.code.normal`. Team members and their descendants use the configured model and workspace.
+
+Both profiles accept `--max-subagents N --max-concurrent-subagents C` (defaults 1/1, C ≤ N).
+N counts cumulative successful child launches across the entire task, including teammates and descendants,
+excluding the main agent/leader. Closing a child does not refund a launch; resuming an instance does not count again.
+C limits distinct children executing model/tool work. Idle, queued, and child-waiting operations consume no slot.
+A quota denial is returned to the calling tool so the agent can continue the work itself.

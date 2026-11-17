@@ -72,6 +72,10 @@ the comparison reports a warning and the run should not support a release-gate c
 | `claude-runner-error.log` | Claude execution exception traceback. |
 | `claude-evidence-error.log` | Traceback from failed Claude transcript, terminal, or patch collection during finalization. |
 | `jiuwenswarm-patch-error.log` | Traceback from failed JiuwenSwarm patch export. |
+| `jiuwenswarm-agent-limits.jsonl` | Child launch and model/tool concurrency events. |
+| `jiuwenswarm-runtime.json` | Installed WorkSwarm/OpenJiuwen versions, canonical profile, and limits. |
+| `jiuwenswarm-worker/` | Resident worker logs retained after shutdown; reached through a short socket path. |
+| `jiuwenswarm-worker-stop.log` | Upstream resident worker shutdown log. |
 
 These error logs are created only when the corresponding operation fails. A Claude execution timeout is classified as
 `timeout` when the task deadline has expired; an individual terminal operation timeout remains `harness_error` before
