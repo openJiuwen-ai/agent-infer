@@ -64,6 +64,23 @@ class PromptReference:
 
         return {"session_id": self.session_id, "turn_index": self.turn_index}
 
+    @classmethod
+    def from_dict(cls, value: object) -> PromptReference:
+        """Reconstruct a sidecar key from a serialized plan artifact.
+
+        Fail-closed: any malformed key raises so a corrupted plan cannot
+        round-trip into a load that silently points at the wrong turn. The
+        session id is validated by :func:`parse_prompt_reference`, the same
+        parser used when the reference is first derived from a trace, so a
+        loaded reference cannot name a component that the resolver would read
+        outside the text root (``..``, an absolute path, or a nested path).
+        """
+
+        reference = parse_prompt_reference(value)
+        if reference is None:
+            raise ValueError("prompt_ref must be an object")
+        return reference
+
 
 @dataclass(frozen=True)
 class UnifiedTraceIR:
@@ -153,7 +170,11 @@ def _trace_ir_digest_payload(manifest: dict[str, object]) -> dict[str, object]:
         "texts": manifest.get("texts"),
         "summary": manifest.get("summary"),
     }
-    if manifest.get("schema_version") in {TOKEN_RECIPE_SCHEMA_VERSION, HASH_SNAPSHOT_SCHEMA_VERSION}:
+    schema_version = manifest.get("schema_version")
+    if isinstance(schema_version, str) and schema_version in {
+        TOKEN_RECIPE_SCHEMA_VERSION,
+        HASH_SNAPSHOT_SCHEMA_VERSION,
+    }:
         payload["prompt_source"] = manifest.get("prompt_source")
     return payload
 
@@ -195,7 +216,14 @@ def validate_trace_ir(requests_path: Path, text_dir: Path | None = None) -> Unif
     manifest_path = root / BUNDLE_MANIFEST_NAME
     manifest = _load_object(manifest_path, "unified Trace IR manifest")
     schema_version = manifest.get("schema_version")
-    if schema_version not in {BUNDLE_SCHEMA_VERSION, TOKEN_RECIPE_SCHEMA_VERSION, HASH_SNAPSHOT_SCHEMA_VERSION}:
+    # A JSON value reaches this membership test untyped. A list or object is
+    # unhashable and would raise ``TypeError`` instead of the ``ValueError``
+    # this function uses for every other malformed-manifest case.
+    if not isinstance(schema_version, str) or schema_version not in {
+        BUNDLE_SCHEMA_VERSION,
+        TOKEN_RECIPE_SCHEMA_VERSION,
+        HASH_SNAPSHOT_SCHEMA_VERSION,
+    }:
         raise ValueError(f"unsupported unified Trace IR schema_version: {manifest.get('schema_version')!r}")
     prompt_source = manifest.get("prompt_source")
     if schema_version == BUNDLE_SCHEMA_VERSION:

@@ -99,6 +99,42 @@ Replay additionally writes `replay-source-analysis.json`, `replay-plan.json`, an
 `replay-error.json` on failure. These describe planning, execution, and audit facts, not task correctness. See
 [Trace Replay](../how-to/run-trace-replay.md).
 
+`replay-plan.json` is also a loadable artifact: `ReplayPlan.load(path)` (or `ReplayPlan.from_dict` plus
+`validate_loaded_plan`) reconstructs and structurally validates the plan that was written, so it can be used as a
+self-contained input for inspection or, in a future runner pass, resuming execution without re-planning. Loading
+validates the artifact alone (reference closure, full wait-for graph acyclicity over `send_after` and
+`context_after`, target sanity, context-mode pairing) and does not re-derive `workload_fingerprint`/`plan_namespace`,
+which embed the build-time workload config. Every key `to_dict()` writes unconditionally must be present, even when its
+value is null: a dropped `send_after` or `context_after` would otherwise read as "no dependency" and quietly change the
+execution order. `interval_model.mode` must also agree with its parameters (`lognormal` needs `mu` and `sigma`;
+`trace` rejects them), so a mode/parameter mismatch fails at load instead of at the first interval sample. The
+presence rule stops at `interval_model`: its fit fields (`anchors`, `anchor_predictions`, and the rest) are all optional,
+so an artifact that lost them still loads with those values null.
+
+Beyond per-field presence and typing, loading enforces the cross-field facts that hold for every plan a builder can
+write: `execution_ready` and `execution_unavailable_reason` are set together, `prompt_calibration.status` names one of the
+states the runner writes, `replayable_source_sessions` never exceeds `source_sessions`, and task identity is unique across
+the plan (`task_id`, `task_index`, `runtime_session_id`, the `(source_session_id, sample_ordinal)` draw, and every
+request's `runtime_request_id`) with both session ids non-empty. A repeated draw in particular adds no coverage while the
+task counts and fingerprint claim it does. Request nodes must also carry a real `prompt_kind` and `context_mode`: `"none"`
+is the timing node's neutral value, and on a request it renders a different prompt than the plan describes or names a
+context predecessor the executor never validates. See [Python API](../reference/python-api.md).
+
+Every field a node serializes is parsed back, so `from_dict(to_dict())` preserves the node. A `timing_dependency`
+node carries `prompt_kind` and its actor identity (`actor_id`, `actor_role`, `parent_actor_id`) so a reloaded plan can
+still say whose wait a timing node is; the prompt kind must be the neutral `none`, and an artifact that puts a request
+kind there is rejected rather than silently reinterpreted. The remaining request-only fields on a timing node
+(`prompt_recipe_key`, `prompt_ref`, `context_after`, `context_mode`, the token targets, and the rest) are rejected: a
+timing node never issues a request, so it has no place to carry them, and accepting them would load an artifact whose
+content disagrees with the plan it produces. `source_status` and `prompt_recipe_key` are build-time inputs for planning
+and validation, so they are not carried. Because `workload_fingerprint` is
+computed over the serialized tasks, a schema change to node serialization changes the fingerprint of newly built
+plans; plans written by an earlier release keep the fingerprint they were built with, and loading never recomputes it.
+
+[`replay-plan.example.json`](replay-plan.example.json) is a minimal, structurally valid artifact: one session with two
+dependent requests and one timing node. It loads and re-serializes unchanged, so it can be used as a starting point for
+inspection tooling and for tests that corrupt a single field to check the fail-closed contract.
+
 DSH 0.2 also records `evidence/dsh-runtime.json` (versions, capabilities, installation lock hash) and task-local
 `dsh-effective-config.yaml`, `dsh-lineage.json`, `dsh-run-status.json`, and `dsh-processes.jsonl`.
 `dsh-sessions/raw/index.json` links unchanged raw logs to decoded sessions; `transcript.jsonl` is selected by the
