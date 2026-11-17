@@ -36,7 +36,6 @@
     "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
     "agent-executable": "claude",
     "agent-profile": "plan-subagent",
-    "benchmark-run-as-user": "test-user",
     "task-num": 2,
     "max-concurrency": 1,
     "timeout": 3600,

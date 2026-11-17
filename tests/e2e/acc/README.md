@@ -21,7 +21,9 @@ python -m pytest -s -v tests/e2e/acc/test_correctness.py::test_run_with_correctn
 ```
 
 Use `qwen3_coder_2x1_agentinfer_correctness.json` for AgentInfer. Supports `--task-num`, `--max-concurrency`, and
-`--benchmark-run-as-user` overrides.
+`--benchmark-run-as-user` overrides. No case hardcodes a benchmark username.
+When pytest runs as root, Claude `plan-subagent` requires `--benchmark-run-as-user USER`
+with an existing non-root account that can access Docker. When running as that account directly, omit the option.
 
 ## Agent cases
 
