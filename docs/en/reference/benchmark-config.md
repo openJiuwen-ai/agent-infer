@@ -74,7 +74,7 @@ successful completion still requires validated session evidence.
 | Field | Default | Constraint and meaning |
 | --- | --- | --- |
 | `type` | `claude` | `claude`, `jiuwenswarm`, `dsh`, or `zcode`. |
-| `profile` | `single` | Claude/DSH/ZCode: `single` or `plan-subagent`; JiuwenSwarm: `code.normal`. |
+| `profile` | `single` | Claude/DSH/ZCode: `single` or `plan-subagent`; JiuwenSwarm: `agent.code.normal` or `team.code.normal` (aliases: `code.normal`, `code.team`). |
 | `executable` | `claude` | Agent CLI command name or path. |
 | `tmux_startup_seconds` | `2.0` | tmux session startup wait; must be `>= 0`. |
 | `terminal_capture_interval_seconds` | `30` | Terminal evidence capture interval; must be `>= 1`. |

@@ -17,7 +17,8 @@ class JiuwenSwarmProfile:
 
     name: str
     build_prompt: Callable[[Task], str]
-    supports_subagent_limits: bool = False
+    supports_subagent_limits: bool = True
+    is_team: bool = False
 
 
 def _code_normal_prompt(task: Task) -> str:
@@ -33,22 +34,30 @@ Work in the provided repository and implement the fix.
 """
 
 
-CODE_NORMAL_PROFILE = JiuwenSwarmProfile("code.normal", _code_normal_prompt)
+def _code_team_prompt(task: Task) -> str:
+    return _code_normal_prompt(task) + (
+        "\nBuild a team and delegate at least one focused task to a teammate. "
+        "Teammates may delegate further within the shared task limits. "
+        "Coordinate edits in the provided repository, wait for all delegated work, "
+        "verify the combined changes, then finish the team round.\n"
+    )
 
-_RUNNABLE = {CODE_NORMAL_PROFILE.name: CODE_NORMAL_PROFILE}
-_PLANNED = frozenset({"code.team"})
+
+CODE_NORMAL_PROFILE = JiuwenSwarmProfile("agent.code.normal", _code_normal_prompt)
+CODE_TEAM_PROFILE = JiuwenSwarmProfile("team.code.normal", _code_team_prompt, is_team=True)
+
+_RUNNABLE = {profile.name: profile for profile in (CODE_NORMAL_PROFILE, CODE_TEAM_PROFILE)}
+_ALIASES = {"code.normal": CODE_NORMAL_PROFILE.name, "code.team": CODE_TEAM_PROFILE.name}
 
 
 def get_profile(profile_name: str) -> JiuwenSwarmProfile:
     """Return a runnable JiuwenSwarm profile.
 
     Raises:
-        ValueError: If the profile is unknown or planned but not yet implemented.
+        ValueError: If the profile is unsupported.
     """
 
-    if profile_name in _PLANNED:
-        raise ValueError(f"JiuwenSwarm profile is designed but not implemented: {profile_name!r}")
     try:
-        return _RUNNABLE[profile_name]
+        return _RUNNABLE[_ALIASES.get(profile_name, profile_name)]
     except KeyError:
         raise ValueError(f"Unknown JiuwenSwarm profile: {profile_name!r}") from None

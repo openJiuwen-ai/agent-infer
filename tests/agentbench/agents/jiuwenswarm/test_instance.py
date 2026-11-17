@@ -61,7 +61,7 @@ def test_task_config_uses_identity_provider_and_disables_permissions(tmp_path: P
     config = yaml.safe_load(instance.config_path.read_text(encoding="utf-8"))
     model = config["models"]["defaults"][0]["model_client_config"]
     assert model == {
-        "api_base": "http://127.0.0.1:18180",
+        "api_base": "http://127.0.0.1:18180/v1",
         "api_key": "agentbench",
         "model_name": "model",
         "client_provider": "AgentBenchAffinity",
@@ -75,10 +75,10 @@ def test_task_config_uses_identity_provider_and_disables_permissions(tmp_path: P
     assert (extension_search_root / "jiuwenswarm" / "extension.py").is_file()
     assert config["permissions"] == {"enabled": False}
     assert config["react"]["completion_timeout"] == 14400
-    assert config["react"]["kv_cache_affinity_config"] == {
+    assert config["kv_cache_affinity_config"] == {
         "enable_kv_cache_affinity": False,
-        "enable_kv_cache_release": False,
     }
+    assert config["react"]["subagent_runtime"] == {"enabled": True}
     assert config["modes"]["code"] == {
         "memory": {"enabled": False},
         "rails": [],
@@ -103,6 +103,27 @@ def test_task_config_writes_mandatory_sandbox_section(tmp_path: Path) -> None:
         "startup_mode": "external",
     }
     assert config["sandbox"]["url"] == "http://127.0.0.1:21004"
+
+
+def test_team_uses_same_model_workspace_policy_and_inprocess_runtime(tmp_path):
+    instance = _instance(tmp_path)
+    _write_minimal_config(instance)
+    data = yaml.safe_load(instance.config_path.read_text())
+    data["modes"]["team"] = {"jiuwen_team": {"agents": {"leader": "$agent_leader"}}}
+    instance.config_path.write_text(yaml.safe_dump(data))
+    instance._configure()
+    config = yaml.safe_load(instance.config_path.read_text())
+    team = config["modes"]["team"]["jiuwen_team"]
+    assert team["spawn_mode"] == "inprocess"
+    assert team["dispatch_mode"] == "autonomous"
+    assert team["worktree"] == {"enabled": False}
+    assert team["enable_swarmflow"] is False
+    for role in ("leader", "teammate"):
+        member = team["agents"][role]
+        assert member["model"]["model_client_config"] == config["models"]["defaults"][0]["model_client_config"]
+        assert member["enable_subagent_runtime"] is True
+        assert member["sys_operation"]["mode"] == "sandbox"
+        assert member["sys_operation"]["gateway_config"]["launcher_config"]["base_url"] == instance.jiuwenbox_url
 
 
 def test_task_config_rejects_unexpected_mapping_shape(tmp_path: Path) -> None:
@@ -217,3 +238,33 @@ def test_jiuwenbox_server_uses_supported_listen_flag(
     )
     assert captured["kwargs"]["cwd"] == instance.artifact_dir
     assert captured["kwargs"]["env"]["JIUWENBOX_POLICY_PATH"] == str(instance.jiuwenbox_policy_path)
+
+
+@pytest.mark.parametrize("profile", ["agent.code.normal", "team.code.normal"])
+def test_interrupt_sends_actual_profile(tmp_path, monkeypatch, profile):
+    import json
+
+    import websockets
+
+    instance = _instance(tmp_path)
+    instance.profile_name = profile
+    sent = []
+
+    class Connection:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def recv(self):
+            if not sent:
+                return json.dumps({"type": "event", "event": "connection.ack"})
+            return json.dumps({"type": "res", "id": sent[0]["id"], "ok": True, "payload": {"accepted": True}})
+
+        async def send(self, message):
+            sent.append(json.loads(message))
+
+    monkeypatch.setattr(websockets, "connect", lambda *args, **kwargs: Connection())
+    assert asyncio.run(instance._interrupt_once(5))
+    assert sent[0]["params"]["mode"] == profile
