@@ -10,6 +10,7 @@ from dataclasses import replace
 from functools import wraps
 from importlib.metadata import version
 from pathlib import Path
+from typing import cast
 from weakref import WeakKeyDictionary
 
 from openjiuwen.agent_teams.harness.team_harness import TeamHarness
@@ -32,13 +33,14 @@ _team_actors: WeakKeyDictionary = WeakKeyDictionary()
 
 
 def current_actor() -> Actor:
+    budget = cast(TaskBudget, _budget)
     session = get_current_session()
     if session is not None:
         key = session.get_cache_identity().cache_id
-        if key in _budget.actors:
-            return _budget.actors[key]
+        if key in budget.actors:
+            return budget.actors[key]
     # Model helpers can have their own session; attribute them to the active work.
-    return _actor.get()
+    return cast(Actor, _actor.get())
 
 
 def _wrap_start(original):
@@ -85,7 +87,7 @@ def install() -> None:
         int(os.environ["AGENTBENCH_MAX_CONCURRENT_SUBAGENTS"]),
         Path(os.environ["AGENTBENCH_LIMITS_LOG"]),
     )
-    _budget.log_path.with_name("jiuwenswarm-runtime.json").write_text(
+    cast(Path, _budget.log_path).with_name("jiuwenswarm-runtime.json").write_text(
         json.dumps(
             {
                 "workswarm": version("workswarm"),
