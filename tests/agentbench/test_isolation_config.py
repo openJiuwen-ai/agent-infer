@@ -19,6 +19,9 @@ from agentinfer.agentbench.agents.jiuwenswarm.instance import (
     JiuwenInstance,
     _jiuwenbox_policy,
 )
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 # ---------------------------------------------------------------------------
 # Claude settings

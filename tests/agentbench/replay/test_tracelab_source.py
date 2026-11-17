@@ -10,6 +10,9 @@ import pytest
 from agentinfer.agentbench.replay.config import ReplayBenchConfig
 from agentinfer.agentbench.replay.runner import _resolve_replay_source
 from agentinfer.agentbench.replay.tracelab_source import materialize_tracelab_source
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def _write_gzip(path: Path, rows: list[dict[str, object]]) -> None:

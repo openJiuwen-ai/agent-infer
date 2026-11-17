@@ -11,6 +11,9 @@ import pytest
 from agentinfer.agentbench.replay.config import ReplayBenchConfig
 from agentinfer.agentbench.replay.converters import codex_swebenchpro
 from agentinfer.agentbench.replay.runner import _prepare_replay_source
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 @pytest.fixture

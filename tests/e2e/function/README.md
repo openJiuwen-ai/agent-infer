@@ -2,8 +2,7 @@
 
 Correctness-oriented GPU/NPU E2E checks live here. They are **not** performance A/B suites (`tests/e2e/perf/`).
 
-Default CI skips all of `tests/e2e` (`pytest --ignore=tests/e2e`). Run these on a machine with vLLM,
-weights, and (for replay) trace files.
+Ready CPU CI selects `cpu and ready`. The DSH cases use `L20`, `cards_2`, and `ready`; replay cases have no CI lane.
 
 ## Position in the repo
 
