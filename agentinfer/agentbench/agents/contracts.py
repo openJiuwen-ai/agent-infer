@@ -35,6 +35,7 @@ class TerminationReason(str, Enum):
     SUBAGENT_FAILED = "subagent_failed"
     PLAN_NOT_APPROVED = "plan_not_approved"
     MAX_TOKENS = "max_tokens"
+    MODEL_CONTEXT_EXCEEDED = "model_context_exceeded"
     PLAN_EXIT_LOOP = "plan_exit_loop"
     VALIDATION_ERROR_LOOP = "validation_error_loop"
     CONFIRMATION_HANG = "confirmation_hang"
@@ -77,6 +78,8 @@ class AgentRunRequest:
     context_window: int = 262144
     max_tokens: int = 8192
     cleanup_timeout_seconds: float = 10.0
+    max_subagents: int = 1
+    max_concurrent_subagents: int = 1
 
 
 @dataclass

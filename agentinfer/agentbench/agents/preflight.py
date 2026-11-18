@@ -35,6 +35,8 @@ async def check_executable_output(
     *,
     label: str,
     expected: tuple[str, ...] = (),
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
 ) -> Path:
     """Run one command and assert it exits 0 and prints expected tokens.
 
@@ -46,17 +48,22 @@ async def check_executable_output(
     resolved = shutil.which(executable)
     if resolved is None:
         raise RuntimeError(f"{label} executable is not available: {executable}")
+    resolved = str(Path(resolved).absolute())
     command = " ".join((executable, *args))
     try:
         result = await asyncio.to_thread(
             subprocess.run,
             [resolved, *args],
+            cwd=cwd,
+            env=env,
             capture_output=True,
             timeout=10,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError(f"{label} executable preflight check failed: {command}") from exc
+        raise RuntimeError(
+            f"{label} executable preflight check failed: {command}; {type(exc).__name__}: {exc}"
+        ) from exc
     if result.returncode != 0:
         detail = result.stderr.decode(errors="replace").strip() or result.stdout.decode(errors="replace").strip()
         message = f"{label} executable preflight check failed: {command}"

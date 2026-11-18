@@ -29,6 +29,7 @@ class DshProfile:
     permission_mode: str
     policy_patch: str
     enforce_plan_mode: bool = False
+    supports_subagent_limits: bool = False
 
 
 _PERMISSION_MODE = "workspace-write"

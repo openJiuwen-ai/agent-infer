@@ -26,6 +26,11 @@ services:
       HF_HOME: /home/models
       HF_HUB_CACHE: /home/models/hub
       HOME: /tmp/ci-home
+      # Empty unless the step sets it. ci-entrypoint.sh stays root only then.
+      AGENTINFER_CI_AS_ROOT: ${AGENTINFER_CI_AS_ROOT:-}
+      # Root workers and sudo-wrapped benchmarks share the checkout. Avoid
+      # root-owned __pycache__ directories that block the next host checkout.
+      PYTHONDONTWRITEBYTECODE: "1"
       PYTEST_ADDOPTS: -o cache_dir=/tmp/pytest-cache
     deploy:
       resources:

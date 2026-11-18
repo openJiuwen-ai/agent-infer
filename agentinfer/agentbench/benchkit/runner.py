@@ -6,8 +6,9 @@
 import asyncio
 import time
 import uuid
+from collections import defaultdict
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import TypeVar
 
@@ -16,12 +17,13 @@ from tqdm import tqdm
 
 from ..agents import AgentRunRequest, AgentRunResult, check_agent_preflight, run_agent
 from ..agents.contracts import AgentPreflightReport, AgentRunOutcome, TerminationReason
-from ..request_proxy import create_request_proxy_lifecycle, load_request_facts
+from ..request_proxy import RequestFact, create_request_proxy_lifecycle, load_request_facts
 from .artifacts import (
     FinalizationContext,
     RunFinalizer,
     build_run_manifest,
     build_task_result,
+    load_task_results,
 )
 from .collectors.correctness import load_correctness_artifact
 from .collectors.environment import collect_environment
@@ -181,6 +183,7 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
         run_wall_time_seconds = (finished_at - manifest.created_at).total_seconds()
         facts = finalize_sync("request_facts", lambda: load_request_facts(context.trace_path))
         if facts is not None:
+            finalize_sync("task_topologies", lambda: _refresh_task_topologies(output_dir, facts))
             try:
                 analysis_artifacts = write_analysis_artifacts([output_dir], output_dir, plots=False)
             except Exception as exc:
@@ -224,6 +227,18 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
     if finalization_errors:
         raise RuntimeError("Benchmark finalization failed: " + "; ".join(finalization_errors))
     return output_dir
+
+
+def _refresh_task_topologies(output_dir: Path, facts: list[RequestFact]) -> None:
+    by_session: dict[str | None, list[RequestFact]] = defaultdict(list)
+    for fact in facts:
+        by_session[fact.session_id].append(fact)
+    for result in load_task_results(output_dir):
+        topology = derive_session_topology(by_session[result.session_id], result.session_id)
+        atomic_write_json(
+            _task_path(output_dir / "tasks", result.instance_id) / "result.json",
+            replace(result, topology=topology).to_dict(),
+        )
 
 
 async def _run_tasks(
@@ -314,6 +329,8 @@ async def _run_single_task(
                 context_window=config.agent.context_window,
                 max_tokens=config.agent.max_tokens,
                 cleanup_timeout_seconds=config.experiment.cleanup_timeout_seconds,
+                max_subagents=config.agent.max_subagents,
+                max_concurrent_subagents=config.agent.max_concurrent_subagents,
             )
         )
     except asyncio.CancelledError as exc:
@@ -333,7 +350,7 @@ async def _run_single_task(
             result.finished_at = utc_now().isoformat()
         if not result.started_at:
             result.started_at = started_at
-        topology = derive_session_topology(load_request_facts(context.trace_path, session_id=session_id), session_id)
+        topology = derive_session_topology((), session_id)
         atomic_write_json(
             output_dir / "result.json",
             build_task_result(result, topology, error, task_position=task_position).to_dict(),
@@ -424,8 +441,14 @@ def _trace_capture(path: Path, close_result) -> EvidenceCapture:
 
 async def check_preflight(config: AgentBenchConfig) -> AgentPreflightReport | None:
     report = await check_agent_preflight(config.agent.type, config.agent.executable)
-    async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
-        response = await client.get(f"{config.backend.base_url.rstrip('/')}/v1/models")
-        if response.status_code != 200:
-            raise RuntimeError(f"Backend {config.backend.base_url} is not healthy")
+    url = f"{config.backend.base_url.rstrip('/')}/v1/models"
+    try:
+        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
+            response = await client.get(url)
+    except httpx.RequestError as exc:
+        raise RuntimeError(f"Backend preflight failed: GET {url}, timeout=10s; {type(exc).__name__}: {exc}") from exc
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Backend {config.backend.base_url} is not healthy: GET {url} returned HTTP {response.status_code}"
+        )
     return report

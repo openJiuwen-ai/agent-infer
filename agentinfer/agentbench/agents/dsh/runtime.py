@@ -79,7 +79,7 @@ def _probe_sandbox(executable: Path) -> dict[str, object]:
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
-            raise RuntimeError("Agent sandbox preflight check failed") from exc
+            raise RuntimeError(f"Agent sandbox preflight check failed: {type(exc).__name__}: {exc}") from exc
     if result.returncode != 0:
         detail = result.stderr.decode(errors="replace").strip() or result.stdout.decode(errors="replace").strip()
         message = "Agent sandbox preflight check failed"
@@ -186,9 +186,12 @@ class DshRuntime:
         )
         try:
             return await asyncio.to_thread(_runtime_report, path)
-        except subprocess.CalledProcessError as exc:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+            detail = f"{type(exc).__name__}: {exc}"
+            if isinstance(exc, subprocess.CalledProcessError):
+                detail += f"\n{exc.stderr}"
             raise RuntimeError(
-                f"DSH capability preflight failed: expected={DSH_VERSION}, path={command}\n{exc.stderr}"
+                f"DSH capability preflight failed: expected={DSH_VERSION}, path={command}\n{detail}"
             ) from exc
 
     async def run(self, request):  # type: ignore[no-untyped-def]

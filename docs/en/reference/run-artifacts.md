@@ -32,6 +32,10 @@ When the `vllm` block in `summary.json` is missing a metrics snapshot, `reason` 
 (for example `metrics_capture_failed: <collector error>`, typically a misconfigured `metrics_url` or an unreachable
 metrics endpoint). When there is no collector error, `reason` is `missing_metrics_snapshot`.
 
+Model service preflight failures include the request URL in the run artifacts. Connection errors include the exception
+type and timeout setting; non-200 responses include the HTTP status code. When a DSH or ZCode version probe command
+fails to execute, the error includes the expected version, executable path, and original exception details.
+
 ## Top-Level Files
 
 | File | Content |
@@ -65,6 +69,13 @@ the comparison reports a warning and the run should not support a release-gate c
 | `claude-settings.json` | Non-secret Claude Code settings used for the task. |
 | `claude-launch-command.txt` | Redacted launch command. |
 | `terminal-*.log` | Periodic terminal captures and final output. |
+| `claude-runner-error.log` | Claude execution exception traceback. |
+| `claude-evidence-error.log` | Traceback from failed Claude transcript, terminal, or patch collection during finalization. |
+| `jiuwenswarm-patch-error.log` | Traceback from failed JiuwenSwarm patch export. |
+
+These error logs are created only when the corresponding operation fails. A Claude execution timeout is classified as
+`timeout` when the task deadline has expired; an individual terminal operation timeout remains `harness_error` before
+that deadline. Patch export failure changes a completed task to failed while preserving an existing task failure reason.
 
 Credentials enter through the launch environment and must not appear in settings, command, or log artifacts. If a
 secret appears, do not share the result directory and rotate the credential immediately.

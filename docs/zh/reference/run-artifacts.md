@@ -32,6 +32,9 @@ BenchKit 将每次运行写入一个全新的结果目录。原始请求事实�
 `metrics_capture_failed: <采集器错误>`，常见于 `metrics_url` 配置错误或指标服务不可达）。没有采集器错误时，
 `reason` 为 `missing_metrics_snapshot`。
 
+模型服务预检失败时，运行产物包含请求地址；连通性错误包含异常类型和超时配置，非 200 响应包含 HTTP
+状态码。DSH、ZCode 的版本探测命令执行失败时，错误消息包含预期版本、启动路径和原始异常信息。
+
 ## 顶层文件
 
 | 文件 | 内容 |
@@ -64,6 +67,12 @@ BenchKit 将每次运行写入一个全新的结果目录。原始请求事实�
 | `claude-settings.json` | 本次任务使用的非敏感 Claude Code 设置。 |
 | `claude-launch-command.txt` | 已脱敏的启动命令。 |
 | `terminal-*.log` | 周期性终端采集和最终输出。 |
+| `claude-runner-error.log` | Claude 执行异常的堆栈。 |
+| `claude-evidence-error.log` | Claude 收尾时收集对话、终端或补丁失败的堆栈。 |
+| `jiuwenswarm-patch-error.log` | JiuwenSwarm 补丁导出失败的堆栈。 |
+
+这些错误日志仅在对应步骤失败时生成。Claude 的执行超时在任务期限已耗尽时归为 `timeout`；独立终端操作
+超时若未耗尽任务总期限，仍归为 `harness_error`。补丁导出失败会将原先完成的任务改为失败，并保留已有的任务失败原因。
 
 凭据通过启动环境传入，不得出现在设置、命令或日志产物中。发现敏感值时，不应共享该结果目录，并应立即
 轮换相关凭据。

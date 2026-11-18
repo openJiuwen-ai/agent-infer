@@ -135,6 +135,11 @@ async def run_jiuwenswarm(request: AgentRunRequest) -> AgentRunResult:
             result.has_patch = True
             result.patch_bytes = len(patch.encode("utf-8"))
     except Exception:
+        await asyncio.to_thread(
+            (request.artifact_dir / "jiuwenswarm-patch-error.log").write_text,
+            traceback.format_exc(),
+            encoding="utf-8",
+        )
         if result.outcome is AgentRunOutcome.COMPLETED:
             result.outcome = AgentRunOutcome.FAILED
             result.termination_reason = TerminationReason.HARNESS_ERROR

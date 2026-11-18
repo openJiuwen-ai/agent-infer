@@ -1,6 +1,6 @@
 # AgentBench
 
-AgentBench separates orchestration (`benchkit/`), Claude Code/JiuwenSwarm/DSH execution (`agents/`), and transparent
+AgentBench separates orchestration (`benchkit/`), Claude Code/JiuwenSwarm/DSH/ZCode execution (`agents/`), and transparent
 request observation (`request_proxy/`). Baseline and Scheduler candidate runs both target vLLM through the same
 Request Proxy.
 

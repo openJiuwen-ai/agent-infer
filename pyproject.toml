@@ -20,12 +20,22 @@ dev = [
 addopts = ["--import-mode=importlib"]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "cpu: [hardware] CPU only, no GPU or NPU",
+    "L20: [hardware] NVIDIA L20 GPU",
+    "A3: [hardware] Ascend A3 NPU",
+    "cards_1: one accelerator card",
+    "cards_2: two accelerator cards",
+    "cards_16: sixteen accelerator cards",
+    "ready: selected by the ready pipeline",
+    "nightly: reserved for a future nightly pipeline",
+]
 
 [tool.setuptools.packages.find]
 include = ["agentinfer*"]
 
 [tool.setuptools.package-data]
-agentinfer = ["agentbench/configs/*.yaml", "agentbench/data/*.jsonl"]
+agentinfer = ["agentbench/configs/*.yaml", "agentbench/data/*.jsonl", "agentbench/agents/zcode/*.cjs"]
 
 [project.scripts]
 vllm = "agentinfer.agentcache.entrypoints.cli.main:main"

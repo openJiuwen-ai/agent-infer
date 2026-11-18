@@ -13,11 +13,13 @@ from .claude.runtime import ClaudeRuntime
 from .dsh.runtime import DshRuntime
 from .jiuwenswarm.runtime import JiuwenSwarmRuntime
 from .runtime import AgentRuntime
+from .zcode.runtime import ZCodeRuntime
 
 RUNTIMES: dict[str, AgentRuntime] = {
     "claude": ClaudeRuntime(),
     "jiuwenswarm": JiuwenSwarmRuntime(),
     "dsh": DshRuntime(),
+    "zcode": ZCodeRuntime(),
 }
 
 

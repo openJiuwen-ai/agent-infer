@@ -9,6 +9,7 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import stat
 import uuid
 from collections.abc import Sequence
@@ -22,6 +23,16 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 DEFAULT_BASE_URL = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"
 _LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost"})
+
+
+def reserve_local_port(host: str = DEFAULT_HOST) -> int:
+    """Return a currently unused TCP port on a loopback address."""
+
+    bind_host = "127.0.0.1" if host == "localhost" else host
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((bind_host, 0))
+        return int(sock.getsockname()[1])
+
 
 PLAN_SUBAGENT_PROFILE = "plan-subagent"
 _PRESERVED_ENV_KEYS = (
@@ -72,7 +83,7 @@ class BenchmarkCase:
     test_name: str
     scenario: PerfScenario
     description: str
-    mark: tuple[Any, ...]
+    mark: dict[str, Any]
     deploy: VllmDeployConfig
     benchmark_params: dict[str, Any]
     wait_for_vllm_ready: bool
@@ -150,11 +161,19 @@ class E2EConfig:
             else None
         )
 
+        host = str(benchmark.get("host", DEFAULT_HOST))
+        if benchmark.get("port") is not None:
+            port = int(benchmark["port"])
+        elif host in _LOCAL_HOSTS:
+            port = reserve_local_port(host)
+        else:
+            port = DEFAULT_PORT
+
         return cls(
             case=case,
             scenario=case.scenario,
-            host=str(benchmark.get("host", DEFAULT_HOST)),
-            port=int(benchmark.get("port", DEFAULT_PORT)),
+            host=host,
+            port=port,
             bench_config=bench_config,
             prepare_dataset=prepare_dataset,
             dataset_output_dir=dataset_output_dir,
@@ -228,8 +247,11 @@ class E2EConfig:
 
     def validate_prerequisites(self) -> list[str]:
         blockers: list[str] = []
-        if not self.case.deploy.model.exists():
-            blockers.append(f"model path does not exist for {self.scenario.value}: {self.case.deploy.model}")
+        # Absolute paths must already exist. Relative values such as
+        # ``Qwen/Qwen3-Coder-...`` are Hugging Face repo ids; vLLM downloads them.
+        model = self.case.deploy.model
+        if model.is_absolute() and not model.exists():
+            blockers.append(f"model path does not exist for {self.scenario.value}: {model}")
         if not shutil.which("vllm"):
             blockers.append("vllm executable is unavailable on PATH")
         if not self.bench_config.exists():
@@ -307,9 +329,9 @@ def _parse_case(payload: dict[str, Any], *, scenario: PerfScenario) -> Benchmark
     if not isinstance(serve_env_raw, dict):
         raise ValueError(f"{scenario.value} case {test_name!r} serve_env must be an object")
 
-    mark_raw = payload.get("mark", [])
-    if not isinstance(mark_raw, list):
-        raise ValueError(f"{scenario.value} case {test_name!r} mark must be a list")
+    mark_raw = payload.get("mark")
+    if not isinstance(mark_raw, dict):
+        raise ValueError(f"{scenario.value} case {test_name!r} mark must be an object")
 
     wait_for_vllm_ready = payload.get("wait_for_vllm_ready", True)
     if not isinstance(wait_for_vllm_ready, bool):
@@ -330,7 +352,7 @@ def _parse_case(payload: dict[str, Any], *, scenario: PerfScenario) -> Benchmark
         test_name=test_name,
         scenario=scenario,
         description=str(payload.get("description", "")),
-        mark=tuple(mark_raw),
+        mark=dict(mark_raw),
         deploy=deploy,
         benchmark_params=dict(benchmark_params),
         wait_for_vllm_ready=wait_for_vllm_ready,
@@ -368,22 +390,10 @@ def _fetch_hardware_slug_from_platform(device_id: int = 0) -> str | None:
         return None
 
 
-def _hardware_slug_from_mark(mark: tuple[Any, ...]) -> str | None:
-    for entry in mark:
-        if not isinstance(entry, dict):
-            continue
-        hardware_marks = entry.get("hardware_marks")
-        if not isinstance(hardware_marks, dict):
-            continue
-        for key in ("slug", "model", "device"):
-            raw = hardware_marks.get(key)
-            if isinstance(raw, str) and raw.strip():
-                return _sanitize_hardware_slug(raw.strip())
-        res = hardware_marks.get("res")
-        if isinstance(res, dict):
-            for value in res.values():
-                if isinstance(value, str) and value.strip():
-                    return _sanitize_hardware_slug(value.strip())
+def _hardware_slug_from_mark(mark: dict[str, Any]) -> str | None:
+    hardware = mark.get("hardware")
+    if isinstance(hardware, str) and hardware.strip():
+        return _sanitize_hardware_slug(hardware.strip())
     return None
 
 
@@ -421,7 +431,10 @@ def _parse_deploy_case(name: str, spec: dict[str, Any], *, case_label: str) -> V
 def serve_args_to_argv(model: Path, serve_args: dict[str, Any], middleware: tuple[str, ...]) -> list[str]:
     """Convert a serve_args mapping into a ``vllm serve`` argv tail."""
 
-    argv = ["vllm", "serve", str(model)]
+    # as_posix keeps Hugging Face ids like Qwen/Qwen3-... with forward slashes
+    # on Windows; absolute local paths stay platform-native via str().
+    model_arg = model.as_posix() if not model.is_absolute() else str(model)
+    argv = ["vllm", "serve", model_arg]
     for key, value in serve_args.items():
         flag = f"--{key}"
         if isinstance(value, bool):
@@ -452,8 +465,11 @@ def benchmark_params_to_run_args(params: dict[str, Any], result_dir: Path, repo:
     flag_map = {
         "config": "--config",
         "model": "--model",
+        "agent-type": "--agent-type",
         "agent-executable": "--agent-executable",
         "agent-profile": "--agent-profile",
+        "endpoint": "--endpoint",
+        "metrics-url": "--metrics-url",
         "task-num": "--task-num",
         "max-concurrency": "--max-concurrency",
         "timeout": "--timeout",

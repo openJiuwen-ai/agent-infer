@@ -42,6 +42,7 @@ class ClaudeProfile:
     permission_mode: str
     expected_topology: TopologyExpectation
     interaction_profile: str
+    supports_subagent_limits: bool = False
 
 
 def _plan_subagent_prompt(task: Task) -> str:

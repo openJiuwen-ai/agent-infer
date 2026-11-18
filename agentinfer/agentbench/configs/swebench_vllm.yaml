@@ -41,6 +41,13 @@ agent:
   # context_window: 32768               # set to the actual served model context limit
   # max_tokens: 8192                    # set to the actual served model output limit
 
+  # For ZCode (set backend.endpoint to /v1/chat/completions):
+  # type: zcode
+  # profile: plan-subagent              # single | plan-subagent
+  # executable: /absolute/path/to/zcode-launcher
+  # context_window: 32768
+  # max_tokens: 8192
+
   # tmux_startup_seconds: 2.0          # optional: wait for the tmux session to become ready (Claude only)
   # terminal_capture_interval_seconds: 30  # optional: capture the tmux pane every N seconds for debugging
 

@@ -9,6 +9,19 @@ if [ "$(id -u)" != "0" ]; then
   exec "$@"
 fi
 
+# DSH functional stays root so the step can create test-user and pytest can
+# `sudo -u test-user`. Other steps still drop to the checkout owner.
+if [ "${AGENTINFER_CI_AS_ROOT:-}" = "1" ]; then
+  # /tmp/ci-home is created in the image (Dockerfile). Keep it world-writable so
+  # test-user can use HOME=/tmp/ci-home when the step sudo-wraps the bench.
+  chmod 1777 /tmp/ci-home
+  hf_home="${HF_HOME:-/home/models}"
+  hf_cache="${HF_HUB_CACHE:-$hf_home/hub}"
+  mkdir -p "$hf_home" "$hf_cache"
+  chmod 1777 "$hf_home" "$hf_cache"
+  exec "$@"
+fi
+
 uid=$(stat -c '%u' .)
 gid=$(stat -c '%g' .)
 

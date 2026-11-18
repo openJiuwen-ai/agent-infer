@@ -7,6 +7,7 @@ Reference 和 Explanation；开发者内部设计稿位于仓根目录的 `desig
 
 - **Tutorial**：[快速开始](zh/tutorial/01-quick-start.md)，适合首次安装和运行 AgentInfer。
 - **How-to**：[接入 vLLM](zh/how-to/integrate-vllm.md)和[运行基准测试](zh/how-to/run-benchmark.md)、[Trace Replay](zh/how-to/run-trace-replay.md)、
+  [验证 SWE-bench 精度](zh/how-to/run-benchmark.md#验证-swe-bench-verified-任务精度)、
   [vLLM Router 构建与部署](zh/how-to/deploy-vllm-router.md)（Windows 构建见 [deploy-vllm-router-on-windows](zh/how-to/deploy-vllm-router-on-windows.md)）、
   [Semantic Router 构建与部署](zh/how-to/deploy-semantic-router.md)（Windows 构建见 [deploy-semantic-router-on-windows](zh/how-to/deploy-semantic-router-on-windows.md)），
   用于完成具体任务。
@@ -22,8 +23,8 @@ Reference 和 Explanation；开发者内部设计稿位于仓根目录的 `desig
 
 - **Tutorial**: [Quick start](en/tutorial/01-quick-start.md) for first-time installation and execution.
 - **How-to**: [Integrate with vLLM](en/how-to/integrate-vllm.md) and
-  [run a benchmark](en/how-to/run-benchmark.md), [Trace Replay](en/how-to/run-trace-replay.md) to complete specific
-  tasks.
+  [run a benchmark](en/how-to/run-benchmark.md), [Trace Replay](en/how-to/run-trace-replay.md),
+  [evaluate SWE-bench](en/how-to/run-benchmark.md#evaluate-swe-bench-verified-correctness) to complete specific tasks.
 - **Integrations**: [AgentRouter WASM affinity + native patch](../agentinfer/agentrouter/README.md),
   [InferRSI workbench](en/reference/inferrsi.md).
 - **Reference**: [Python API](en/reference/python-api.md), [benchmark CLI](en/reference/benchmark-cli.md),
