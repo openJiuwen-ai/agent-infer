@@ -122,3 +122,19 @@ For Router runs, set `backend.base_url` to the Router URL and optional `backend.
 registration control protocol are no longer accepted.
 
 Replay uses separate `experiment`, `backend`, and `replay` sections; see [Trace Replay](../how-to/run-trace-replay.md).
+
+### Router workflow prediction
+
+These optional Replay settings are configured in YAML.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `backend.router_metrics_url` | unset | Full Router metrics URL, separate from the vLLM metrics endpoint. |
+| `replay.workflow_profile_id` | unset | Workflow profile ID forwarded in the request's agentic context. |
+| `replay.profile_version` | unset | Workflow profile version forwarded in the request's agentic context. |
+| `replay.profile_role_source` | `none` | Role source for profile matching. Use `request_purpose` for the original trace request purpose, `actor_id` for the actor ID, or `agent_role` for the actor role. |
+
+With `backend.router_metrics_url` configured, Replay attempts to capture `router_metrics_start.prom` and
+`router_metrics_end.prom` around the measurement window. In the run summary, `router.applicable: true`
+indicates that Router metrics collection was configured. Check `router.prediction.available` for the
+aggregation result and `router.prediction.reason` when it is unavailable.

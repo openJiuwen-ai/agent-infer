@@ -265,7 +265,7 @@ class ReplayTransport:
                 cached_tokens=usage.get("cache_read_input_tokens"),
                 upstream=self.upstream,
                 error=error,
-                request_purpose=getattr(node, "source_request_purpose", None) or node.prompt_kind,
+                request_purpose=node.source_request_purpose or node.prompt_kind,
             )
         )
         return TransportResult(
@@ -385,7 +385,7 @@ class ReplayTransport:
 
         source = self.config.replay.profile_role_source
         if source == "request_purpose":
-            return getattr(node, "source_request_purpose", None)
+            return node.source_request_purpose
         if source == "actor_id":
             return node.actor_id
         if source == "agent_role":

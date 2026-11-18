@@ -50,3 +50,21 @@ def test_router_prediction_metrics_report_missing_snapshots() -> None:
         "available": False,
         "reason": "missing_metrics_snapshot",
     }
+
+
+@pytest.mark.parametrize(
+    ("start_value", "end_snapshot", "reason"),
+    [
+        ("1", "vllm_router_workflow_output_prediction_total invalid\n", "invalid_prometheus_snapshot"),
+        ("1", "other_metric 2\n", "no_workflow_prediction_metrics"),
+        ("1", "vllm_router_workflow_output_prediction_total NaN\n", "non_finite_metric_value"),
+        ("2", "vllm_router_workflow_output_prediction_total 1\n", "counter_reset_detected"),
+    ],
+)
+def test_router_prediction_metrics_report_unavailable_reason(start_value: str, end_snapshot: str, reason: str) -> None:
+    start_snapshot = f"vllm_router_workflow_output_prediction_total {start_value}\n"
+
+    assert aggregate_router_prediction_metrics(start_snapshot, end_snapshot) == {
+        "available": False,
+        "reason": reason,
+    }
