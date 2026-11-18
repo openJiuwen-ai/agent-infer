@@ -1,12 +1,12 @@
 {
-  "test_name": "qwen3_coder_claude_2x1_plan_subagent",
+  "test_name": "qwen3_coder_claude_1x1_plan_subagent",
   "scenario": "baseline",
   "mark": {
     "hardware": "L20",
     "num_cards": 2,
     "ci": "ready"
   },
-  "description": "Qwen3-Coder-30B-A3B-Instruct BF16 on 2x L20 + Claude Code plan-subagent functional smoke, 2 tasks x 1 concurrency",
+  "description": "Local add() smoke task with claude plan-subagent, 1 task x 1 concurrency",
   "server_params": {
     "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
     "serve_args": {
@@ -15,7 +15,7 @@
       "tensor-parallel-size": 2,
       "tool-call-parser": "qwen3_coder",
       "enable-auto-tool-choice": true,
-      "max-model-len": 125536,
+      "max-model-len": 95536,
       "max-num-seqs": 2,
       "gpu-memory-utilization": 0.9,
       "dtype": "bfloat16"
@@ -23,16 +23,16 @@
   },
   "result_root": "test-results/function/claude",
   "benchmark_params": {
-    "config": "agentinfer/agentbench/configs/swebench_vllm.yaml",
-    "prepare_dataset": "swebench",
-    "prepare_output_dir": "agentinfer/agentbench/data/swebench",
+    "config": "agentinfer/agentbench/configs/smoke_vllm.yaml",
+    "prepare_dataset": "smoke",
+    "prepare_output_dir": "test-results/function/smoke-inputs",
     "host": "127.0.0.1",
     "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
     "agent-executable": "claude",
     "agent-profile": "plan-subagent",
-    "task-num": 2,
+    "task-num": 1,
     "max-concurrency": 1,
-    "timeout": 3600,
+    "timeout": 600,
     "agent-type": "claude",
     "endpoint": "/v1/messages"
   }

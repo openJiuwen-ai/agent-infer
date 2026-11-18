@@ -27,16 +27,15 @@ steps:
   - group: ":card_index_dividers: e2e function"
     depends_on: ci-image
     steps:
-      # Pytest and vLLM stay root; the shared helper switches only plan-subagent bench.
-      - label: "dsh swebench"
-        key: function-dsh
+      # One pytest process shares vLLM across all agent/profile cases.
+      - label: "agentbench local smoke"
+        key: function-agentbench
         mirror_hardwares: l20_2
         env:
           AGENTINFER_CI_AS_ROOT: "1"
-        timeout_in_minutes: 300
+        timeout_in_minutes: 180
         commands:
-          # $$ survives Buildkite upload expansion for the container shell.
-          - &agentbench_user_setup |
+          - |
             set -eu
             checkout_uid=$$(stat -c %u .)
             checkout_gid=$$(stat -c %g .)
@@ -56,40 +55,7 @@ steps:
                 usermod -aG "$$extra" test-user
               fi
             done
-          - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/dsh/qwen3_coder_dsh_2x1.json
-          - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/dsh/qwen3_coder_dsh_2x1_plan_subagent.json --benchmark-run-as-user test-user
-
-      - label: "claude swebench"
-        key: function-claude
-        mirror_hardwares: l20_2
-        env:
-          AGENTINFER_CI_AS_ROOT: "1"
-        timeout_in_minutes: 300
-        commands:
-          - *agentbench_user_setup
-          - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/claude/qwen3_coder_claude_2x1_single.json
-          - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/claude/qwen3_coder_claude_2x1_plan_subagent.json --benchmark-run-as-user test-user
-
-      - label: "jiuwenswarm swebench"
-        key: function-jiuwenswarm
-        mirror_hardwares: l20_2
-        env:
-          AGENTINFER_CI_AS_ROOT: "1"
-        timeout_in_minutes: 150
-        commands:
-          - *agentbench_user_setup
-          - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/jiuwenswarm/qwen3_coder_jiuwenswarm_2x1_code_normal.json
-
-      - label: "zcode swebench"
-        key: function-zcode
-        mirror_hardwares: l20_2
-        env:
-          AGENTINFER_CI_AS_ROOT: "1"
-        timeout_in_minutes: 300
-        commands:
-          - *agentbench_user_setup
-          - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/zcode/qwen3_coder_zcode_2x1_single.json
-          - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_swebench.py::test_agent_swebench --test-config-file tests/e2e/function/agentbench/cases/zcode/qwen3_coder_zcode_2x1_plan_subagent.json --benchmark-run-as-user test-user
+          - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_smoke.py --benchmark-run-as-user test-user
 
   # cpu_small is another machine, so it builds the same Dockerfile itself.
   - label: ":docker: Build CI image (cpu)"

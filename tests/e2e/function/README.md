@@ -11,6 +11,6 @@ replay cases have no CI lane.
 | Feature | Documentation |
 | ------- | --------------- |
 | Trace replay (Inferact / TraceLab / AgentX) | [`tracereplay/README.md`](tracereplay/README.md) |
-| AgentBench (Claude Code / DSH / JiuwenSwarm / ZCode) | [`agentbench/README.md`](agentbench/README.md) |
+| Local AgentBench smoke (Claude Code / DSH / JiuwenSwarm / ZCode) | [`agentbench/README.md`](agentbench/README.md) |
 
 Future functional suites can add a row here and their own subdirectory + README.

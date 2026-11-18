@@ -1,12 +1,12 @@
 {
-  "test_name": "qwen3_coder_claude_2x1_single",
+  "test_name": "qwen3_coder_zcode_1x1_single",
   "scenario": "baseline",
   "mark": {
     "hardware": "L20",
     "num_cards": 2,
     "ci": "ready"
   },
-  "description": "Qwen3-Coder-30B-A3B-Instruct BF16 on 2x L20 + Claude Code single functional smoke, 2 tasks x 1 concurrency",
+  "description": "Local add() smoke task with zcode single, 1 task x 1 concurrency",
   "server_params": {
     "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
     "serve_args": {
@@ -21,19 +21,19 @@
       "dtype": "bfloat16"
     }
   },
-  "result_root": "test-results/function/claude",
+  "result_root": "test-results/function/zcode",
   "benchmark_params": {
-    "config": "agentinfer/agentbench/configs/swebench_vllm.yaml",
-    "prepare_dataset": "swebench",
-    "prepare_output_dir": "agentinfer/agentbench/data/swebench",
+    "config": "agentinfer/agentbench/configs/smoke_vllm.yaml",
+    "prepare_dataset": "smoke",
+    "prepare_output_dir": "test-results/function/smoke-inputs",
     "host": "127.0.0.1",
     "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
-    "agent-executable": "claude",
+    "agent-executable": "zcode",
     "agent-profile": "single",
-    "task-num": 2,
+    "task-num": 1,
     "max-concurrency": 1,
-    "timeout": 3600,
-    "agent-type": "claude",
-    "endpoint": "/v1/messages"
+    "timeout": 600,
+    "agent-type": "zcode",
+    "endpoint": "/v1/chat/completions"
   }
 }

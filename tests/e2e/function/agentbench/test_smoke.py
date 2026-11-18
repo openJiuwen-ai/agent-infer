@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
-"""Case-driven SWE-bench functional E2E for all supported agents."""
+"""Case-driven local smoke task for all supported agents."""
 
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ import pytest
 from agentinfer.agentbench.benchkit.compare import load_summary
 from agentinfer.agentbench.benchkit.config import AgentBenchConfig, load_config
 from tests.e2e.function.agentbench.artifact_validation import validate_agent_artifacts
+from tests.e2e.function.agentbench.smoke_inputs import prepare_smoke_case
 from tests.e2e.helpers.benchmark import run_benchmark
 from tests.e2e.helpers.case_loader import E2EConfig, load_case_file
 
@@ -36,7 +38,9 @@ def resolve_agent_type(config: E2EConfig) -> str:
     return AgentBenchConfig.model_validate(bench).agent.type
 
 
-def test_agent_swebench(pytestconfig: pytest.Config, case_file: Path) -> None:
+def test_agent_smoke(
+    pytestconfig: pytest.Config, case_file: Path, agentbench_server: Callable[[E2EConfig], E2EConfig]
+) -> None:
     """Require every selected task to finish and common artifacts to exist."""
     config = E2EConfig.from_case(load_case_file(case_file)).with_benchmark_load(
         task_num=pytestconfig.getoption("--task-num"),
@@ -58,7 +62,9 @@ def test_agent_swebench(pytestconfig: pytest.Config, case_file: Path) -> None:
     if blockers:
         pytest.fail("; ".join(blockers))
 
-    run_dir = run_benchmark(config)
+    config = prepare_smoke_case(config)
+    config = agentbench_server(config)
+    run_dir = run_benchmark(config, manage_server=False)
     print(f"{agent_type} functional artifacts: {run_dir}", flush=True)
     summary = load_summary(run_dir)
     assert summary["lifecycle"]["status"] == "completed", summary["lifecycle"]
