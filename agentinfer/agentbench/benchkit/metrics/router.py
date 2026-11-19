@@ -13,6 +13,8 @@ from prometheus_client.parser import text_string_to_metric_families
 SeriesKey = tuple[str, tuple[tuple[str, str], ...]]
 
 _PREFIX = "vllm_router_workflow_"
+_PROFILE_KEYS = _PREFIX + "prediction_profile_keys"
+_QUANTILES = ("p95", "p99")
 
 
 def aggregate_router_prediction_metrics(start_text: str | None, end_text: str | None) -> dict[str, object]:
@@ -31,7 +33,7 @@ def aggregate_router_prediction_metrics(start_text: str | None, end_text: str | 
     deltas = {key: after.get(key, 0.0) - before.get(key, 0.0) for key in set(before) | set(after)}
     if any(not math.isfinite(value) for value in deltas.values()):
         return {"available": False, "reason": "non_finite_metric_value"}
-    if any(value < 0 for (name, _), value in deltas.items() if name != "vllm_router_workflow_prediction_profile_keys"):
+    if any(value < 0 for (name, _), value in deltas.items() if name != _PROFILE_KEYS):
         return {"available": False, "reason": "counter_reset_detected"}
 
     observations = int(_sum(deltas, "vllm_router_workflow_output_actual_tokens_count"))
@@ -44,7 +46,7 @@ def aggregate_router_prediction_metrics(start_text: str | None, end_text: str | 
         backoff[label_map.get("backoff_level", "unknown")] += int(value)
 
     coverage: dict[str, float | None] = {}
-    for quantile in ("p95", "p99"):
+    for quantile in _QUANTILES:
         covered = _labeled_sum(
             deltas,
             "vllm_router_workflow_output_coverage_total",
@@ -57,23 +59,19 @@ def aggregate_router_prediction_metrics(start_text: str | None, end_text: str | 
         )
         coverage[quantile] = covered / (covered + missed) if covered + missed else None
 
-    reservation_error: dict[str, dict[str, float | int | None]] = {}
-    for direction in ("over_reserved", "under_reserved"):
-        count = _labeled_sum(
-            deltas,
-            "vllm_router_workflow_output_reservation_error_tokens_count",
-            {"direction": direction},
-        )
-        total = _labeled_sum(
-            deltas,
-            "vllm_router_workflow_output_reservation_error_tokens_sum",
-            {"direction": direction},
-        )
-        reservation_error[direction] = {
-            "count": int(count),
-            "tokens": total,
-            "mean_tokens": total / count if count else None,
-        }
+    reservation_error: dict[str, dict[str, dict[str, float | int | None]]] = {}
+    for quantile in _QUANTILES:
+        by_direction: dict[str, dict[str, float | int | None]] = {}
+        for direction in ("over_reserved", "under_reserved"):
+            required = {"quantile": quantile, "direction": direction}
+            count = _labeled_sum(deltas, "vllm_router_workflow_output_reservation_error_tokens_count", required)
+            total = _labeled_sum(deltas, "vllm_router_workflow_output_reservation_error_tokens_sum", required)
+            by_direction[direction] = {
+                "count": int(count),
+                "tokens": total,
+                "mean_tokens": total / count if count else None,
+            }
+        reservation_error[quantile] = by_direction
 
     return {
         "available": True,
@@ -93,7 +91,7 @@ def aggregate_router_prediction_metrics(start_text: str | None, end_text: str | 
             "brier_score_mean": _histogram_mean(deltas, "vllm_router_workflow_return_brier_score"),
             "nll_mean": _histogram_mean(deltas, "vllm_router_workflow_return_nll"),
         },
-        "profile_keys": _end_gauges(after, "vllm_router_workflow_prediction_profile_keys", "predictor"),
+        "profile_keys": _end_gauges(after, _PROFILE_KEYS, "predictor"),
     }
 
 
@@ -102,6 +100,9 @@ def _parse(text: str) -> dict[SeriesKey, float]:
     for family in text_string_to_metric_families(text):
         for sample in family.samples:
             if not sample.name.startswith(_PREFIX):
+                continue
+            # Profile key counts are Router-wide and have no target label.
+            if sample.name != _PROFILE_KEYS and sample.labels.get("target") != "all":
                 continue
             key = (sample.name, tuple(sorted(sample.labels.items())))
             if key in samples:

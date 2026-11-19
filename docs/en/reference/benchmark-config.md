@@ -138,3 +138,10 @@ With `backend.router_metrics_url` configured, Replay attempts to capture `router
 `router_metrics_end.prom` around the measurement window. In the run summary, `router.applicable: true`
 indicates that Router metrics collection was configured. Check `router.prediction.available` for the
 aggregation result and `router.prediction.reason` when it is unavailable.
+
+Prediction metrics use the aggregate Router series labeled `target="all"`. The Router-wide `profile_keys`
+gauge is reported separately. Read reservation error under
+`router.prediction.output_length.reservation_error[quantile][direction]`, with quantile `p95` or `p99`.
+
+Replay records the original trace request purpose in `request_purpose` when present and falls back to
+`prompt_kind` otherwise. This applies even when Router prediction settings are unset.

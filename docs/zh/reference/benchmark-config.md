@@ -133,3 +133,10 @@ Replay 使用独立的 `experiment`、`backend`、`replay` 配置，见[回放�
 `router_metrics_start.prom` 和 `router_metrics_end.prom`。运行摘要中的
 `router.applicable: true` 表示已配置 Router 指标采集。聚合结果是否可用请查看
 `router.prediction.available`，不可用时可查看 `router.prediction.reason`。
+
+预测指标使用标注为 `target="all"` 的 Router 汇总序列。Router 全局的 `profile_keys` 单独报告。
+预留误差按 `p95` 和 `p99` 分开，路径为
+`router.prediction.output_length.reservation_error[quantile][direction]`。
+
+Replay 写入的 `request_purpose` 优先使用源 trace 中的请求用途，缺失时回退到 `prompt_kind`。
+即使未配置 Router 预测选项，此行为也会生效。
