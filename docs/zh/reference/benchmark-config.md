@@ -117,3 +117,26 @@ YAML 中的 `result_dir`、数据集路径和包含目录的 `agent.executable` 
 `base_url` 后追加 `/metrics`。不再接受旧 `router` 章节或会话注册控制协议。
 
 Replay 使用独立的 `experiment`、`backend`、`replay` 配置，见[回放指南](../how-to/run-trace-replay.md)。
+
+### Router 工作流预测
+
+以下 Replay 可选字段通过 YAML 配置。
+
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| `backend.router_metrics_url` | 未设置 | 完整的 Router 指标 URL，独立于 vLLM 指标端点。 |
+| `replay.workflow_profile_id` | 未设置 | 随请求的 agentic context 透传的工作流 Profile ID。 |
+| `replay.profile_version` | 未设置 | 随请求的 agentic context 透传的工作流 Profile 版本。 |
+| `replay.profile_role_source` | `none` | 用于匹配 Profile 的角色来源。`request_purpose` 取原始追踪请求用途，`actor_id` 取执行者 ID，`agent_role` 取执行者角色。 |
+
+配置 `backend.router_metrics_url` 后，Replay 会尝试在测量窗口前后分别采集
+`router_metrics_start.prom` 和 `router_metrics_end.prom`。运行摘要中的
+`router.applicable: true` 表示已配置 Router 指标采集。聚合结果是否可用请查看
+`router.prediction.available`，不可用时可查看 `router.prediction.reason`。
+
+预测指标使用标注为 `target="all"` 的 Router 汇总序列。Router 全局的 `profile_keys` 单独报告。
+预留误差按 `p95` 和 `p99` 分开，路径为
+`router.prediction.output_length.reservation_error[quantile][direction]`。
+
+Replay 写入的 `request_purpose` 优先使用源 trace 中的请求用途，缺失时回退到 `prompt_kind`。
+即使未配置 Router 预测选项，此行为也会生效。
