@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -27,11 +28,21 @@ def _cli(*args: str) -> str:
     return completed.stdout
 
 
-def _validate(run_dir: Path, evaluation: Path) -> None:
+def _validate(run_dir: Path, evaluation: Path, *, expected_task_num: int | None = None) -> None:
     run_summary = validate_completed_run(run_dir)
-    summary, manifest, results = load_evaluation(evaluation)
     source = json.loads((run_dir / "manifest.json").read_bytes())
     index = json.loads((run_dir / "task_index.json").read_bytes())
+    if expected_task_num is not None:
+        failures = {
+            row["instance_id"]: row.get("termination_reason") or row["outcome"]
+            for row in index["tasks"]
+            if row["outcome"] != "completed"
+        }
+        assert not failures, f"benchmark tasks did not complete: {failures}"
+        assert len(index["tasks"]) == expected_task_num, "task results do not cover the configured task count"
+        assert run_summary["tasks"]["completed"] == expected_task_num, "not all configured tasks completed"
+        assert run_summary["tasks"]["failed"] == 0, "benchmark summary contains failed tasks"
+    summary, manifest, results = load_evaluation(evaluation)
     expected = {row["instance_id"] for row in index["tasks"] if row["outcome"] == "completed"}
     assert set(results) == expected
     assert summary.source_run_id == source["run_id"]
@@ -50,9 +61,13 @@ def _validate(run_dir: Path, evaluation: Path) -> None:
     print(f"[correctness] counts={summary.counts.model_dump()} resolved_rate={summary.resolved_rate} {evaluation}")
 
 
+@pytest.mark.usefixtures("correctness_environment")
 def test_run_with_correctness(pytestconfig: pytest.Config, case_file: Path) -> None:
     case = load_case_file(case_file)
     assert case.benchmark_params.get("with-correctness") is True
+    evaluation_config = pytestconfig.getoption("--correctness-evaluation-config")
+    if evaluation_config:
+        case = replace(case, benchmark_params={**case.benchmark_params, "evaluation-config": evaluation_config})
     config = E2EConfig.from_case(case).with_benchmark_load(
         task_num=pytestconfig.getoption("--task-num"),
         max_concurrency=pytestconfig.getoption("--max-concurrency"),
@@ -66,7 +81,7 @@ def test_run_with_correctness(pytestconfig: pytest.Config, case_file: Path) -> N
     run_dir = run_benchmark(config)
     evaluations = list((run_dir / "evaluations").glob("*/correctness.json"))
     assert len(evaluations) == 1, evaluations
-    _validate(run_dir, evaluations[0])
+    _validate(run_dir, evaluations[0], expected_task_num=config.task_num)
 
 
 @pytest.mark.cpu

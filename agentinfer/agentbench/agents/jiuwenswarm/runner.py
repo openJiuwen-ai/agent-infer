@@ -209,7 +209,7 @@ class _JsonlStatusTracker:
             return
         if event == "chat.final":
             inner = payload.get("event_type", "")
-            if inner == "team.error":
+            if inner == "team.error" or payload.get("error"):
                 self._reason = TerminationReason.INTERRUPTED
                 return
             if not inner or inner == "chat.final":

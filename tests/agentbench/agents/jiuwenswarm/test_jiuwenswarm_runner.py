@@ -45,6 +45,14 @@ def test_control_chat_final_is_not_terminal() -> None:
     assert _classify_jsonl(stdout, 0) is TerminationReason.INTERRUPTED
 
 
+@pytest.mark.parametrize("return_code", [0, 1])
+def test_chat_final_with_error_does_not_complete(return_code: int) -> None:
+    stdout = _event("chat.final", {"error": "No valid model entries found in config"})
+    stdout += _event("chat.processing_status", {"is_processing": False})
+
+    assert _classify_jsonl(stdout, return_code) is TerminationReason.INTERRUPTED
+
+
 def test_interactive_and_malformed_jsonl_fail_closed() -> None:
     assert (
         _classify_jsonl(_event("chat.ask_user_question", {"questions": []}), 0) is TerminationReason.CONFIRMATION_HANG

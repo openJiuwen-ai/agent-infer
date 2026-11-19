@@ -1,0 +1,74 @@
+# Upload with:
+# python3 .buildkite/upload_pipeline.py .buildkite/test-nightly.yml
+# Accuracy coverage follows PR #64 / RFC #54. Use an x86_64 L20 agent.
+# All steps must share a Docker daemon, as in test-ready.yml.
+
+steps:
+  - label: ":docker: Build CI image"
+    key: nightly-accuracy-image
+    mirror_hardwares: l20_2
+    host_only: true
+    timeout_in_minutes: 90
+    commands:
+      - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu" || true
+      - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose -f docker/docker-compose.yml build --pull agentinfer-ci
+      - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-accuracy-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu"
+
+  - group: ":card_index_dividers: e2e accuracy"
+    depends_on: nightly-accuracy-image
+    steps:
+      - label: "accuracy: Claude"
+        key: nightly-accuracy-claude
+        mirror_hardwares: l20_2_accuracy
+        concurrency: 1
+        concurrency_group: agentinfer/nightly-accuracy-l20
+        timeout_in_minutes: 360
+        artifact_paths:
+          - "nightly-logs/claude/**/*"
+          - "test-results/acc/claude/**/*"
+        commands:
+          - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k claude
+
+      - label: "accuracy: DSH"
+        key: nightly-accuracy-dsh
+        mirror_hardwares: l20_2_accuracy
+        concurrency: 1
+        concurrency_group: agentinfer/nightly-accuracy-l20
+        timeout_in_minutes: 360
+        artifact_paths:
+          - "nightly-logs/dsh/**/*"
+          - "test-results/acc/dsh/**/*"
+        commands:
+          - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k dsh
+
+      - label: "accuracy: ZCode"
+        key: nightly-accuracy-zcode
+        mirror_hardwares: l20_2_accuracy
+        concurrency: 1
+        concurrency_group: agentinfer/nightly-accuracy-l20
+        timeout_in_minutes: 360
+        artifact_paths:
+          - "nightly-logs/zcode/**/*"
+          - "test-results/acc/zcode/**/*"
+        commands:
+          - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k zcode
+
+      - label: "accuracy: JiuwenSwarm"
+        key: nightly-accuracy-jiuwenswarm
+        mirror_hardwares: l20_2_accuracy
+        concurrency: 1
+        concurrency_group: agentinfer/nightly-accuracy-l20
+        timeout_in_minutes: 360
+        artifact_paths:
+          - "nightly-logs/jiuwenswarm/**/*"
+          - "test-results/acc/jiuwenswarm/**/*"
+        commands:
+          - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k jiuwenswarm
+
+  - wait: ~
+    continue_on_failure: true
+  - label: ":broom: Cleanup nightly image"
+    mirror_hardwares: l20_2
+    host_only: true
+    commands:
+      - docker image rm "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu" || true

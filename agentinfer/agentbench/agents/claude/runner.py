@@ -262,6 +262,8 @@ async def run_claude(request: AgentRunRequest) -> AgentRunResult:
         claude_state_dir,
         request.api_base_url,
         request.model,
+        context_window=request.context_window,
+        max_tokens=request.max_tokens,
     )
     command = [
         str(request.executable),

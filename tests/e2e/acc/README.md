@@ -56,6 +56,32 @@ python -m pytest -s -v tests/e2e/acc/test_correctness.py::test_run_with_correctn
 
 Compare baseline and AgentInfer results from the same agent and profile.
 
+## Nightly CI
+
+The nightly pipeline uses the `agentinfer-accuracy` Compose service and invokes pytest directly.
+Inside that container, run one agent's baseline and AgentInfer cases with:
+
+```bash
+pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k dsh \
+  --correctness-ci --benchmark-run-as-user test-user \
+  --correctness-evaluation-config /opt/agentbench/evaluation.yaml
+```
+
+Replace `dsh` with `claude`, `zcode`, or `jiuwenswarm` to select another agent.
+`--correctness-ci` requires root in the accuracy container. Its fixtures prepare the benchmark user,
+Docker access, runtime checks, shared model cache, and dependency records. Manual runs omit this flag.
+The evaluation config overrides the loaded case in memory; the JSON files are preserved.
+The pipeline uploads per-agent pytest logs, JUnit reports, and benchmark/scoring artifacts.
+Shared pytest arguments come from the accuracy hardware preset's `PYTEST_ADDOPTS`; each job only names its
+test target and agent selector. CI reports default to `nightly-logs/<agent>/`, with explicit report paths taking
+precedence when supplied.
+
+Jiuwen runs `jiuwenbox-server` as a local process in the benchmark environment. The CI preflight checks
+that the benchmark user can create the required bubblewrap PID/user namespaces before model startup.
+Runtime commands whose symlinks use `/etc/alternatives` receive a read-only mapping of it.
+Jiuwen's AgentBench model client excludes mode-switch, plan-mode, and user-question tools from model requests
+for noninteractive `code.normal` tasks. Unexpected confirmation events still fail the task.
+
 ## Result directories
 
 Each case saves its runs under `test-results/acc/<agent>/<scenario>/`, where `<scenario>` is
@@ -95,6 +121,10 @@ Scoring checks completed-task coverage, counts, absence of errors and environmen
 evidence hashes, official reports and test output, and byte equality between original and frozen patches. Counts and
 resolved rate are printed. Unresolved tasks and empty patches are allowed; the sample has no fixed accuracy threshold.
 Per-task comparison detects regressions.
+
+Automatic scoring E2E additionally requires every configured task to complete and enter scoring. A failed task
+such as `confirmation_hang` fails the case even when the remaining tasks have valid scores. Independent evaluation
+of existing runs retains its completed-task scope.
 
 Keep exact commands, console logs, run artifacts, and evaluation reports with accuracy claims. Missing input options
 cause skips; skips do not establish successful accuracy validation.

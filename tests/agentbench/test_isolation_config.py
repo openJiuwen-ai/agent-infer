@@ -227,8 +227,9 @@ def test_jiuwen_policy_grants_rw_only_to_task_owned_paths(tmp_path: Path) -> Non
     assert "/home" not in policy["filesystem_policy"]["read_write"]
     assert "/tmp" in policy["filesystem_policy"]["read_write"]
     assert "directories" not in policy["filesystem_policy"]
-    if Path("/usr").exists():
-        assert any(sandbox == "/usr" and mode == "ro" for _, sandbox, mode in bind_paths)
+    for runtime_path in ("/usr", "/etc/alternatives", "/etc/ld.so.cache"):
+        if Path(runtime_path).exists():
+            assert (runtime_path, runtime_path, "ro") in bind_paths
 
 
 def test_jiuwen_allocates_jiuwenbox_port_at_startup(tmp_path: Path) -> None:
