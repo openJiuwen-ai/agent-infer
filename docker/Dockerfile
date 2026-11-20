@@ -1,7 +1,7 @@
 FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/vllm/vllm-openai:v0.23.0
 
 # Unit tests create throwaway repos with `git init` / `git commit`.
-# curl/xz unpack the Node tarball used by the DSH functional E2E.
+# curl/xz unpack the agent Node runtimes; sandbox tools support agent E2E.
 # sudo is required when the DSH step stays root and wraps plan-subagent
 # with `sudo -u test-user`.
 RUN apt-get update \
@@ -26,22 +26,80 @@ RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-l
  && dsh --version
 
 # Install deps before COPY so unchanged deps hit layer cache across PRs (vllm-omni deps-cache pattern).
+# Share the package mirror used by the isolated agent and scoring environments.
 RUN pip install --no-cache-dir \
-      -i https://mirrors.aliyun.com/pypi/simple/ \
-      --trusted-host mirrors.aliyun.com \
+      -i https://mirrors.huaweicloud.com/repository/pypi/simple/ \
       'huggingface-hub>=1.5.0,<2.0' \
       datasets matplotlib zstandard \
       pytest pytest-timeout pytest-html pytest-xdist \
       'setuptools>=68,<85' wheel \
  && pip install --no-cache-dir \
-      -i https://mirrors.aliyun.com/pypi/simple/ \
-      --trusted-host mirrors.aliyun.com \
+      -i https://mirrors.huaweicloud.com/repository/pypi/simple/ \
       'huggingface-hub>=1.5.0,<2.0' --force-reinstall
 
 ENV HF_ENDPOINT=https://hf-mirror.com \
     HF_HOME=/home/models \
     HF_HUB_CACHE=/home/models/hub \
     HOME=/tmp/ci-home
+
+# Install all agent and scoring dependencies before the source checkout.
+# Ready and nightly builds can reuse these layers when only source files change.
+# Append tools after the shared dependencies to preserve existing ready cache layers.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends tmux bubblewrap socat docker.io \
+ && rm -rf /var/lib/apt/lists/*
+
+# Keep scoring and Jiuwen dependencies separate from vLLM.
+RUN python3 -m venv /opt/agentbench/swebench-venv \
+ && /opt/agentbench/swebench-venv/bin/python -m pip install \
+      -i https://mirrors.huaweicloud.com/repository/pypi/simple/ \
+      'swebench==4.1.0' 'numpy>=2' \
+ && /opt/agentbench/swebench-venv/bin/python -m pip check \
+ && printf '%s\n' \
+      'harness_python: /opt/agentbench/swebench-venv/bin/python' \
+      >/opt/agentbench/evaluation.yaml
+
+RUN npm install --global --prefix /usr/local \
+      @anthropic-ai/claude-code@2.1.327
+
+# Build the Node bundle required by the ZCode adapter, preserving NODE_OPTIONS.
+RUN curl -fsSL --retry 3 \
+      https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.xz \
+      -o /tmp/zcode-node.tar.xz \
+ && tar -xJf /tmp/zcode-node.tar.xz -C /opt/agentbench \
+ && rm /tmp/zcode-node.tar.xz \
+ && /opt/agentbench/node-v24.14.0-linux-x64/bin/node \
+      /usr/local/lib/node_modules/npm/bin/npm-cli.js install --global \
+      --prefix /opt/agentbench/node-v24.14.0-linux-x64 pnpm@10.33.2 \
+ && curl -fsSL --retry 3 \
+      https://codeload.github.com/zai-org/ZCode/tar.gz/a9fe401eede6e6e5e01be9048679c206fe6f02d9 \
+      -o /tmp/zcode-source.tar.gz \
+ && tar -xzf /tmp/zcode-source.tar.gz -C /opt/agentbench \
+ && rm /tmp/zcode-source.tar.gz
+
+RUN export PATH="/opt/agentbench/node-v24.14.0-linux-x64/bin:$PATH" \
+ && cd /opt/agentbench/ZCode-a9fe401eede6e6e5e01be9048679c206fe6f02d9 \
+ && pnpm install --frozen-lockfile \
+ && pnpm --filter @zcode/cli... build \
+ && printf '%s\n' '#!/bin/sh' \
+      'exec /opt/agentbench/node-v24.14.0-linux-x64/bin/node /opt/agentbench/ZCode-a9fe401eede6e6e5e01be9048679c206fe6f02d9/apps/zcode-cli/packages/cli/dist/zcode.cjs "$@"' \
+      >/usr/local/bin/zcode-launcher \
+ && chmod 755 /usr/local/bin/zcode-launcher \
+ && zcode-launcher --version
+
+# Read dependency metadata separately so Jiuwen also caches AgentInfer dependencies.
+COPY pyproject.toml /opt/agentbench/agentinfer-pyproject.toml
+RUN python3 -m venv /opt/agentbench/jiuwenswarm-venv \
+ && python3 -c 'import tomllib, sys; p = tomllib.load(sys.stdin.buffer); print(*p["build-system"]["requires"], *p["project"]["dependencies"], sep="\n")' \
+      </opt/agentbench/agentinfer-pyproject.toml >/opt/agentbench/agentinfer-requirements.txt \
+ && /opt/agentbench/jiuwenswarm-venv/bin/python -m pip install \
+      -i https://mirrors.huaweicloud.com/repository/pypi/simple/ \
+      -r /opt/agentbench/agentinfer-requirements.txt \
+      'jiuwenswarm==0.2.4b3' 'openjiuwen[claude,codex]==0.1.16.post2' 'openai-codex==0.144.4' \
+ && /opt/agentbench/jiuwenswarm-venv/bin/python -m pip check \
+ && for name in jiuwenswarm jiuwenswarm-init jiuwenswarm-start jiuwenbox-server; do \
+      ln -s /opt/agentbench/jiuwenswarm-venv/bin/$name /usr/local/bin/$name; \
+    done
 
 # Copy the entrypoint before the repo so dependency layers stay cached.
 # It drops root to whatever UID owns the checkout. See docker/ci-entrypoint.sh.
@@ -52,9 +110,11 @@ RUN chmod 755 /usr/local/bin/ci-entrypoint.sh \
 WORKDIR /app
 COPY . .
 RUN pip install --no-cache-dir \
-      -i https://mirrors.aliyun.com/pypi/simple/ \
-      --trusted-host mirrors.aliyun.com \
-      -e . --no-deps
+      -i https://mirrors.huaweicloud.com/repository/pypi/simple/ \
+      -e . --no-deps --no-build-isolation \
+ && /opt/agentbench/jiuwenswarm-venv/bin/python -m pip install \
+      -e . --no-deps --no-build-isolation \
+ && /opt/agentbench/jiuwenswarm-venv/bin/python -m pip check
 
 # CI image runs pytest. The entrypoint replaces `vllm serve` and drops privileges.
 ENTRYPOINT ["/usr/local/bin/ci-entrypoint.sh"]

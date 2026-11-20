@@ -1,0 +1,56 @@
+# Uploaded by pipeline.yml for the `nightly-test` PR label or NIGHTLY=1.
+# Buildkite Schedule setup: tests/e2e/acc/README.md (Nightly triggers).
+# Accuracy coverage follows PR #64 / RFC #54. Use an x86_64 L20 agent.
+# All steps must share a Docker daemon, as in test-ready.yml.
+
+steps:
+  - group: ":full_moon: Nightly accuracy"
+    key: nightly-accuracy
+    if: build.env("NIGHTLY") == "1" || build.pull_request.labels includes "nightly-test"
+    steps:
+      - label: ":docker: Build CI image"
+        key: nightly-accuracy-image
+        mirror_hardwares: l20_2
+        host_only: true
+        timeout_in_minutes: 90
+        commands:
+          # Scope the suffix to Compose so ready and nightly build distinct image tags.
+          - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-nightly-gpu" || true
+          - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 BUILDKITE_BUILD_ID="$$BUILDKITE_BUILD_ID-nightly" docker compose -f docker/docker-compose.yml build --pull agentinfer-ci
+          - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-accuracy-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-nightly-gpu"
+
+      - label: "accuracy: baseline (all agents)"
+        key: nightly-accuracy-baseline
+        depends_on: nightly-accuracy-image
+        mirror_hardwares: l20_2_accuracy
+        concurrency: 1
+        concurrency_group: agentinfer/nightly-accuracy-l20
+        timeout_in_minutes: 360
+        artifact_paths:
+          - "nightly-logs/**/*"
+          - "test-results/acc/*/baseline/**/*"
+          - "test-results/acc/baseline/vllm-logs/**/*"
+        commands:
+          - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k baseline
+
+      - label: "accuracy: AgentInfer (all agents)"
+        key: nightly-accuracy-agentinfer
+        depends_on: nightly-accuracy-image
+        mirror_hardwares: l20_2_accuracy
+        concurrency: 1
+        concurrency_group: agentinfer/nightly-accuracy-l20
+        timeout_in_minutes: 360
+        artifact_paths:
+          - "nightly-logs/**/*"
+          - "test-results/acc/*/agentinfer/**/*"
+          - "test-results/acc/agentinfer/vllm-logs/**/*"
+        commands:
+          - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k agentinfer
+
+      - wait: ~
+        continue_on_failure: true
+      - label: ":broom: Cleanup nightly image"
+        mirror_hardwares: l20_2
+        host_only: true
+        commands:
+          - docker image rm "agentinfer-ci:$$BUILDKITE_BUILD_ID-nightly-gpu" || true

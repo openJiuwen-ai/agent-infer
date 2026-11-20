@@ -228,7 +228,7 @@ class E2EConfig:
         return self.base_url.rstrip("/") == DEFAULT_BASE_URL
 
     def with_benchmark_load(self, *, task_num: int | None = None, max_concurrency: int | None = None) -> E2EConfig:
-        updates: dict[str, int] = {}
+        updates: dict[str, Any] = {}
         if task_num is not None:
             updates["task_num"] = task_num
         if max_concurrency is not None:
@@ -306,6 +306,15 @@ def _infer_scenario(payload: dict[str, Any], case_path: Path) -> PerfScenario:
 def load_case_file(case_file: Path) -> BenchmarkCase:
     """Load one ``.json`` case file."""
 
+    cases = load_case_group(case_file)
+    if len(cases) != 1:
+        raise ValueError(f"{case_file} contains multiple benchmarks; use load_case_group")
+    return cases[0]
+
+
+def load_case_group(case_file: Path) -> tuple[BenchmarkCase, ...]:
+    """Expand benchmark arrays while preserving the shared serve configuration."""
+
     path = case_file.expanduser()
     if not path.is_file() or path.suffix != ".json":
         raise ValueError(f"--test-config-file must point to a .json file: {case_file}")
@@ -313,7 +322,29 @@ def load_case_file(case_file: Path) -> BenchmarkCase:
     if not isinstance(payload, dict):
         raise ValueError(f"case JSON root must be an object: {case_file}")
     scenario = _infer_scenario(payload, path)
-    return _parse_case(payload, scenario=scenario)
+    benchmarks = payload.get("benchmark_params")
+    if isinstance(benchmarks, dict):
+        return (_parse_case(payload, scenario=scenario),)
+    if not isinstance(benchmarks, list) or not benchmarks:
+        raise ValueError("benchmark_params must be an object or a non-empty array")
+    cases = []
+    agents: set[str] = set()
+    server_targets = set()
+    for params in benchmarks:
+        if not isinstance(params, dict):
+            raise ValueError("each benchmark_params entry must be an object")
+        agent = params.get("agent-type")
+        if not isinstance(agent, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", agent):
+            raise ValueError("each grouped benchmark requires a valid agent-type")
+        if agent in agents:
+            raise ValueError(f"duplicate agent-type in benchmark_params: {agent}")
+        agents.add(agent)
+        case = _parse_case(payload | {"benchmark_params": params}, scenario=scenario)
+        cases.append(replace(case, test_name=f"{case.test_name}-{agent}"))
+        server_targets.add((params.get("host", DEFAULT_HOST), params.get("port"), params.get("model")))
+    if len(server_targets) != 1:
+        raise ValueError("grouped benchmarks must share host, port and model")
+    return tuple(cases)
 
 
 def _parse_case(payload: dict[str, Any], *, scenario: PerfScenario) -> BenchmarkCase:
@@ -408,6 +439,7 @@ def _parse_deploy_case(name: str, spec: dict[str, Any], *, case_label: str) -> V
     if not isinstance(serve_args, dict):
         raise ValueError(f"{case_label} serve_args must be an object")
     middleware_raw = server_params.get("middleware", [])
+    middleware: tuple[str, ...]
     if isinstance(middleware_raw, str):
         middleware = (middleware_raw,)
     elif isinstance(middleware_raw, list):
@@ -473,18 +505,22 @@ def benchmark_params_to_run_args(params: dict[str, Any], result_dir: Path, repo:
         "task-num": "--task-num",
         "max-concurrency": "--max-concurrency",
         "timeout": "--timeout",
+        "evaluation-config": "--evaluation-config",
     }
     for key, flag in flag_map.items():
         if key not in params:
             continue
         value = params[key]
-        if key == "config":
+        if key in {"config", "evaluation-config"}:
             path = Path(str(value)).expanduser()
             if not path.is_absolute():
                 path = (repo / path).resolve()
             argv.extend([flag, str(path)])
         else:
             argv.extend([flag, str(value)])
+
+    if params.get("with-correctness", False):
+        argv.append("--with-correctness")
 
     host = params.get("host", "127.0.0.1")
     port = int(params.get("port", 8000))

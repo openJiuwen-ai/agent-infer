@@ -1,5 +1,8 @@
-# Bootstrap. Buildkite runs this file directly. test-ready.yml is uploaded only
-# when the pull request has the `ready` label.
+# Bootstrap. Buildkite runs this file directly.
+# PR labels: `ready` uploads test-ready.yml; `nightly-test` uploads test-nightly.yml.
+# Labels are independent: both child pipelines run when both labels are present.
+# A Buildkite Schedule on main with NIGHTLY=1 also uploads test-nightly.yml.
+# Example schedule: 0 2 * * * Asia/Shanghai. Schedule setup is in tests/e2e/acc/README.md.
 #
 # Adding the label starts a build only when both GitHub settings are set on
 # this pipeline:
@@ -9,7 +12,15 @@
 # commit was already built.
 steps:
   - label: ":pipeline: Upload ready pipeline"
+    key: upload-ready-pipeline
     if: build.pull_request.labels includes "ready"
     command: python3 .buildkite/upload_pipeline.py .buildkite/test-ready.yml
+    agents:
+      queue: L20-cpu-small
+
+  - label: ":full_moon: Upload nightly pipeline"
+    key: upload-nightly-pipeline
+    if: build.env("NIGHTLY") == "1" || build.pull_request.labels includes "nightly-test"
+    command: python3 .buildkite/upload_pipeline.py .buildkite/test-nightly.yml
     agents:
       queue: L20-cpu-small

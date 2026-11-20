@@ -1,0 +1,34 @@
+# SWE-bench Verified through ZCode and the transparent Request Proxy.
+experiment:
+  task_num: null
+  result_dir: ../result_vllm_zcode
+  max_concurrency: 1
+  task_timeout_seconds: 3600
+  patch_flush_seconds: 15
+  prompt_delivery_timeout_seconds: 30
+
+dataset:
+  name: swebench_verified
+  index_path: ../data/swebench/instances.jsonl
+  selection_path: ../data/swebench/task-lists/default.txt
+  cache_dir: ../data/swebench/repo-cache
+
+agent:
+  context_window: 65536
+  max_tokens: 8192
+  type: zcode
+  profile: single
+  executable: zcode
+
+backend:
+  type: vllm
+  base_url: http://127.0.0.1:8000
+  model: Qwen/Qwen3-Coder-30B-A3B-Instruct
+  endpoint: /v1/chat/completions
+  api_key_env: null
+
+request_proxy:
+  listen_url: http://127.0.0.1:0
+  request_timeout_seconds: 3600
+  startup_timeout_seconds: 120
+  shutdown_timeout_seconds: 30

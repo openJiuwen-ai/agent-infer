@@ -1,0 +1,95 @@
+{
+  "test_name": "qwen3_coder_2x1_baseline_correctness",
+  "scenario": "baseline",
+  "mark": {
+    "hardware": "L20",
+    "num_cards": 2
+  },
+  "description": "Qwen3-Coder BF16 on 2x L20, baseline: shared serve for four agents with automatic SWE-bench scoring",
+  "serve_env": {},
+  "server_params": {
+    "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+    "serve_args": {
+      "served-model-name": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "dtype": "bfloat16",
+      "tensor-parallel-size": 2,
+      "seed": 1024,
+      "enable-prefix-caching": true,
+      "enable-auto-tool-choice": true,
+      "tool-call-parser": "qwen3_coder",
+      "max-num-seqs": 12,
+      "max-model-len": 125536,
+      "max-num-batched-tokens": 8192,
+      "gpu-memory-utilization": 0.92,
+      "enable-prompt-tokens-details": true,
+      "async-scheduling": true,
+      "scheduler-cls": "vllm.v1.core.sched.async_scheduler.AsyncScheduler"
+    }
+  },
+  "result_root": "test-results/acc",
+  "benchmark_params": [
+    {
+      "config": "agentinfer/agentbench/configs/swebench_vllm.yaml",
+      "prepare_dataset": "swebench",
+      "prepare_output_dir": "agentinfer/agentbench/data/swebench",
+      "host": "127.0.0.1",
+      "port": 8000,
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "agent-executable": "claude",
+      "agent-profile": "plan-subagent",
+      "task-num": 2,
+      "max-concurrency": 1,
+      "timeout": 3600,
+      "with-correctness": true,
+      "agent-type": "claude"
+    },
+    {
+      "config": "agentinfer/agentbench/configs/swebench_vllm_dsh.yaml",
+      "prepare_dataset": "swebench",
+      "prepare_output_dir": "agentinfer/agentbench/data/swebench",
+      "host": "127.0.0.1",
+      "port": 8000,
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "agent-executable": "dsh",
+      "agent-profile": "plan-subagent",
+      "task-num": 2,
+      "max-concurrency": 1,
+      "timeout": 3600,
+      "with-correctness": true,
+      "agent-type": "dsh",
+      "endpoint": "/v1/chat/completions"
+    },
+    {
+      "config": "agentinfer/agentbench/configs/swebench_vllm_zcode.yaml",
+      "prepare_dataset": "swebench",
+      "prepare_output_dir": "agentinfer/agentbench/data/swebench",
+      "host": "127.0.0.1",
+      "port": 8000,
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "agent-executable": "zcode-launcher",
+      "agent-profile": "plan-subagent",
+      "task-num": 2,
+      "max-concurrency": 1,
+      "timeout": 3600,
+      "with-correctness": true,
+      "agent-type": "zcode",
+      "endpoint": "/v1/chat/completions"
+    },
+    {
+      "config": "agentinfer/agentbench/configs/swebench_vllm_jiuwenswarm.yaml",
+      "prepare_dataset": "swebench",
+      "prepare_output_dir": "agentinfer/agentbench/data/swebench",
+      "host": "127.0.0.1",
+      "port": 8000,
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "agent-executable": "jiuwenswarm",
+      "agent-profile": "code.normal",
+      "task-num": 2,
+      "max-concurrency": 1,
+      "timeout": 3600,
+      "with-correctness": true,
+      "agent-type": "jiuwenswarm",
+      "endpoint": "/v1/chat/completions"
+    }
+  ]
+}

@@ -61,10 +61,22 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
                 raise ValueError("case JSON must be an object")
             marks = resolve_pytest_marks(payload.get("mark"), metafunc.config)
             case_id = path.relative_to(cases_dir).with_suffix("").as_posix()
-            params.append(pytest.param(path, marks=marks, id=case_id))
+            if "benchmark_case" in metafunc.fixturenames:
+                from tests.e2e.helpers.case_loader import load_case_group
+
+                for case in load_case_group(path):
+                    agent = case.benchmark_params.get("agent-type", "claude")
+                    params.append(pytest.param(path, case, marks=marks, id=f"{case_id}-{agent}"))
+            else:
+                params.append(pytest.param(path, marks=marks, id=case_id))
         except (OSError, ValueError, TypeError) as exc:
             raise pytest.UsageError(f"{metafunc.definition.nodeid} [{path}]: {exc}") from exc
-    metafunc.parametrize("case_file", params)
+    if "benchmark_case" in metafunc.fixturenames:
+        # Keep benchmarks from the same file together so the module-scoped
+        # accuracy server survives between agents and stops before the next group.
+        metafunc.parametrize("case_file,benchmark_case", params, scope="module")
+    else:
+        metafunc.parametrize("case_file", params)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

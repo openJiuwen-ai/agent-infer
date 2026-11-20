@@ -48,3 +48,17 @@ services:
       service: agentinfer-ci
     image: agentinfer-ci:${BUILDKITE_BUILD_ID:-local}-cpu
     deploy: !override {}
+
+  # Accuracy runs pytest as root, and bench/scoring as the requested regular user.
+  # Only this service exposes Docker and permits the agent bubblewrap sandboxes.
+  agentinfer-accuracy:
+    extends:
+      service: agentinfer-ci
+    profiles: [accuracy]
+    environment:
+      AGENTINFER_CI_AS_ROOT: "1"
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

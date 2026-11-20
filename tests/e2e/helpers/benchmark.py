@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import subprocess
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -28,8 +29,9 @@ def run_benchmark(
     config: E2EConfig,
     *,
     result_dir: Path | None = None,
+    start_server: bool = True,
 ) -> Path:
-    """Execute one benchmark case and return the finalized run directory."""
+    """Execute a benchmark; set start_server=False when a fixture owns serve."""
 
     blockers = config.validate_prerequisites()
     if blockers:
@@ -43,7 +45,7 @@ def run_benchmark(
         raise FileExistsError(f"result directory already exists: {output_dir}")
 
     argv = build_benchmark_argv(config, output_dir)
-    with managed_vllm(config):
+    with managed_vllm(config) if start_server else nullcontext():
         _invoke_benchmark(config, argv)
 
     return output_dir
