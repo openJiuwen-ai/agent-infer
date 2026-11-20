@@ -22,51 +22,40 @@ steps:
     timeout_in_minutes: 25
     mirror_hardwares: l20_1
 
-  # Functional E2E. l20_1 and l20_2 share one Docker daemon, so reuse ci-image.
-  # DSH still runs on the l20_2 queue to reserve both GPUs.
+  # Functional E2E reuses ci-image and reserves two L20s per job.
   # e2e accuracy has no ready step yet, so that group is omitted.
   - group: ":card_index_dividers: e2e function"
     depends_on: ci-image
     steps:
-      # One step on the 2-GPU queue: test-user, then both 2x1 profiles.
-      # The case uses the Hugging Face repo id; vLLM downloads into HF_HOME
-      # (/home/models). Skip useradd when test-user exists. The step stays
-      # root so plan-subagent can sudo -u test-user. single stays root.
-      # DSH is /usr/local/bin/dsh.
-      - label: "dsh swebench"
+      # One pytest process shares vLLM across all agent/profile cases.
+      - label: "agentbench local smoke"
+        key: function-agentbench
         mirror_hardwares: l20_2
         env:
           AGENTINFER_CI_AS_ROOT: "1"
         timeout_in_minutes: 90
         commands:
-          # pipeline upload expands $NAME. $$ is the literal $ the container shell needs.
           - |
+            set -eu
             checkout_uid=$$(stat -c %u .)
             checkout_gid=$$(stat -c %g .)
             restore_checkout_owner() {
               status=$$?
               trap - EXIT
-              if [ "$$checkout_uid" != 0 ]; then
-                if ! chown -R "$$checkout_uid:$$checkout_gid" .; then
-                  echo "ERROR: failed to restore checkout ownership" >&2
-                  if [ "$$status" = 0 ]; then status=1; fi
-                fi
+              if ! chown -R "$$checkout_uid:$$checkout_gid" .; then
+                echo "ERROR: failed to restore checkout ownership" >&2
+                status=1
               fi
               exit "$$status"
             }
             trap restore_checkout_owner EXIT
-            if id test-user >/dev/null 2>&1; then
-              echo "test-user exists, skip useradd"
-            else
-              useradd -m -s /bin/bash test-user
-            fi
+            id test-user >/dev/null 2>&1 || useradd -m -s /bin/bash test-user
             for extra in video render; do
               if getent group "$$extra" >/dev/null 2>&1; then
                 usermod -aG "$$extra" test-user
               fi
             done
-            pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/dsh --test-config-file tests/e2e/function/agentbench/dsh/cases/qwen3_coder_dsh_2x1.json
-            pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/dsh --test-config-file tests/e2e/function/agentbench/dsh/cases/qwen3_coder_dsh_2x1_plan_subagent.json
+          - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_smoke.py --benchmark-run-as-user test-user
 
   # cpu_small is another machine, so it builds the same Dockerfile itself.
   - label: ":docker: Build CI image (cpu)"

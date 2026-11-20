@@ -1,0 +1,35 @@
+# Functional-test template; smoke_inputs.py materializes the local data paths.
+experiment:
+  task_num: 1
+  result_dir: ../result_smoke
+  max_concurrency: 1
+  task_timeout_seconds: 600
+  patch_flush_seconds: 3
+  prompt_delivery_timeout_seconds: 30
+
+dataset:
+  name: smoke
+  index_path: ../data/smoke/instances.jsonl
+  selection_path: ../data/smoke/task-lists/default.txt
+  cache_dir: ../data/smoke/repo-cache
+
+# Cases override runtime, profile, executable, and endpoint together.
+agent:
+  type: claude
+  profile: single
+  executable: claude
+  context_window: 65536
+  max_tokens: 8192
+
+backend:
+  type: vllm
+  base_url: http://127.0.0.1:8000
+  model: Qwen/Qwen3-Coder-30B-A3B-Instruct
+  endpoint: /v1/messages
+  api_key_env: null
+
+request_proxy:
+  listen_url: http://127.0.0.1:0
+  request_timeout_seconds: 600
+  startup_timeout_seconds: 120
+  shutdown_timeout_seconds: 30
