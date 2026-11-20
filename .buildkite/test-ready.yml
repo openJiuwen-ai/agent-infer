@@ -33,7 +33,7 @@ steps:
         mirror_hardwares: l20_2
         env:
           AGENTINFER_CI_AS_ROOT: "1"
-        timeout_in_minutes: 180
+        timeout_in_minutes: 90
         commands:
           - |
             set -eu
