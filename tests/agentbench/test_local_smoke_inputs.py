@@ -100,7 +100,11 @@ def test_pytest_overrides_come_from_command_not_json(tmp_path: Path) -> None:
     payload["benchmark_params"]["benchmark-run-as-user"] = "json-user"
     path = tmp_path / "case.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
-    options = {"--task-num": None, "--max-concurrency": None, "--benchmark-run-as-user": None}
+    options: dict[str, int | str | None] = {
+        "--task-num": None,
+        "--max-concurrency": None,
+        "--benchmark-run-as-user": None,
+    }
     config = load_pytest_case(SimpleNamespace(getoption=options.get), path)
     assert config.benchmark_run_as_user is None
     assert config.task_num == config.max_concurrency == 1
