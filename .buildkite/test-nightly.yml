@@ -17,53 +17,31 @@ steps:
   - group: ":card_index_dividers: e2e accuracy"
     depends_on: nightly-accuracy-image
     steps:
-      - label: "accuracy: Claude"
-        key: nightly-accuracy-claude
+      - label: "accuracy: baseline (all agents)"
+        key: nightly-accuracy-baseline
         mirror_hardwares: l20_2_accuracy
         concurrency: 1
         concurrency_group: agentinfer/nightly-accuracy-l20
         timeout_in_minutes: 360
         artifact_paths:
-          - "nightly-logs/claude/**/*"
-          - "test-results/acc/claude/**/*"
+          - "nightly-logs/**/*"
+          - "test-results/acc/*/baseline/**/*"
+          - "test-results/acc/baseline/vllm-logs/**/*"
         commands:
-          - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k claude
+          - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k baseline
 
-      - label: "accuracy: DSH"
-        key: nightly-accuracy-dsh
+      - label: "accuracy: AgentInfer (all agents)"
+        key: nightly-accuracy-agentinfer
         mirror_hardwares: l20_2_accuracy
         concurrency: 1
         concurrency_group: agentinfer/nightly-accuracy-l20
         timeout_in_minutes: 360
         artifact_paths:
-          - "nightly-logs/dsh/**/*"
-          - "test-results/acc/dsh/**/*"
+          - "nightly-logs/**/*"
+          - "test-results/acc/*/agentinfer/**/*"
+          - "test-results/acc/agentinfer/vllm-logs/**/*"
         commands:
-          - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k dsh
-
-      - label: "accuracy: ZCode"
-        key: nightly-accuracy-zcode
-        mirror_hardwares: l20_2_accuracy
-        concurrency: 1
-        concurrency_group: agentinfer/nightly-accuracy-l20
-        timeout_in_minutes: 360
-        artifact_paths:
-          - "nightly-logs/zcode/**/*"
-          - "test-results/acc/zcode/**/*"
-        commands:
-          - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k zcode
-
-      - label: "accuracy: JiuwenSwarm"
-        key: nightly-accuracy-jiuwenswarm
-        mirror_hardwares: l20_2_accuracy
-        concurrency: 1
-        concurrency_group: agentinfer/nightly-accuracy-l20
-        timeout_in_minutes: 360
-        artifact_paths:
-          - "nightly-logs/jiuwenswarm/**/*"
-          - "test-results/acc/jiuwenswarm/**/*"
-        commands:
-          - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k jiuwenswarm
+          - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k agentinfer
 
   - wait: ~
     continue_on_failure: true

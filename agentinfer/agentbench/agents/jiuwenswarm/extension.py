@@ -22,19 +22,6 @@ from agentinfer.scheduling.identity import AgentIdentity, encode_agent_identity
 # Injected by JiuwenInstance to identify the benchmark task's root/lead session.
 ROOT_SESSION_ENV = "AGENTBENCH_ROOT_SESSION_ID"
 
-# AgentBench's code.normal tasks run without an interactive approval channel.
-_INTERACTIVE_TOOLS = frozenset({"switch_mode", "enter_plan_mode", "exit_plan_mode", "ask_user_question"})
-
-
-def _tool_name(tool: object) -> str | None:
-    if isinstance(tool, dict):
-        function = tool.get("function")
-        value = function.get("name") if isinstance(function, dict) else tool.get("name")
-    else:
-        value = getattr(tool, "name", None)
-    return value if isinstance(value, str) else None
-
-
 # OpenJiuwen 0.1.16.post1 matched-rule encodings recognized by the
 # compound-shell approval compatibility patch below.
 _APPROVAL_PREFIX = "tiered_policy:approval_overrides:"
@@ -150,11 +137,6 @@ class AgentBenchAffinityModelClient(AscendAffinityModelClient):
     def _build_ascend_affinity_request_params(self, **kwargs: object) -> dict[str, object]:
         """Build OpenJiuwen request parameters with AgentBench identity and usage metadata."""
 
-        tools = kwargs.get("tools")
-        if isinstance(tools, list):
-            # Filter before SDK formatting/affinity bookkeeping, keeping the caller's
-            # tool list intact and preserving the ordinary sandboxed coding tools.
-            kwargs["tools"] = [tool for tool in tools if _tool_name(tool) not in _INTERACTIVE_TOOLS]
         if not kwargs.get("session_id"):
             root_session_id = os.environ.get(ROOT_SESSION_ENV, "").strip()
             session_id, parent_session_id = resolve_session_lineage(get_current_session())

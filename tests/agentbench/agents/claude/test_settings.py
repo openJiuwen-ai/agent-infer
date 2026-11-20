@@ -68,11 +68,3 @@ def test_launch_environment_defaults_auth_token(
 
     assert env["ANTHROPIC_AUTH_TOKEN"] == "smoke"
     assert "using the local benchmark placeholder" in caplog.text
-
-
-def test_launch_environment_applies_agent_token_budget(tmp_path: Path) -> None:
-    env = build_claude_env(tmp_path, "http://proxy", "qwen", context_window=65536, max_tokens=8192)
-
-    assert env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "65536"
-    assert env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "65536"
-    assert env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "8192"

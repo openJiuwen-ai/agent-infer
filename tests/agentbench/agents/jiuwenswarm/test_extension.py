@@ -19,16 +19,13 @@ pytestmark = test_marks(hardware="cpu", ci="ready")
 def _extension_modules() -> dict[str, ModuleType]:
     class AscendAffinityModelClient:
         def _build_ascend_affinity_request_params(self, **kwargs):
-            params = {
+            return {
                 "agent_hint": {
                     "session_id": kwargs["session_id"],
                     "parent_session_id": kwargs["parent_session_id"],
                 },
                 "stream": True,
             }
-            if "tools" in kwargs:
-                params["tools"] = kwargs["tools"]
-            return params
 
         @staticmethod
         def _raise_config_error(message):
@@ -99,29 +96,6 @@ def _command_tools(fake: object) -> ModuleType:
     module = ModuleType("jiuwenswarm.agents.harness.common.tools.command_tools")
     module.mcp_exec_command = fake
     return module
-
-
-@pytest.mark.parametrize(
-    "make_tool",
-    [
-        lambda name: {"type": "function", "function": {"name": name}},
-        lambda name: {"name": name},
-        lambda name: SimpleNamespace(name=name),
-    ],
-    ids=["openai", "flat", "sdk"],
-)
-def test_noninteractive_requests_exclude_plan_and_question_tools(monkeypatch, make_tool) -> None:
-    module = _load_extension(monkeypatch)
-    monkeypatch.setenv(module.ROOT_SESSION_ENV, "root-session")
-    names = ["read_file", "switch_mode", "bash", "enter_plan_mode", "exit_plan_mode", "ask_user_question", "write_file"]
-    tools = [make_tool(name) for name in names]
-    original = list(tools)
-    params = module.AgentBenchAffinityModelClient()._build_ascend_affinity_request_params(
-        session_id="root-session", parent_session_id="root-session", tools=tools
-    )
-    assert [module._tool_name(tool) for tool in params["tools"]] == ["read_file", "bash", "write_file"]
-    assert tools == original
-    assert params["tools"] is not tools
 
 
 def test_root_identity_uses_canonical_program_without_self_parent(monkeypatch) -> None:

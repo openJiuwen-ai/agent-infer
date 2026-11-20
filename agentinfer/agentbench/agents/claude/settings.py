@@ -89,9 +89,6 @@ def build_claude_env(
     claude_state_dir: Path,
     api_base_url: str,
     model: str,
-    *,
-    context_window: int | None = None,
-    max_tokens: int | None = None,
 ) -> dict[str, str]:
     """Build environment variables passed to Claude Code."""
 
@@ -99,7 +96,7 @@ def build_claude_env(
     if token is None:
         token = "smoke"
         logger.warning("ANTHROPIC_AUTH_TOKEN is not set; using the local benchmark placeholder")
-    env = {
+    return {
         "ANTHROPIC_BASE_URL": api_base_url,
         "ANTHROPIC_AUTH_TOKEN": token,
         "CLAUDE_CODE_SUBAGENT_MODEL": model,
@@ -110,9 +107,3 @@ def build_claude_env(
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "CLAUDE_CONFIG_DIR": str(claude_state_dir),
     }
-    if context_window is not None:
-        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(context_window)
-        env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(context_window)
-    if max_tokens is not None:
-        env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(max_tokens)
-    return env

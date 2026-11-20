@@ -10,11 +10,14 @@ import shutil
 import subprocess
 import sys
 import textwrap
+from contextlib import ExitStack
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from tests.e2e.helpers.case_loader import BenchmarkCase, load_case_file
+from tests.e2e.helpers.case_loader import BenchmarkCase, E2EConfig, load_case_group
+from tests.e2e.helpers.server import managed_vllm
 
 _CHECKOUT_OWNER = pytest.StashKey[tuple[Path, int, int]]()
 
@@ -33,9 +36,13 @@ def pytest_configure(config: pytest.Config) -> None:
     """Choose CI report paths before pytest initializes JUnit and logging."""
     if not config.getoption("--correctness-ci"):
         return
-    agents = {path.name for path in (Path(__file__).parent / "cases").iterdir() if path.is_dir()}
+    agents = {
+        case.benchmark_params.get("agent-type", "claude")
+        for path in (Path(__file__).parent / "cases").glob("*.json")
+        for case in load_case_group(path)
+    }
     selected = config.getoption("keyword")
-    logs = Path("nightly-logs") / (selected if selected in agents else "all")
+    logs = Path("nightly-logs") / (selected if selected in agents | {"baseline", "agentinfer"} else "all")
     if not config.option.xmlpath:
         config.option.xmlpath = str(logs / "results.xml")
     if not config.option.log_file:
@@ -148,9 +155,33 @@ def correctness_ci_environment(pytestconfig: pytest.Config):
 
 
 @pytest.fixture
-def correctness_environment(case_file: Path, correctness_ci_environment) -> None:
+def correctness_environment(benchmark_case: BenchmarkCase, correctness_ci_environment) -> None:
     if correctness_ci_environment is not None:
-        correctness_ci_environment(load_case_file(case_file))
+        correctness_ci_environment(benchmark_case)
+
+
+@pytest.fixture(scope="module")
+def correctness_server(case_file: Path):
+    """Start lazily after per-agent preflight and reuse serve within one case file."""
+    server_config: E2EConfig | None = None
+    with ExitStack() as stack:
+
+        def use(config: E2EConfig) -> E2EConfig:
+            nonlocal server_config
+            blockers = config.validate_prerequisites()
+            if blockers:
+                raise RuntimeError("; ".join(blockers))
+            if server_config is None:
+                stack.enter_context(managed_vllm(config))
+                server_config = config
+            return replace(
+                config,
+                host=server_config.host,
+                port=server_config.port,
+                lifecycle_socket=server_config.lifecycle_socket,
+            )
+
+        yield use
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:

@@ -50,9 +50,6 @@ class JiuwenInstance:
         self.data_dir = self.root / "data"
         self.sandbox_tmp_dir = self.root / "sandbox-tmp"
         self.config_path = self.data_dir / "config" / "config.yaml"
-        # Linux Unix-domain socket paths are limited to 107 bytes. Keep the
-        # worker socket independent of potentially long artifact directories.
-        self.runtime_socket_path = Path("/tmp") / f"agentbench-jw-{uuid.uuid4().hex}.sock" if os.name != "nt" else None
         self.web_port, self.agent_server_port, self.gateway_port = _allocate_ports(3)
         self.gateway_url = f"ws://127.0.0.1:{self.gateway_port}/tui"
         # jiuwenbox-server owns the per-task SysOperation SANDBOX backend.
@@ -229,8 +226,6 @@ class JiuwenInstance:
             if handle is not None:
                 handle.close()
                 setattr(self, handle_name, None)
-        if self.runtime_socket_path is not None:
-            self.runtime_socket_path.unlink(missing_ok=True)
 
     async def _start_jiuwenbox_server(self) -> None:
         """Launch a task-local jiuwenbox-server bound to the allocated port."""
@@ -337,8 +332,6 @@ class JiuwenInstance:
             "JIUWENSWARM_AGENT_SERVER_PORT": str(self.agent_server_port),
             "JIUWENSWARM_GATEWAY_PORT": str(self.gateway_port),
         }
-        if self.runtime_socket_path is not None:
-            values["JIUWENSWARM_RUNTIME_SOCKET"] = str(self.runtime_socket_path)
         return {**os.environ, **values}
 
     def _write_jiuwenbox_policy(self) -> None:
@@ -531,10 +524,6 @@ def _jiuwenbox_policy(
         ("/usr", "/usr"),
         ("/lib", "/lib"),
         ("/lib64", "/lib64"),
-        # Debian/Ubuntu python3 and other runtime commands may resolve through
-        # /etc/alternatives even though their launchers live under /usr/bin.
-        ("/etc/alternatives", "/etc/alternatives"),
-        ("/etc/ld.so.cache", "/etc/ld.so.cache"),
         ("/etc/resolv.conf", "/etc/resolv.conf"),
         ("/etc/hosts", "/etc/hosts"),
         ("/etc/nsswitch.conf", "/etc/nsswitch.conf"),

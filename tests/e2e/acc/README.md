@@ -4,20 +4,21 @@ Covers [PR #64](https://github.com/openJiuwen-ai/agent-infer/pull/64): automatic
 existing runs, and per-task regression comparison.
 
 Run on Linux with AgentInfer, vLLM, the selected agent CLI, Verified/test data, Docker access,
-and `swebench==4.1.0` in the evaluation Python environment. Use a non-root benchmark account. See the [benchmark
-guide](../../../docs/en/how-to/run-benchmark.md).
+and `swebench==4.1.0` in the evaluation Python environment. Use a non-root benchmark account for `plan-subagent`.
+See the [benchmark guide](../../../docs/en/how-to/run-benchmark.md).
 
 The Qwen3-Coder-30B-A3B-Instruct baseline and AgentInfer JSON examples use BF16 on two L20 GPUs (TP=2),
-a 65,536-token context, and two tasks with one concurrent agent. The agent executable is
-`claude`, resolved from `PATH`; CI must install Claude CLI and expose it on the benchmark user's `PATH`.
+a 125,536-token server context, and two tasks per agent with one concurrent agent. Agent executables are
+resolved from `PATH`; CI must install each selected CLI and expose it on the benchmark user's `PATH`.
 Adjust model paths, benchmark user, and hardware parameters for your host. Add `"evaluation-config":
-"/absolute/path/evaluation.yaml"` to `benchmark_params` for a separate evaluation environment.
+"/absolute/path/evaluation.yaml"` to each selected `benchmark_params` entry for a separate evaluation environment.
 
 ## Automatic scoring
 
 ```bash
 python -m pytest -s -v tests/e2e/acc/test_correctness.py::test_run_with_correctness \
-  --test-config-file tests/e2e/acc/cases/claude/qwen3_coder_2x1_baseline_correctness.json
+  --test-config-file tests/e2e/acc/cases/qwen3_coder_2x1_baseline_correctness.json \
+  --benchmark-run-as-user test-user
 ```
 
 Use `qwen3_coder_2x1_agentinfer_correctness.json` for AgentInfer. Supports `--task-num`, `--max-concurrency`, and
@@ -25,20 +26,28 @@ Use `qwen3_coder_2x1_agentinfer_correctness.json` for AgentInfer. Supports `--ta
 When pytest runs as root, Claude `plan-subagent` requires `--benchmark-run-as-user USER`
 with an existing non-root account that can access Docker. When running as that account directly, omit the option.
 
-## Agent cases
+## Grouped agent cases
 
-Each agent has a baseline and an AgentInfer case; replace `<scenario>` with `baseline` or `agentinfer`.
+`cases/` contains two files, `qwen3_coder_2x1_baseline_correctness.json` and
+`qwen3_coder_2x1_agentinfer_correctness.json`. Each defines one `server_params` object and a `benchmark_params`
+array for Claude Code, DSH, ZCode, and JiuwenSwarm. Pytest expands the array into four independent tests and
+reuses the same server across them. The server stops before switching files; running the full matrix in one
+pytest process starts serve twice. A failed agent test does not prevent later tests from running, unless pytest's
+`-x` or `--maxfail` option stops the session. Agent selection with `-k` is preserved.
+
+The server context uses Claude's existing 125,536-token setting for both groups. The other agents previously
+used a 65,536-token server context; their benchmark configurations and generation budgets are unchanged.
 Configuration names follow PR #92: Claude uses `swebench_vllm.yaml`; DSH, ZCode, and JiuwenSwarm use
 `swebench_vllm_dsh.yaml`, `swebench_vllm_zcode.yaml`, and `swebench_vllm_jiuwenswarm.yaml`, respectively.
 The latter three configs set a 65,536-token agent context and an 8,192-token output budget.
 Accuracy scoring is enabled by `with-correctness` in each case, sharing the agent configs with functional tests.
 
-| Agent | Case path under `cases/` | Profile | Executable on PATH |
+| Agent | Selector | Profile | Executable on PATH |
 | ----- | ------------- | ------- | ------------------ |
-| Claude Code | `claude/qwen3_coder_2x1_<scenario>_correctness.json` | `plan-subagent` | `claude` |
-| DSH | `dsh/qwen3_coder_dsh_2x1_<scenario>_correctness.json` | `plan-subagent` | `dsh` |
-| ZCode | `zcode/qwen3_coder_zcode_2x1_<scenario>_correctness.json` | `plan-subagent` | `zcode-launcher` |
-| JiuwenSwarm | `jiuwenswarm/qwen3_coder_jiuwenswarm_2x1_<scenario>_correctness.json` | `code.normal` | `jiuwenswarm` |
+| Claude Code | `-k claude` | `plan-subagent` | `claude` |
+| DSH | `-k dsh` | `plan-subagent` | `dsh` |
+| ZCode | `-k zcode` | `plan-subagent` | `zcode-launcher` |
+| JiuwenSwarm | `-k jiuwenswarm` | `code.normal` | `jiuwenswarm` |
 
 The three additional agents use `/v1/chat/completions`; Claude uses `/v1/messages`.
 Install DSH `0.2.1-rc.2` with a supported Node runtime. ZCode requires the documented Node-based CLI `0.17.1`
@@ -51,7 +60,8 @@ For example, run DSH with automatic scoring:
 
 ```bash
 python -m pytest -s -v tests/e2e/acc/test_correctness.py::test_run_with_correctness \
-  --test-config-file tests/e2e/acc/cases/dsh/qwen3_coder_dsh_2x1_agentinfer_correctness.json
+  --test-config-file tests/e2e/acc/cases/qwen3_coder_2x1_agentinfer_correctness.json \
+  -k dsh --benchmark-run-as-user test-user
 ```
 
 Compare baseline and AgentInfer results from the same agent and profile.
@@ -59,35 +69,37 @@ Compare baseline and AgentInfer results from the same agent and profile.
 ## Nightly CI
 
 The nightly pipeline uses the `agentinfer-accuracy` Compose service and invokes pytest directly.
-Inside that container, run one agent's baseline and AgentInfer cases with:
+Its two jobs run all agents for baseline and AgentInfer respectively, each with one serve startup.
+Inside that container, run one group with:
 
 ```bash
-pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k dsh \
+pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k baseline \
   --correctness-ci --benchmark-run-as-user test-user \
   --correctness-evaluation-config /opt/agentbench/evaluation.yaml
 ```
 
-Replace `dsh` with `claude`, `zcode`, or `jiuwenswarm` to select another agent.
+Replace `baseline` with `agentinfer` for the other group. Use `-k dsh` to run just DSH in both groups.
 `--correctness-ci` requires root in the accuracy container. Its fixtures prepare the benchmark user,
 Docker access, runtime checks, shared model cache, and dependency records. Manual runs omit this flag.
 The evaluation config overrides the loaded case in memory; the JSON files are preserved.
-The pipeline uploads per-agent pytest logs, JUnit reports, and benchmark/scoring artifacts.
+The pipeline uploads pytest logs and JUnit reports per serve group, dependency records per agent,
+and benchmark/scoring artifacts per agent and scenario.
 Shared pytest arguments come from the accuracy hardware preset's `PYTEST_ADDOPTS`; each job only names its
-test target and agent selector. CI reports default to `nightly-logs/<agent>/`, with explicit report paths taking
-precedence when supplied.
+test target and group selector. CI reports default to `nightly-logs/<scenario>/`; selecting just one agent
+uses `nightly-logs/<agent>/`. Explicit report paths take precedence when supplied.
 
 Jiuwen runs `jiuwenbox-server` as a local process in the benchmark environment. The CI preflight checks
-that the benchmark user can create the required bubblewrap PID/user namespaces before model startup.
-Runtime commands whose symlinks use `/etc/alternatives` receive a read-only mapping of it.
-Jiuwen's AgentBench model client excludes mode-switch, plan-mode, and user-question tools from model requests
-for noninteractive `code.normal` tasks. Unexpected confirmation events still fail the task.
+that the benchmark user can create the required bubblewrap PID/user namespaces before its benchmark starts.
+The accuracy suite uses the existing agent adapters without extra tool filtering or sandbox path mappings.
+Unexpected confirmation events still fail the task.
 
 ## Result directories
 
-Each case saves its runs under `test-results/acc/<agent>/<scenario>/`, where `<scenario>` is
+Each benchmark saves its runs under `test-results/acc/<agent>/<scenario>/`, where `<scenario>` is
 `baseline` or `agentinfer`. Each run gets a unique subdirectory; automatic scoring writes
-`evaluations/<evaluation_id>/correctness.json` inside that run directory. Server logs are kept
-under the same result root in `vllm-logs/`.
+`evaluations/<evaluation_id>/correctness.json` inside that run directory. Shared server logs are kept
+under `test-results/acc/<scenario>/vllm-logs/`. The JSON's `result_root` sets the base directory
+(`test-results/acc`); pytest adds the agent and scenario for benchmark artifacts.
 
 For example, Claude baseline results are saved under `test-results/acc/claude/baseline/`.
 When running BenchKit directly, use `--result-dir` to select the run directory explicitly.

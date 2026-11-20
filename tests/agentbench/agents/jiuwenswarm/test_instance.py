@@ -2,8 +2,6 @@
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 
 import asyncio
-import os
-import socket
 from pathlib import Path
 
 import pytest
@@ -27,24 +25,6 @@ def _instance(tmp_path: Path) -> JiuwenInstance:
         model="model",
         completion_timeout_seconds=14400,
     )
-
-
-@pytest.mark.skipif(os.name == "nt", reason="Jiuwen uses named pipes on Windows")
-def test_worker_socket_supports_long_artifact_paths(tmp_path: Path) -> None:
-    long_dir = tmp_path / ("long-run-" * 12)
-    long_dir.mkdir()
-    instance = _instance(long_dir)
-    legacy_path = instance.home_dir / ".jiuwenswarm" / "run" / "runtime-worker.sock"
-    assert len(os.fsencode(legacy_path)) >= 108
-    path = instance.environment["JIUWENSWARM_RUNTIME_SOCKET"]
-    assert len(os.fsencode(path)) < 108
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
-            server.bind(path)
-        assert Path(path).exists()
-    finally:
-        asyncio.run(instance.stop())
-    assert not Path(path).exists()
 
 
 def _write_minimal_config(instance: JiuwenInstance) -> None:

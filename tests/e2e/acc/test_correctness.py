@@ -14,7 +14,7 @@ import pytest
 from agentinfer.agentbench.benchkit.evaluation.compare import load_evaluation
 from agentinfer.agentbench.benchkit.evaluation.inputs import digest
 from tests.e2e.helpers.benchmark import run_benchmark, validate_completed_run
-from tests.e2e.helpers.case_loader import E2EConfig, load_case_file
+from tests.e2e.helpers.case_loader import BenchmarkCase, E2EConfig
 
 
 def _cli(*args: str) -> str:
@@ -62,8 +62,8 @@ def _validate(run_dir: Path, evaluation: Path, *, expected_task_num: int | None 
 
 
 @pytest.mark.usefixtures("correctness_environment")
-def test_run_with_correctness(pytestconfig: pytest.Config, case_file: Path) -> None:
-    case = load_case_file(case_file)
+def test_run_with_correctness(pytestconfig: pytest.Config, benchmark_case: BenchmarkCase, correctness_server) -> None:
+    case = benchmark_case
     assert case.benchmark_params.get("with-correctness") is True
     evaluation_config = pytestconfig.getoption("--correctness-evaluation-config")
     if evaluation_config:
@@ -78,7 +78,15 @@ def test_run_with_correctness(pytestconfig: pytest.Config, case_file: Path) -> N
             benchmark_run_as_user=str(user).strip() or None,
             benchmark_run_as_user_set=True,
         )
-    run_dir = run_benchmark(config)
+    agent = case.benchmark_params.get("agent-type", "claude")
+    config = replace(
+        config,
+        result_root=config.result_root / agent / config.scenario.value,
+        vllm_log_dir=config.result_root / config.scenario.value / "vllm-logs",
+    )
+    config = correctness_server(config)
+    print(f"[correctness] agent={agent} scenario={config.scenario.value}", flush=True)
+    run_dir = run_benchmark(config, start_server=False)
     evaluations = list((run_dir / "evaluations").glob("*/correctness.json"))
     assert len(evaluations) == 1, evaluations
     _validate(run_dir, evaluations[0], expected_task_num=config.task_num)
