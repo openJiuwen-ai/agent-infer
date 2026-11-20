@@ -106,7 +106,7 @@ def correctness_ci_environment(pytestconfig: pytest.Config):
         logs.mkdir(parents=True, exist_ok=True)
         if agent not in agents:
             if agent == "jiuwenswarm":
-                probe = [
+                namespace_probe = [
                     "--unshare-user",
                     "--unshare-pid",
                     "--ro-bind",
@@ -118,11 +118,11 @@ def correctness_ci_environment(pytestconfig: pytest.Config):
                     "/dev",
                     "/bin/true",
                 ]
-                subprocess.run(sudo + ["bwrap", *probe], check=True)
+                subprocess.run(sudo + ["bwrap", *namespace_probe], check=True)
             asyncio.run(get_runtime(agent).preflight(Path(case.benchmark_params["agent-executable"])))
             if agent == "jiuwenswarm":
                 python = _jiuwen_python(case.benchmark_params["agent-executable"])
-                probe = textwrap.dedent("""\
+                client_probe_script = textwrap.dedent("""\
                     import os
                     import tempfile
                     from importlib.metadata import version
@@ -133,7 +133,7 @@ def correctness_ci_environment(pytestconfig: pytest.Config):
                         assert version("jiuwenswarm") == "0.2.4b3"
                         print(AgentBenchAffinityModelClient.__client_name__)
                     """)
-                subprocess.run(sudo + ["env", "-u", "PYTHONPATH", str(python), "-c", probe], check=True)
+                subprocess.run(sudo + ["env", "-u", "PYTHONPATH", str(python), "-c", client_probe_script], check=True)
                 _freeze(python, logs / "agent-requirements.txt")
             _freeze(sys.executable, logs / "bench-requirements.txt")
             _freeze(harness, logs / "evaluation-requirements.txt")
