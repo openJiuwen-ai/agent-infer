@@ -11,6 +11,8 @@ import pytest
 
 from tests.helpers.marks import resolve_pytest_marks
 
+from .helpers.case_loader import benchmark_param_variants
+
 _SELECTED_CASE = pytest.StashKey[Path | None]()
 
 
@@ -50,6 +52,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     cases_dir = (Path(metafunc.definition.path).parent / "cases").resolve()
     selected = metafunc.config.stash.get(_SELECTED_CASE, None)
     paths = [selected] if selected else sorted(path.resolve() for path in cases_dir.rglob("*.json"))
+    expand_benchmarks = "benchmark_index" in metafunc.fixturenames
     params = []
     for path in paths:
         try:
@@ -61,10 +64,18 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
                 raise ValueError("case JSON must be an object")
             marks = resolve_pytest_marks(payload.get("mark"), metafunc.config)
             case_id = path.relative_to(cases_dir).with_suffix("").as_posix()
-            params.append(pytest.param(path, marks=marks, id=case_id))
+            if expand_benchmarks:
+                for index, benchmark in enumerate(benchmark_param_variants(payload)):
+                    agent = benchmark.get("agent-type", "agent")
+                    profile = benchmark.get("agent-profile", "single")
+                    params.append(pytest.param(path, index, marks=marks, id=f"{case_id}/{agent}/{profile}"))
+            else:
+                if isinstance(payload.get("benchmark_params"), list):
+                    raise ValueError("this suite does not support benchmark_params arrays")
+                params.append(pytest.param(path, marks=marks, id=case_id))
         except (OSError, ValueError, TypeError) as exc:
             raise pytest.UsageError(f"{metafunc.definition.nodeid} [{path}]: {exc}") from exc
-    metafunc.parametrize("case_file", params)
+    metafunc.parametrize("case_file,benchmark_index" if expand_benchmarks else "case_file", params)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

@@ -4,25 +4,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import shutil
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
+from agentinfer.agentbench.agents.preflight import check_agent_preflight
 from agentinfer.agentbench.benchkit.compare import load_summary
 from agentinfer.agentbench.benchkit.config import AgentBenchConfig, load_config
 from tests.e2e.function.agentbench.artifact_validation import validate_agent_artifacts
 from tests.e2e.function.agentbench.smoke_inputs import prepare_smoke_case
 from tests.e2e.helpers.benchmark import run_benchmark
-from tests.e2e.helpers.case_loader import E2EConfig, load_case_file
-
-_DEPENDENCIES = {
-    "claude": ("git", "tmux"),
-    "jiuwenswarm": ("git", "bwrap"),
-    "dsh": ("git", "node"),
-    "zcode": ("git", "node"),
-}
+from tests.e2e.helpers.case_loader import E2EConfig, load_pytest_case, validate_benchmark_user
 
 
 def resolve_agent_type(config: E2EConfig) -> str:
@@ -39,28 +34,23 @@ def resolve_agent_type(config: E2EConfig) -> str:
 
 
 def test_agent_smoke(
-    pytestconfig: pytest.Config, case_file: Path, agentbench_server: Callable[[E2EConfig], E2EConfig]
+    pytestconfig: pytest.Config,
+    case_file: Path,
+    benchmark_index: int,
+    agentbench_server: Callable[[E2EConfig], E2EConfig],
 ) -> None:
     """Require every selected task to finish and common artifacts to exist."""
-    config = E2EConfig.from_case(load_case_file(case_file)).with_benchmark_load(
-        task_num=pytestconfig.getoption("--task-num"),
-        max_concurrency=pytestconfig.getoption("--max-concurrency"),
-    )
-    benchmark_user = pytestconfig.getoption("--benchmark-run-as-user")
-    if benchmark_user is not None:
-        config = config.with_runtime_overrides(
-            benchmark_run_as_user=str(benchmark_user).strip() or None,
-            benchmark_run_as_user_set=True,
-        )
+    config = load_pytest_case(pytestconfig, case_file, benchmark_index=benchmark_index)
+    validate_benchmark_user(config)
     agent_type = resolve_agent_type(config)
     if config.task_num <= 0 or config.max_concurrency <= 0:
         pytest.fail("task-num and max-concurrency must be positive")
     blockers = config.validate_prerequisites()
-    for executable in _DEPENDENCIES[agent_type]:
-        if not shutil.which(executable):
-            blockers.append(f"{executable} executable is unavailable on PATH")
+    if not shutil.which("git"):
+        blockers.append("git executable is unavailable on PATH")
     if blockers:
         pytest.fail("; ".join(blockers))
+    asyncio.run(check_agent_preflight(agent_type, config.agent_executable))
 
     config = prepare_smoke_case(config)
     config = agentbench_server(config)

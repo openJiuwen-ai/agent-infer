@@ -17,22 +17,29 @@ These inputs remain under the case result_root/smoke-inputs directory. Normal
 BenchKit workspace preparation uses the preseeded commit without fetching a
 remote repository. Do not edit the intentionally broken source fixture.
 
-The generated YAML declares dataset.name=smoke. All cases use the dedicated
-agentinfer/agentbench/configs/smoke_vllm.yaml template, with runtime and endpoint
+The generated YAML declares dataset.name=smoke. All benchmark entries use the dedicated
+tests/e2e/function/agentbench/smoke_vllm.yaml template, with runtime and endpoint
 overrides in JSON. Dataset paths are filled in at runtime.
 
 ## Agents and requirements
 
-| Case directory | Agent | Profiles | Endpoint |
+| Agent type | Agent | Profiles | Endpoint |
 | --- | --- | --- | --- |
-| cases/claude/ | Claude Code | single, plan-subagent | /v1/messages |
-| cases/dsh/ | DSH | single, plan-subagent | /v1/chat/completions |
-| cases/jiuwenswarm/ | JiuwenSwarm | code.normal | /v1/chat/completions |
-| cases/zcode/ | ZCode | single, plan-subagent | /v1/chat/completions |
+| claude | Claude Code | single, plan-subagent | /v1/messages |
+| dsh | DSH | single, plan-subagent | /v1/chat/completions |
+| jiuwenswarm | JiuwenSwarm | code.normal | /v1/chat/completions |
+| zcode | ZCode | single, plan-subagent | /v1/chat/completions |
+
+The single case file, cases/qwen3_coder_agents_1x1.json, declares the shared
+model deployment, hardware marks, and result root once. Its benchmark_params
+array contains seven agent/profile entries. Pytest collects each entry as an
+independent item, with IDs ending in agent/profile, such as claude/single.
 
 Run on Linux with GPU access, vLLM, Git, and the selected agent installed.
 Claude needs tmux; DSH and ZCode need Node.js; JiuwenSwarm needs its companion
 commands, jiuwenbox-server, bubblewrap, and host support for its sandbox.
+Agent dependency/version checks reuse each runtime's preflight before starting
+vLLM. Git is checked separately because the local fixture creates a repository.
 ZCode must be CLI 0.17.1 with the pinned build documented in the
 [benchmark guide](../../../../docs/en/how-to/run-benchmark.md).
 
@@ -45,6 +52,10 @@ Pytest, fixture preparation, and vLLM run as the invoking user (root in CI).
 When pytest is root, pass --benchmark-run-as-user test-user for plan-subagent
 bench subprocesses. Create the account first. Single and code.normal bench
 subprocesses remain root. Agent executables must be accessible to that account.
+The user is selected only by the command, not by JSON. A root-launched
+plan-subagent case fails before model startup if this option is missing or
+names root; single and code.normal use the invoking user without this option.
+Pytest already running as an ordinary user can run plan-subagent directly.
 
 ## Run
 
@@ -55,19 +66,25 @@ pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_s
   --benchmark-run-as-user test-user
 ```
 
-Run just one profile using a complete case path:
+Run one agent/profile from the shared case file:
 
 ```bash
 pytest -s -v tests/e2e/function/agentbench/test_smoke.py \
-  --test-config-file tests/e2e/function/agentbench/cases/zcode/qwen3_coder_zcode_1x1_plan_subagent.json \
+  --test-config-file tests/e2e/function/agentbench/cases/qwen3_coder_agents_1x1.json \
+  -k "zcode and plan" \
   --benchmark-run-as-user test-user
 ```
 
+Use -k claude or -k dsh to run both profiles of one agent. Omitting -k selects
+all seven entries. Results and generated inputs use the shared root
+test-results/function/agentbench, with a distinct run ID for every entry.
+
 Each case has its own task workspace, agent instance, Request Proxy, and run
-artifacts. A session fixture starts vLLM lazily and reuses it for matching
-server configurations. Changing the model, serving arguments, server environment,
-bind address, or deployment scenario restarts the service. Teardown closes it
-when pytest exits. Separate pytest invocations do not share a service; do not
+artifacts. The session fixture holds one VllmServer from
+tests/e2e/helpers/server.py and starts it lazily on the first benchmark entry.
+Entries in one session must share the deployment and bind settings; a mismatch
+is reported instead of switching services. Teardown closes the process when
+pytest exits. Separate pytest invocations do not share a service; do not
 use pytest-xdist for this suite if only one model instance is desired.
 
 The ready CI pipeline runs all profiles in one functional job and one pytest

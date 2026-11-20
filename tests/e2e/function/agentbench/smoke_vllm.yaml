@@ -1,4 +1,4 @@
-# Local standard-library task; functional pytest materializes the data paths.
+# Functional-test template; smoke_inputs.py materializes the local data paths.
 experiment:
   task_num: 1
   result_dir: ../result_smoke
