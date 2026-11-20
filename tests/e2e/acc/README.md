@@ -68,6 +68,49 @@ Compare baseline and AgentInfer results from the same agent and profile.
 
 ## Nightly CI
 
+### Nightly triggers
+
+The bootstrap in `.buildkite/pipeline.yml` follows vLLM-Omni's
+[nightly entry points](https://github.com/vllm-project/vllm-omni/blob/main/.buildkite/cuda/bootstrap-upload-steps.yml):
+
+| Trigger | Configuration | Code tested |
+| ------- | ------------- | ----------- |
+| PR label | Add `nightly-test` to an open PR | The PR revision checked out by Buildkite |
+| Scheduled build | Buildkite Schedule on `main`, with `NIGHTLY=1` | Latest `main` (`HEAD`) |
+| Manual build | New Build with `NIGHTLY=1` | The selected branch and commit |
+
+Ordinary PR builds and main-branch pushes do not run nightly without these conditions.
+The `ready` and `nightly-test` labels select their pipelines independently. When both labels are present,
+both pipelines run in the same build; execution order follows their dependencies and agent availability.
+Their GPU image tags are separate: ready uses `agentinfer-ci:<build-id>-gpu`, while nightly uses
+`agentinfer-ci:<build-id>-nightly-gpu`. Both use the same Dockerfile and can reuse cached layers.
+The nightly file also applies the bootstrap's trigger condition to its outer group, covering image build,
+both accuracy jobs, and cleanup. Uploading that file directly still requires the nightly label or `NIGHTLY=1`.
+
+Keep the Buildkite pipeline's entry point at `.buildkite/pipeline.yml`. In its GitHub settings:
+
+- Enable **Build when pull request labels are changed**.
+- Disable **Skip when pull request has existing build for commit and branch**, so adding a label can trigger
+  another build of the same commit.
+
+After merging the bootstrap changes into `main`, create and enable a schedule in
+**Pipeline Settings > Schedules** with these values:
+
+| Setting | Value |
+| ------- | ----- |
+| Description | Nightly accuracy |
+| Cron interval | `0 2 * * * Asia/Shanghai` (daily at 02:00 Beijing time) |
+| Branch | `main` |
+| Commit | `HEAD` |
+| Environment variables | `NIGHTLY=1` |
+
+Buildkite manages schedules outside the step YAML; committing `test-nightly.yml` alone does not create a timer.
+See [Buildkite scheduled builds](https://buildkite.com/docs/pipelines/configure/workflows/scheduled-builds).
+Use the schedule's **Run now** action to check the trigger before its next scheduled run. The schedule targets
+`main`; manual builds can select another branch with `NIGHTLY=1`.
+
+### Accuracy jobs
+
 The nightly pipeline uses the `agentinfer-accuracy` Compose service and invokes pytest directly.
 Its two jobs run all agents for baseline and AgentInfer respectively, each with one serve startup.
 Inside that container, run one group with:
