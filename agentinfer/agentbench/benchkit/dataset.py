@@ -28,7 +28,7 @@ _WINDOWS_RESERVED = {
 
 @dataclass(frozen=True)
 class Task:
-    """One SWE-bench task selected for a benchmark run."""
+    """One task selected for a benchmark run."""
 
     instance_id: str
     repo: str
@@ -37,6 +37,8 @@ class Task:
     difficulty: str | None = None
     fail_to_pass: tuple[str, ...] = field(default_factory=tuple)
     pass_to_pass: tuple[str, ...] = field(default_factory=tuple)
+    metadata_path: Path | None = None
+    standard_path: Path | None = None
 
     def __post_init__(self) -> None:
         stem = self.instance_id.split(".", 1)[0].upper()
@@ -97,6 +99,8 @@ def load_tasks(
     dataset_path: Path,
     task_ids_path: Path,
     total: int | None = None,
+    *,
+    workspacebench: bool = False,
 ) -> list[Task]:
     """Load selected tasks from a local JSONL index and task-list file.
 
@@ -127,16 +131,22 @@ def load_tasks(
             if not iid or iid not in instance_ids_set:
                 continue
 
+            if workspacebench and iid in tasks_by_id:
+                raise ValueError(f"Duplicate Workspace-Bench task: {iid}")
             tasks_by_id[iid] = Task(
                 instance_id=iid,
                 repo=row.get("repo", ""),
                 base_commit=row.get("base_commit", ""),
                 problem_statement=row.get("problem_statement", ""),
                 difficulty=row.get("difficulty"),
+                metadata_path=dataset_path.parent / row["metadata_path"] if workspacebench else None,
+                standard_path=dataset_path.parent / row["standard_path"] if workspacebench else None,
                 fail_to_pass=_as_tuple(row.get("fail_to_pass", row.get("FAIL_TO_PASS", []))),
                 pass_to_pass=_as_tuple(row.get("pass_to_pass", row.get("PASS_TO_PASS", []))),
             )
 
+    if workspacebench and (not instance_ids or instance_ids_set != tasks_by_id.keys()):
+        raise ValueError(f"Empty or unknown Workspace-Bench selection: {sorted(instance_ids_set - tasks_by_id.keys())}")
     tasks = [tasks_by_id[instance_id] for instance_id in instance_ids if instance_id in tasks_by_id]
     if total is not None and total > 0:
         tasks = tasks[:total]

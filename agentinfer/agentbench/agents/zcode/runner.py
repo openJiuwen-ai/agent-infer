@@ -23,7 +23,7 @@ from .instance import bootstrap
 from .profiles import explore_name, get_profile
 
 
-async def run_zcode(request: AgentRunRequest) -> AgentRunResult:
+async def run_zcode(request: AgentRunRequest, *, workspace_prompt: str | None = None) -> AgentRunResult:
     started = time.monotonic()
     result = AgentRunResult(
         agent_type="zcode",
@@ -34,11 +34,15 @@ async def run_zcode(request: AgentRunRequest) -> AgentRunResult:
     )
     request.artifact_dir.mkdir(parents=True, exist_ok=True)
     profile = get_profile(request.profile_name)
-    prompt = profile.build_prompt(
-        request.task,
-        explore=explore_name(request.session_id),
-        max_subagents=request.max_subagents,
-        max_concurrent_subagents=request.max_concurrent_subagents,
+    prompt = (
+        workspace_prompt
+        if workspace_prompt is not None
+        else profile.build_prompt(
+            request.task,
+            explore=explore_name(request.session_id),
+            max_subagents=request.max_subagents,
+            max_concurrent_subagents=request.max_concurrent_subagents,
+        )
     )
     prompt_path = (request.artifact_dir / "prompt.txt").resolve()
     prompt_path.write_text(prompt, encoding="utf-8")
@@ -122,20 +126,21 @@ async def run_zcode(request: AgentRunRequest) -> AgentRunResult:
         result.termination_reason = TerminationReason.HARNESS_ERROR
 
     result.auto_plan_approvals = int(bridge.approved)
-    owner = WorkspaceProcessOwner(time.monotonic() + request.cleanup_timeout_seconds)
-    try:
-        patch = await asyncio.to_thread(export_patch, request.workspace, owner)
-        if patch:
-            (request.artifact_dir / "model.patch").write_text(patch)
-            result.has_patch = True
-            result.patch_bytes = len(patch.encode())
-    except Exception:
-        (request.artifact_dir / "zcode-patch-error.log").write_text(traceback.format_exc())
-        if result.outcome is AgentRunOutcome.COMPLETED:
-            result.outcome = AgentRunOutcome.FAILED
-            result.termination_reason = TerminationReason.HARNESS_ERROR
-    finally:
-        owner.terminate_all()
+    if workspace_prompt is None:
+        owner = WorkspaceProcessOwner(time.monotonic() + request.cleanup_timeout_seconds)
+        try:
+            patch = await asyncio.to_thread(export_patch, request.workspace, owner)
+            if patch:
+                (request.artifact_dir / "model.patch").write_text(patch)
+                result.has_patch = True
+                result.patch_bytes = len(patch.encode())
+        except Exception:
+            (request.artifact_dir / "zcode-patch-error.log").write_text(traceback.format_exc())
+            if result.outcome is AgentRunOutcome.COMPLETED:
+                result.outcome = AgentRunOutcome.FAILED
+                result.termination_reason = TerminationReason.HARNESS_ERROR
+        finally:
+            owner.terminate_all()
     try:
         model_errors = await asyncio.to_thread(_model_errors, request.artifact_dir / "zcode-home/logs")
     except Exception as exc:

@@ -21,6 +21,7 @@ from .config import AgentBenchConfig, load_config
 
 if typing.TYPE_CHECKING:
     from .evaluation.config import EvaluationConfig
+    from .workspacebench.evaluation import JudgeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -231,8 +232,10 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
 
     prepare = commands.add_parser("prepare", help="Prepare benchmark dataset inputs")
-    prepare.add_argument("dataset", choices=["swebench"])
-    prepare.add_argument("--output-dir", type=Path, default=Path("data/swebench"))
+    prepare.add_argument("dataset", choices=["swebench", "workspacebench"])
+    prepare.add_argument("--output-dir", type=Path)
+
+    prepare.add_argument("--upstream-checkout", type=Path, help="Existing pinned Workspace-Bench checkout")
 
     run = commands.add_parser("run", help="Run one benchmark")
     run.add_argument("--config", type=Path, default=None)
@@ -258,7 +261,9 @@ def _parser() -> argparse.ArgumentParser:
     compare.add_argument("--confidence", type=float, default=0.95)
     compare.add_argument("--json", action="store_true")
 
-    evaluate = commands.add_parser("evaluate", help="Evaluate completed SWE-bench tasks using the official harness")
+    evaluate = commands.add_parser(
+        "evaluate", help="Evaluate benchmark outputs with the dataset-specific official harness"
+    )
     evaluate.add_argument("--result-path", type=Path, required=True)
     evaluate.add_argument(
         "--config", type=Path, help="Optional evaluation YAML; defaults to the current Python environment"
@@ -296,8 +301,13 @@ def main(argv: list[str] | None = None, *, cli_metadata: dict[str, object] | Non
         else:
             if args.evaluation_config is not None and not args.with_correctness:
                 parser.error("--evaluation-config requires --with-correctness")
-            evaluation_config = _evaluation_config(args.evaluation_config, parser) if args.with_correctness else None
-            run_dir = asyncio.run(_run(args, metadata))
+            config = _apply_cli_overrides(args, load_config(args.config))
+            evaluation_config = (
+                _evaluation_config(args.evaluation_config, parser, config.dataset.name)
+                if args.with_correctness
+                else None
+            )
+            run_dir = asyncio.run(_run(config, metadata))
             if evaluation_config is not None:
                 return _evaluate(run_dir, evaluation_config)
     elif args.command == "summarize":
@@ -311,7 +321,13 @@ def main(argv: list[str] | None = None, *, cli_metadata: dict[str, object] | Non
 
 def _correctness(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.command == "evaluate":
-        return _evaluate(args.result_path, _evaluation_config(args.config, parser), args.output_dir)
+        manifest = args.result_path / "manifest.json"
+        try:
+            settings = json.loads(manifest.read_text())["config"] if manifest.is_file() else {}
+        except (OSError, ValueError, KeyError) as exc:
+            parser.error(str(exc))
+        dataset = settings.get("dataset", {}).get("name", "swebench_verified")
+        return _evaluate(args.result_path, _evaluation_config(args.config, parser, dataset), args.output_dir)
 
     from .evaluation.compare import compare_correctness
 
@@ -324,20 +340,32 @@ def _correctness(args: argparse.Namespace, parser: argparse.ArgumentParser) -> i
         return 1
 
 
-def _evaluation_config(path: Path | None, parser: argparse.ArgumentParser) -> "EvaluationConfig":
+def _evaluation_config(
+    path: Path | None, parser: argparse.ArgumentParser, dataset: str
+) -> "EvaluationConfig | JudgeConfig":
     from .evaluation.config import load_evaluation_config
 
     try:
+        if dataset == "workspacebench":
+            from .workspacebench.evaluation import load_judge_config
+
+            return load_judge_config(path)
         return load_evaluation_config(path)
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
 
 
-def _evaluate(run_dir: Path, config: "EvaluationConfig", output_dir: Path | None = None) -> int:
+def _evaluate(run_dir: Path, config: "EvaluationConfig | JudgeConfig", output_dir: Path | None = None) -> int:
     from .evaluation.runner import evaluate
+    from .workspacebench.evaluation import JudgeConfig
 
     try:
-        output, code = evaluate(run_dir, config, output_dir)
+        if isinstance(config, JudgeConfig):
+            from .workspacebench.evaluation import evaluate as evaluate_workspacebench
+
+            output, code = evaluate_workspacebench(run_dir, config, output_dir)
+        else:
+            output, code = evaluate(run_dir, config, output_dir)
         logger.info("Correctness results: %s", output / "correctness.json")
         sys.stdout.write((output / "correctness.json").read_text(encoding="utf-8") + "\n")
         return code
@@ -346,12 +374,11 @@ def _evaluate(run_dir: Path, config: "EvaluationConfig", output_dir: Path | None
         return 1
 
 
-async def _run(args: argparse.Namespace, cli_metadata: dict[str, object]) -> Path:
+async def _run(config: AgentBenchConfig, cli_metadata: dict[str, object]) -> Path:
     """Delegate benchmark execution to the Runner API."""
 
     from .runner import run_benchmark
 
-    config = _apply_cli_overrides(args, load_config(args.config))
     run_dir = await run_benchmark(config, cli_metadata=cli_metadata)
     logger.info("Results: %s", run_dir)
     return run_dir
@@ -411,7 +438,13 @@ def _prepare(args: argparse.Namespace) -> None:
     from .dataset import prepare_swebench
 
     if args.dataset == "swebench":
-        prepared = prepare_swebench(args.output_dir.resolve())
+        if getattr(args, "upstream_checkout", None):
+            raise ValueError("--upstream-checkout applies to workspacebench")
+        prepared = prepare_swebench((args.output_dir or Path("data/swebench")).resolve())
+    elif args.dataset == "workspacebench":
+        from .workspacebench.prepare import prepare
+
+        prepared = prepare((args.output_dir or Path("data/workspacebench")).resolve(), args.upstream_checkout)
     else:
         raise ValueError(f"unsupported benchmark dataset: {args.dataset}")
     logger.info("Prepared %s rows at %s", prepared.rows, prepared.index_path)

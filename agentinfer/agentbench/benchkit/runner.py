@@ -83,7 +83,14 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
             atomic_write_json(path, asdict(report))
             captures.append(EvidenceCapture(f"{report.runtime}_runtime", path, True, None, asdict(report)))
         preflight_succeeded = True
-        tasks = tuple(load_tasks(config.dataset.index_path, config.dataset.selection_path, config.experiment.task_num))
+        if config.dataset.name == "workspacebench":
+            from .workspacebench.runner import select_tasks
+
+            tasks = select_tasks(config, output_dir)
+        else:
+            tasks = tuple(
+                load_tasks(config.dataset.index_path, config.dataset.selection_path, config.experiment.task_num)
+            )
         context = RunContext(config, output_dir, output_dir / "requests.jsonl", tasks)
         start_capture = await capture_vllm_metrics(config.backend.effective_metrics_url)
         start_capture = _capture_with_path(
@@ -253,8 +260,9 @@ async def _run_tasks(
     owner = owner or WorkspaceProcessOwner()
     config = context.config
     cache = config.dataset.cache_dir.resolve()
-    for task in context.tasks:
-        await asyncio.to_thread(ensure_repo_cache, task, cache, owner)
+    if config.dataset.name != "workspacebench":
+        for task in context.tasks:
+            await asyncio.to_thread(ensure_repo_cache, task, cache, owner)
     semaphore = asyncio.Semaphore(config.experiment.max_concurrency)
 
     progress = tqdm(total=len(context.tasks), desc="benchmark", unit="task")
@@ -312,30 +320,35 @@ async def _run_single_task(
     pending_error: BaseException | None = None
     error: dict[str, str] | None = None
     try:
-        await asyncio.to_thread(prepare_workspace, task, cache, workspace, owner)
-        result = await run_agent(
-            AgentRunRequest(
-                config.agent.type,
-                task,
-                config.agent.profile,
-                config.agent.executable,
-                config.backend.model,
-                api_base_url,
-                workspace,
-                output_dir,
-                session_id,
-                config.experiment.task_timeout_seconds,
-                config.experiment.patch_flush_seconds,
-                config.experiment.prompt_delivery_timeout_seconds,
-                config.agent.tmux_startup_seconds,
-                config.agent.terminal_capture_interval_seconds,
-                context_window=config.agent.context_window,
-                max_tokens=config.agent.max_tokens,
-                cleanup_timeout_seconds=config.experiment.cleanup_timeout_seconds,
-                max_subagents=config.agent.max_subagents,
-                max_concurrent_subagents=config.agent.max_concurrent_subagents,
+        if config.dataset.name == "workspacebench":
+            from .workspacebench.runner import run_case
+
+            result = await run_case(config, task, api_base_url, output_dir, session_id)
+        else:
+            await asyncio.to_thread(prepare_workspace, task, cache, workspace, owner)
+            result = await run_agent(
+                AgentRunRequest(
+                    config.agent.type,
+                    task,
+                    config.agent.profile,
+                    config.agent.executable,
+                    config.backend.model,
+                    api_base_url,
+                    workspace,
+                    output_dir,
+                    session_id,
+                    config.experiment.task_timeout_seconds,
+                    config.experiment.patch_flush_seconds,
+                    config.experiment.prompt_delivery_timeout_seconds,
+                    config.agent.tmux_startup_seconds,
+                    config.agent.terminal_capture_interval_seconds,
+                    context_window=config.agent.context_window,
+                    max_tokens=config.agent.max_tokens,
+                    cleanup_timeout_seconds=config.experiment.cleanup_timeout_seconds,
+                    max_subagents=config.agent.max_subagents,
+                    max_concurrent_subagents=config.agent.max_concurrent_subagents,
+                )
             )
-        )
     except asyncio.CancelledError as exc:
         result = _failed_result(
             task, session_id, config.agent.type, config.agent.profile, TerminationReason.CANCELLED, started_at
@@ -458,7 +471,12 @@ async def check_preflight(
 ) -> AgentPreflightReport | None:
     if upstream_api_key is None:
         upstream_api_key = _resolve_backend_api_key(config.backend.api_key_env)
-    report = await check_agent_preflight(config.agent.type, config.agent.executable)
+    if config.dataset.name == "workspacebench":
+        from .workspacebench.runner import preflight
+
+        report = await asyncio.to_thread(preflight, config)
+    else:
+        report = await check_agent_preflight(config.agent.type, config.agent.executable)
     url = f"{config.backend.base_url.rstrip('/')}/v1/models"
     headers = {"authorization": f"Bearer {upstream_api_key}"} if upstream_api_key is not None else None
     try:

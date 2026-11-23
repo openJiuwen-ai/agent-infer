@@ -4,6 +4,8 @@
 Progress-TTL Agent 感知调度器。BenchKit 通过相同的 Request Proxy 记录两个实验组，避免观测路径差异。
 本指南同时介绍 SWE-bench Verified 精度评测，包括运行后自动评分。
 
+办公文件任务可使用 [Workspace-Bench Full 运行与评分指南](run-workspacebench.md)。
+
 ## 准备环境
 
 需要以下环境：
