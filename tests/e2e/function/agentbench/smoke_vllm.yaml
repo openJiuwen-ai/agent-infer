@@ -1,4 +1,4 @@
-# Functional-test template; smoke_inputs.py materializes the local data paths.
+# Functional-test template; create_smoke_task.py materializes the local data paths.
 experiment:
   task_num: 1
   result_dir: ../result_smoke

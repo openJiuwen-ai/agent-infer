@@ -14,7 +14,7 @@ import pytest
 from agentinfer.agentbench.agents.preflight import check_agent_preflight
 from agentinfer.agentbench.benchkit.config import AgentBenchConfig, load_config
 from tests.e2e.function.agentbench.artifact_validation import validate_agent_artifacts
-from tests.e2e.function.agentbench.smoke_inputs import prepare_smoke_case
+from tests.e2e.function.agentbench.create_smoke_task import create_smoke_task
 from tests.e2e.helpers.benchmark import run_benchmark, validate_completed_run
 from tests.e2e.helpers.case_loader import E2EConfig, load_pytest_case, validate_benchmark_user
 
@@ -56,7 +56,7 @@ def test_agent_smoke(
         pytest.fail("; ".join(blockers))
     asyncio.run(check_agent_preflight(agent_type, config.agent_executable))
 
-    config = prepare_smoke_case(config)
+    config = create_smoke_task(config)
     config = agentbench_server(config)
     run_dir = run_benchmark(config, manage_server=False)
     print(f"{agent_type} functional artifacts: {run_dir}", flush=True)

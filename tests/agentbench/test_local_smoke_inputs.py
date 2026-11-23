@@ -16,7 +16,7 @@ from agentinfer.agentbench.benchkit.config import load_config
 from agentinfer.agentbench.benchkit.dataset import load_tasks
 from agentinfer.agentbench.benchkit.workspace import ensure_repo_cache, prepare_workspace
 from tests.e2e.function.agentbench import test_smoke_task as smoke_suite
-from tests.e2e.function.agentbench.smoke_inputs import prepare_smoke_case
+from tests.e2e.function.agentbench.create_smoke_task import create_smoke_task
 from tests.e2e.helpers.case_loader import (
     E2EConfig,
     build_benchmark_argv,
@@ -33,7 +33,7 @@ SMOKE_CASE = Path(__file__).resolve().parents[2] / "tests/e2e/function/agentbenc
 def test_local_task_needs_no_remote_repository_or_dependencies(tmp_path: Path) -> None:
     case = load_case_file(SMOKE_CASE, benchmark_index=0)
     original = replace(E2EConfig.from_case(case), result_root=tmp_path)
-    config = prepare_smoke_case(original)
+    config = create_smoke_task(original)
     assert "base_url" not in yaml.safe_load(config.bench_config.read_text(encoding="utf-8"))["backend"]
     shared_config = replace(config, port=18080)
     argv = build_benchmark_argv(shared_config, tmp_path / "run")
@@ -184,7 +184,7 @@ def test_runtime_preflight_fails_before_fixture_or_model_start(monkeypatch) -> N
     monkeypatch.setattr(smoke_suite, "check_agent_preflight", preflight)
     monkeypatch.setattr(E2EConfig, "validate_prerequisites", lambda self: [])
     monkeypatch.setattr(smoke_suite.shutil, "which", lambda name: "/usr/bin/git")
-    monkeypatch.setattr(smoke_suite, "prepare_smoke_case", fail_if_started)
+    monkeypatch.setattr(smoke_suite, "create_smoke_task", fail_if_started)
     options = SimpleNamespace(getoption=lambda name: None)
     with pytest.raises(RuntimeError, match="socat is unavailable"):
         smoke_suite.test_agent_smoke(options, SMOKE_CASE, 0, fail_if_started)

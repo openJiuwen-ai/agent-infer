@@ -18,7 +18,7 @@ from tests.e2e.helpers.case_loader import E2EConfig
 TASK_ID = "agentinfer-smoke-add"
 
 
-def prepare_smoke_case(config: E2EConfig) -> E2EConfig:
+def create_smoke_task(config: E2EConfig) -> E2EConfig:
     """Seed a local repo cache so normal BenchKit dispatch never needs GitHub."""
     if config.task_num != 1 or config.max_concurrency != 1:
         raise ValueError("the local smoke suite requires task-num=1 and max-concurrency=1")

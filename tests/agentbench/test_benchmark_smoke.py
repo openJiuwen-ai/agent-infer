@@ -22,7 +22,7 @@ from agentinfer.agentbench.benchkit.runner import run_benchmark
 from agentinfer.agentbench.request_proxy import RequestProxyLifecycle, RequestTraceWriter
 from tests.helpers.marks import test_marks
 
-from .helpers.benchmark_smoke import FakeAgentRuntime, FakeModelServer, ThreadBarrier, ThreadRequestProxyProcess
+from .helpers.mock_benchmark import FakeAgentRuntime, FakeModelServer, ThreadBarrier, ThreadRequestProxyProcess
 
 pytestmark = test_marks(hardware="cpu", ci="ready")
 

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 
-"""Test-only fixtures for hermetic AgentBench contract runs."""
+"""Mock agents and model servers for AgentBench contract tests."""
 
 from __future__ import annotations
 
