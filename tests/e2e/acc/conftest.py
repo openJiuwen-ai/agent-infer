@@ -166,7 +166,13 @@ def _prepare_correctness_ci_environment(pytestconfig: pytest.Config):
 
 
 @pytest.fixture
-def correctness_environment(benchmark_case: BenchmarkCase, correctness_ci_environment) -> None:
+def correctness_environment(
+    benchmark_case: BenchmarkCase, correctness_ci_environment, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if benchmark_case.benchmark_params.get("agent-type", "claude") == "claude":
+        context = benchmark_case.deploy.serve_args["max-model-len"]
+        monkeypatch.setenv("CLAUDE_CODE_MAX_CONTEXT_TOKENS", str(context))
+        monkeypatch.setenv("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "8192")
     if correctness_ci_environment is not None:
         correctness_ci_environment(benchmark_case)
 

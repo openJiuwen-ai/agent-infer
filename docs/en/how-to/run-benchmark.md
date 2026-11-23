@@ -453,6 +453,9 @@ parsing warnings does not establish that no model error occurred.
 
 The accuracy E2E cases reuse `swebench_vllm.yaml` for Claude and `swebench_vllm_dsh.yaml` for DSH,
 retaining their existing agent budget defaults.
+Claude accuracy cases pass the serve context limit and an 8,192-token output budget through the Claude
+environment variables. When pytest runs as root, the E2E helper reclaims the repo cache before each case,
+hands it to the requested regular user, and returns it to root after the case, including on failure.
 The cases use `Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8` with a 65,536-token server context and
 reserve a loopback port per serve group. Ready selects JiuwenSwarm; nightly selects all four agents.
 Jiuwen runs as root in CI. Its tracked native sandbox issue can still cause the job to fail.

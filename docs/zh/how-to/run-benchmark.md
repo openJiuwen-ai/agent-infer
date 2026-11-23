@@ -451,6 +451,9 @@ ZCode 的原生 `turn.failed` 错误保存在 `zcode-run-status.json` 的 `nativ
 
 精度 E2E 的 Claude、DSH 分别复用 `swebench_vllm.yaml` 和 `swebench_vllm_dsh.yaml`，
 沿用仓里配置的 agent 预算默认值。
+Claude 精度用例通过环境变量传入 serve 上下文上限及 `8192` 的输出预算。
+pytest 按 root 运行时，E2E 公共 helper 在每个 case 开始前收回缓存所有权，运行时交给指定普通用户，
+并在 case 结束的 `finally` 中交回 root；case 失败时同样恢复。
 用例使用 `Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8`，serve 上限为 65536，每组自动申请一个本地端口。
 ready 只执行九问精度，nightly 执行四个 agent。九问在 CI 中按 root 运行，
 已跟踪的原生沙箱问题仍可能导致用例失败。

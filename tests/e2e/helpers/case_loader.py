@@ -41,6 +41,8 @@ _PRESERVED_ENV_KEYS = (
     "LD_PRELOAD",
     "TQDM_DISABLE",
     "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
     "VIRTUAL_ENV",
     "PYTHONPATH",
     "TORCH_DEVICE_BACKEND_AUTOLOAD",
@@ -561,16 +563,18 @@ def _chown_for_user(path: Path, run_as_user: str) -> None:
 
 
 def _chown_tree_for_user(path: Path, run_as_user: str) -> None:
+    import pwd
+
+    pw = pwd.getpwnam(run_as_user)
+    _chown_tree(path, pw.pw_uid, pw.pw_gid)
+
+
+def _chown_tree(path: Path, uid: int, gid: int) -> None:
     """Recursively chown a directory tree for benchmark data handoff.
 
     Symlinks are chowned in place and not followed, so ownership changes cannot
     escape the intended tree via symlink indirection.
     """
-
-    import pwd
-
-    pw = pwd.getpwnam(run_as_user)
-    uid, gid = pw.pw_uid, pw.pw_gid
 
     def _apply(target: Path) -> None:
         mode = os.lstat(target).st_mode

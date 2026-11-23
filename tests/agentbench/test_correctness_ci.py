@@ -3,6 +3,7 @@
 """Accuracy CI configuration without Docker, users, model downloads or GPUs."""
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -29,6 +30,83 @@ def test_manual_runs_do_not_prepare_ci(monkeypatch):
     monkeypatch.setattr(accuracy_fixtures.subprocess, "run", unexpected)
     config = SimpleNamespace(getoption=lambda name: False)
     assert accuracy_fixtures._prepare_correctness_ci_environment(config) is None
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_repo_cache_owner_is_restored_between_cases(tmp_path, monkeypatch, fail):
+    from tests.e2e.helpers import benchmark
+
+    cache = tmp_path / "repo-cache"
+    config = tmp_path / "benchmark.yaml"
+    config.write_text(json.dumps({"dataset": {"cache_dir": cache.as_posix()}}), encoding="utf-8")
+    monkeypatch.setattr(benchmark, "os", SimpleNamespace(name="posix", geteuid=lambda: 0, getegid=lambda: 0))
+    owners = {cache: (2002, 2002)}
+    monkeypatch.setattr(benchmark, "_chown_tree", lambda path, uid, gid: owners.update({path: (uid, gid)}))
+    original_git_config = {key: value for key, value in os.environ.items() if key.startswith("GIT_CONFIG_")}
+
+    def run_case():
+        with benchmark._repo_cache_owner(SimpleNamespace(bench_config=config)):
+            assert owners[cache] == (0, 0)
+            owners[cache] = (2002, 2002)
+            if fail:
+                raise RuntimeError("simulated benchmark failure")
+
+    if fail:
+        with pytest.raises(RuntimeError, match="simulated benchmark failure"):
+            run_case()
+    else:
+        run_case()
+    assert owners[cache] == (0, 0)
+    with benchmark._repo_cache_owner(SimpleNamespace(bench_config=config)):
+        assert owners[cache] == (0, 0)
+    assert original_git_config == {key: value for key, value in os.environ.items() if key.startswith("GIT_CONFIG_")}
+
+
+@pytest.mark.parametrize("platform,uid", [("nt", 0), ("posix", 2002)])
+def test_repo_cache_owner_does_not_chown_without_root(monkeypatch, platform, uid):
+    from tests.e2e.helpers import benchmark
+
+    monkeypatch.setattr(benchmark, "os", SimpleNamespace(name=platform, geteuid=lambda: uid))
+
+    def unexpected(*args):
+        pytest.fail("cache ownership must not change without root")
+
+    monkeypatch.setattr(benchmark, "_chown_tree", unexpected)
+    with benchmark._repo_cache_owner(None):
+        pass
+
+
+def test_claude_accuracy_budget_reaches_sudo_command_and_restores_for_other_agents(pytester, monkeypatch):
+    case = next(case for _, case in BENCHMARKS if case.benchmark_params["agent-type"] == "claude")
+    monkeypatch.setenv("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "original")
+    monkeypatch.setenv("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "original")
+    pytester.makepyfile(f"""
+        import os
+        from dataclasses import replace
+        from pathlib import Path
+        import pytest
+        from tests.e2e.acc.conftest import correctness_environment
+        from tests.e2e.helpers.case_loader import load_case_group, wrap_argv_for_user
+
+        @pytest.fixture
+        def correctness_ci_environment():
+            return None
+
+        @pytest.fixture(params=['claude', 'dsh'])
+        def benchmark_case(request):
+            original = load_case_group(Path({str(CASES[0])!r}))[0]
+            return replace(original, benchmark_params={{**original.benchmark_params, 'agent-type': request.param}})
+
+        def test_budget(benchmark_case, correctness_environment):
+            if benchmark_case.benchmark_params['agent-type'] == 'claude':
+                command = wrap_argv_for_user(['vllm'], run_as_user='test-user', cwd=Path('.'), effective_uid=0)
+                assert 'CLAUDE_CODE_MAX_CONTEXT_TOKENS={case.deploy.serve_args["max-model-len"]}' in command
+                assert 'CLAUDE_CODE_MAX_OUTPUT_TOKENS=8192' in command
+            else:
+                assert os.environ['CLAUDE_CODE_MAX_CONTEXT_TOKENS'] == 'original'
+                assert os.environ['CLAUDE_CODE_MAX_OUTPUT_TOKENS'] == 'original'
+    """)
+    pytester.runpytest_inprocess("-q").assert_outcomes(passed=2)
 
 
 @pytest.fixture

@@ -39,6 +39,11 @@ Claude and DSH reuse `swebench_vllm.yaml` and `swebench_vllm_dsh.yaml`, respecti
 ZCode and JiuwenSwarm use `swebench_vllm_zcode.yaml` and `swebench_vllm_jiuwenswarm.yaml`, respectively.
 The cases retain each repository config's agent budgets and enable accuracy scoring with `with-correctness`.
 The serve context remains 65,536 tokens; DSH currently inherits the 262,144-token agent context default.
+For Claude, the accuracy fixture sets `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to the case's serve limit and
+`CLAUDE_CODE_MAX_OUTPUT_TOKENS=8192`, including when bench runs through sudo.
+When pytest runs as root, the shared benchmark helper reclaims the configured repo cache before each case,
+hands it to the requested benchmark user, and returns it to root in `finally`, including when a case fails.
+Ownership changes stay within the cache and do not follow symlinks. Non-root pytest runs keep their ownership.
 Ports are omitted so pytest reserves a free loopback port, then shares it among the agents in that file.
 
 | Agent | Selector | Profile | Executable on PATH |
