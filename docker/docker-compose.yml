@@ -3,6 +3,12 @@
 # itself for pytest, and also onto /app. The image editable-installs
 # agentinfer there, and the vllm console script loads that path rather than
 # the pytest working directory.
+x-agentbench-driver-bind: &agentbench-driver-bind
+  type: bind
+  read_only: true
+  bind:
+    create_host_path: false
+
 services:
   agentinfer-ci:
     build:
@@ -48,3 +54,49 @@ services:
       service: agentinfer-ci
     image: agentinfer-ci:${BUILDKITE_BUILD_ID:-local}-cpu
     deploy: !override {}
+
+  # The two-card AgentBench job runs bubblewrap inside the CI container.
+  # Direct GPU devices and driver libraries keep the NVIDIA runtime from
+  # adding /proc submounts that block a new procfs inside the task sandbox.
+  agentinfer-agentbench:
+    extends:
+      service: agentinfer-ci
+    deploy: !override {}
+    runtime: runc
+    cap_drop: [MKNOD]
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+      - label=disable
+      - systempaths=unconfined
+    devices:
+      - /dev/nvidia0:/dev/nvidia0:rw
+      - /dev/nvidia1:/dev/nvidia1:rw
+      - /dev/nvidiactl:/dev/nvidiactl:rw
+      - /dev/nvidia-uvm:/dev/nvidia-uvm:rw
+      - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools:rw
+    environment:
+      NVIDIA_VISIBLE_DEVICES: void
+      AGENTINFER_CI_NVIDIA_DRIVER_DIR: /opt/agentbench-nvidia-driver
+    volumes:
+      - <<: *agentbench-driver-bind
+        source: ${AGENTINFER_CI_NVIDIA_LIB_DIR:-/usr/lib/x86_64-linux-gnu}/libcuda.so.1
+        target: /opt/agentbench-nvidia-driver/libcuda.so
+      - <<: *agentbench-driver-bind
+        source: ${AGENTINFER_CI_NVIDIA_LIB_DIR:-/usr/lib/x86_64-linux-gnu}/libcuda.so.1
+        target: /opt/agentbench-nvidia-driver/libcuda.so.1
+      - <<: *agentbench-driver-bind
+        source: ${AGENTINFER_CI_NVIDIA_LIB_DIR:-/usr/lib/x86_64-linux-gnu}/libnvidia-ml.so.1
+        target: /opt/agentbench-nvidia-driver/libnvidia-ml.so.1
+      - <<: *agentbench-driver-bind
+        source: ${AGENTINFER_CI_NVIDIA_LIB_DIR:-/usr/lib/x86_64-linux-gnu}/libnvidia-ptxjitcompiler.so.1
+        target: /opt/agentbench-nvidia-driver/libnvidia-ptxjitcompiler.so.1
+      - <<: *agentbench-driver-bind
+        source: ${AGENTINFER_CI_NVIDIA_LIB_DIR:-/usr/lib/x86_64-linux-gnu}/libnvidia-nvvm.so.4
+        target: /opt/agentbench-nvidia-driver/libnvidia-nvvm.so.4
+      - <<: *agentbench-driver-bind
+        source: ${AGENTINFER_CI_NVIDIA_LIB_DIR:-/usr/lib/x86_64-linux-gnu}/libnvidia-nvvm70.so.4
+        target: /opt/agentbench-nvidia-driver/libnvidia-nvvm70.so.4
+      - <<: *agentbench-driver-bind
+        source: /usr/bin/nvidia-smi
+        target: /usr/bin/nvidia-smi

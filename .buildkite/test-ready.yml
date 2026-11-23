@@ -13,6 +13,7 @@ steps:
       - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu" || true
       - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose -f docker/docker-compose.yml build --pull agentinfer-ci
       - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-ci-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu"
+      - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-agentbench-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu"
 
   # GPU smoke for the AgentInfer serve flag. Not the tests/e2e suite.
   - label: "smoke: agentinfer serve"
@@ -55,6 +56,7 @@ steps:
                 usermod -aG "$$extra" test-user
               fi
             done
+          - bwrap --unshare-user --unshare-pid --ro-bind / / --proc /proc -- /bin/true
           - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_smoke.py --benchmark-run-as-user test-user
 
   # cpu_small is another machine, so it builds the same Dockerfile itself.
