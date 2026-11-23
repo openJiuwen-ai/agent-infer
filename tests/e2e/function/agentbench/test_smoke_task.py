@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
-"""Case-driven local smoke task for all supported agents."""
+"""Run a local smoke task across the supported agents and profiles."""
 
 from __future__ import annotations
 

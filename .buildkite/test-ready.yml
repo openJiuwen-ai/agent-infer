@@ -56,7 +56,7 @@ steps:
               fi
             done
           - bwrap --unshare-user --unshare-pid --ro-bind / / --proc /proc -- /bin/true
-          - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_smoke.py --benchmark-run-as-user test-user
+          - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_smoke_task.py --benchmark-run-as-user test-user
 
   # cpu_small is another machine, so it builds the same Dockerfile itself.
   - label: ":docker: Build CI image (cpu)"

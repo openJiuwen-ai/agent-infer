@@ -6,16 +6,16 @@ repositories. Performance benchmarks continue to use their existing datasets.
 
 ## Task and preparation
 
-Each case runs one task with concurrency one. The fixture contains a broken
-add(a, b) function and three unittest checks in check_arithmetic.py. The agent
-must read the files, fix arithmetic.py, run python check_arithmetic.py, and
-finish with a short report. Only the Python standard library is needed.
+Each case runs one task with concurrency one. The `smoke_task/` directory
+contains `addition.py`, with a broken `add(a, b)` function and three assertions.
+The agent fixes the function, runs `python addition.py`, and finishes with a
+short report. Only the Python standard library is needed.
 
-Before each bench run, the suite copies the fixture into a fresh local Git
+Before each bench run, the suite copies the task files into a fresh local Git
 cache and creates a JSONL index, selection file, and generated benchmark YAML.
 These inputs remain under the case result_root/smoke-inputs directory. Normal
 BenchKit workspace preparation uses the preseeded commit without fetching a
-remote repository. Do not edit the intentionally broken source fixture.
+remote repository. Keep the task source intentionally broken.
 
 The generated YAML declares dataset.name=smoke. All benchmark entries use the dedicated
 tests/e2e/function/agentbench/smoke_vllm.yaml template, with runtime and endpoint
@@ -62,14 +62,14 @@ Pytest already running as an ordinary user can run plan-subagent directly.
 Run all seven cases in one pytest process to reuse the model service:
 
 ```bash
-pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_smoke.py \
+pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_smoke_task.py \
   --benchmark-run-as-user test-user
 ```
 
 Run one agent/profile from the shared case file:
 
 ```bash
-pytest -s -v tests/e2e/function/agentbench/test_smoke.py \
+pytest -s -v tests/e2e/function/agentbench/test_smoke_task.py \
   --test-config-file tests/e2e/function/agentbench/cases/qwen3_coder_agents_1x1.json \
   -k "zcode and plan" \
   --benchmark-run-as-user test-user

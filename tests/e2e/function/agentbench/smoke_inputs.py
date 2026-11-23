@@ -25,8 +25,7 @@ def prepare_smoke_case(config: E2EConfig) -> E2EConfig:
     inputs = config.result_root / "smoke-inputs" / config.run_tag
     repository = inputs / "repo-cache" / "agentinfer__smoke"
     repository.mkdir(parents=True, exist_ok=False)
-    for name in ("arithmetic.py", "check_arithmetic.py"):
-        shutil.copyfile(Path(__file__).with_name("fixtures") / name, repository / name)
+    shutil.copyfile(Path(__file__).with_name("smoke_task") / "addition.py", repository / "addition.py")
     git = [
         "git",
         "-c",
@@ -44,10 +43,10 @@ def prepare_smoke_case(config: E2EConfig) -> E2EConfig:
         "repo": "agentinfer/smoke",
         "base_commit": commit,
         "problem_statement": (
-            "The add(a, b) function in arithmetic.py returns the wrong result. "
-            "Read arithmetic.py and check_arithmetic.py, make the smallest fix to arithmetic.py, "
-            "and run python check_arithmetic.py to verify it. "
-            "Do not modify check_arithmetic.py, install dependencies, or use the network. "
+            "The add(a, b) function in addition.py returns the wrong result. "
+            "Read addition.py, make the smallest fix to add(a, b), "
+            "and run python addition.py to verify it. "
+            "Do not modify the assertions, install dependencies, or use the network. "
             "This repository uses only the Python standard library. "
             "After verification, provide a concise final report and stop."
         ),
@@ -56,7 +55,8 @@ def prepare_smoke_case(config: E2EConfig) -> E2EConfig:
     selection = inputs / "task-lists" / "default.txt"
     selection.parent.mkdir()
     selection.write_text(TASK_ID + "\n", encoding="utf-8")
-    bench = load_config(config.bench_config).model_dump(mode="json")
+    # The benchmark command supplies the shared vLLM address after it starts.
+    bench = load_config(config.bench_config).model_dump(mode="json", exclude={"backend": {"base_url"}})
     bench["dataset"] = {
         "name": "smoke",
         "index_path": str(inputs / "instances.jsonl"),

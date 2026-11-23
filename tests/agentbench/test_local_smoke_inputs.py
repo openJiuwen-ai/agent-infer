@@ -8,16 +8,22 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
 
 import pytest
+import yaml
 
 from agentinfer.agentbench.benchkit.config import load_config
 from agentinfer.agentbench.benchkit.dataset import load_tasks
 from agentinfer.agentbench.benchkit.workspace import ensure_repo_cache, prepare_workspace
-from tests.e2e.function.agentbench import test_smoke as smoke_suite
+from tests.e2e.function.agentbench import test_smoke_task as smoke_suite
 from tests.e2e.function.agentbench.smoke_inputs import prepare_smoke_case
-from tests.e2e.helpers.case_loader import E2EConfig, load_case_file, load_pytest_case, validate_benchmark_user
+from tests.e2e.helpers.case_loader import (
+    E2EConfig,
+    build_benchmark_argv,
+    load_case_file,
+    load_pytest_case,
+    validate_benchmark_user,
+)
 from tests.helpers.marks import test_marks
 
 pytestmark = test_marks(hardware="cpu", ci="ready")
@@ -28,6 +34,10 @@ def test_local_task_needs_no_remote_repository_or_dependencies(tmp_path: Path) -
     case = load_case_file(SMOKE_CASE, benchmark_index=0)
     original = replace(E2EConfig.from_case(case), result_root=tmp_path)
     config = prepare_smoke_case(original)
+    assert "base_url" not in yaml.safe_load(config.bench_config.read_text(encoding="utf-8"))["backend"]
+    shared_config = replace(config, port=18080)
+    argv = build_benchmark_argv(shared_config, tmp_path / "run")
+    assert argv[argv.index("--base-url") + 1] == shared_config.base_url
     bench = load_config(config.bench_config)
     assert bench.dataset.name == "smoke"
     tasks = load_tasks(bench.dataset.index_path, bench.dataset.selection_path, 1)
@@ -37,15 +47,14 @@ def test_local_task_needs_no_remote_repository_or_dependencies(tmp_path: Path) -
     remotes = subprocess.check_output(["git", "remote"], cwd=cache, text=True)
     assert remotes.strip() == ""
     workspace = prepare_workspace(tasks[0], bench.dataset.cache_dir, tmp_path / "workspace")
-    check = [sys.executable, "-B", "check_arithmetic.py"]
+    check = [sys.executable, "-B", "addition.py"]
     broken = subprocess.run(check, cwd=workspace, capture_output=True, text=True)
     assert broken.returncode != 0
     assert "AssertionError" in broken.stderr
-    arithmetic = workspace / "arithmetic.py"
-    arithmetic.write_text(arithmetic.read_text().replace("return a - b", "return a + b"))
+    addition = workspace / "addition.py"
+    addition.write_text(addition.read_text().replace("return a - b", "return a + b"))
     fixed = subprocess.run(check, cwd=workspace, capture_output=True, text=True)
     assert fixed.returncode == 0, fixed.stderr
-    assert "Ran 3 tests" in fixed.stderr
 
 
 def test_agent_matrix_shares_deployment_and_preserves_each_benchmark() -> None:
@@ -163,16 +172,19 @@ def test_root_plan_smoke_validates_target_account(monkeypatch, user, expected) -
 
 def test_runtime_preflight_fails_before_fixture_or_model_start(monkeypatch) -> None:
     """Missing runtime dependencies stop the smoke before expensive side effects."""
-    preflight = AsyncMock(side_effect=RuntimeError("socat is unavailable"))
+
+    async def preflight(agent_type: str, executable: Path) -> None:
+        assert agent_type == "claude"
+        assert executable == Path("claude")
+        raise RuntimeError("socat is unavailable")
+
+    def fail_if_started(config) -> None:
+        pytest.fail("fixture preparation or model startup ran before preflight passed")
+
     monkeypatch.setattr(smoke_suite, "check_agent_preflight", preflight)
     monkeypatch.setattr(E2EConfig, "validate_prerequisites", lambda self: [])
     monkeypatch.setattr(smoke_suite.shutil, "which", lambda name: "/usr/bin/git")
-    prepare = Mock()
-    monkeypatch.setattr(smoke_suite, "prepare_smoke_case", prepare)
-    server = Mock()
+    monkeypatch.setattr(smoke_suite, "prepare_smoke_case", fail_if_started)
     options = SimpleNamespace(getoption=lambda name: None)
     with pytest.raises(RuntimeError, match="socat is unavailable"):
-        smoke_suite.test_agent_smoke(options, SMOKE_CASE, 0, server)
-    preflight.assert_awaited_once_with("claude", Path("claude"))
-    prepare.assert_not_called()
-    server.assert_not_called()
+        smoke_suite.test_agent_smoke(options, SMOKE_CASE, 0, fail_if_started)
