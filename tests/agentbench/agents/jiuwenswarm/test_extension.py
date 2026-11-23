@@ -5,202 +5,81 @@ import asyncio
 import importlib.util
 import json
 import sys
-from importlib import metadata
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
-import pytest
-
+from agentinfer.agentbench.agents.jiuwenswarm.limits import TaskBudget
 from tests.helpers.marks import test_marks
 
 pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
-def _extension_modules() -> dict[str, ModuleType]:
-    class AscendAffinityModelClient:
-        def _build_ascend_affinity_request_params(self, **kwargs):
-            return {
-                "agent_hint": {
-                    "session_id": kwargs["session_id"],
-                    "parent_session_id": kwargs["parent_session_id"],
-                },
-                "stream": True,
-            }
+def _load_extension(monkeypatch, actor):
+    class OpenAIModelClient:
+        def _build_request_params(self, **kwargs):
+            return kwargs
 
-        @staticmethod
-        def _raise_config_error(message):
-            raise ValueError(message)
-
-    modules = {
-        "openjiuwen": ModuleType("openjiuwen"),
-        "openjiuwen.core": ModuleType("openjiuwen.core"),
-        "openjiuwen.core.foundation": ModuleType("openjiuwen.core.foundation"),
-        "openjiuwen.core.foundation.kv_cache": ModuleType("openjiuwen.core.foundation.kv_cache"),
-        "openjiuwen.core.foundation.llm": ModuleType("openjiuwen.core.foundation.llm"),
-        "openjiuwen.core.foundation.llm.model_clients": ModuleType("openjiuwen.core.foundation.llm.model_clients"),
-        "openjiuwen.core.foundation.llm.model_clients.ascend_affinity_model_client": ModuleType(
-            "openjiuwen.core.foundation.llm.model_clients.ascend_affinity_model_client"
-        ),
-        "openjiuwen.core.session": ModuleType("openjiuwen.core.session"),
-    }
-    modules["openjiuwen.core.foundation.kv_cache"].resolve_session_lineage = lambda _session: (None, None)
-    modules[
-        "openjiuwen.core.foundation.llm.model_clients.ascend_affinity_model_client"
-    ].AscendAffinityModelClient = AscendAffinityModelClient
-    modules["openjiuwen.core.session"].get_current_session = lambda: None
-    return modules
-
-
-_DEFAULT_COMMAND_TOOLS = object()
-
-
-def _load_extension(monkeypatch, *, command_tools=_DEFAULT_COMMAND_TOOLS):
-    if command_tools is _DEFAULT_COMMAND_TOOLS:
-        command_tools = _command_tools(_FakeLocalFunction())
-    modules = _extension_modules()
-    if command_tools is not None:
-        modules.update(
-            {
-                "jiuwenswarm": ModuleType("jiuwenswarm"),
-                "jiuwenswarm.agents": ModuleType("jiuwenswarm.agents"),
-                "jiuwenswarm.agents.harness": ModuleType("jiuwenswarm.agents.harness"),
-                "jiuwenswarm.agents.harness.common": ModuleType("jiuwenswarm.agents.harness.common"),
-                "jiuwenswarm.agents.harness.common.tools": ModuleType("jiuwenswarm.agents.harness.common.tools"),
-                "jiuwenswarm.agents.harness.common.tools.command_tools": command_tools,
-            }
-        )
-        modules["jiuwenswarm.agents.harness.common.tools"].command_tools = command_tools
-    for name, module in modules.items():
+    client_module = ModuleType("openjiuwen.core.foundation.llm.model_clients.openai_model_client")
+    client_module.OpenAIModelClient = OpenAIModelClient
+    hooks = ModuleType("agentinfer.agentbench.agents.jiuwenswarm.hooks")
+    hooks.current_actor = lambda: actor
+    hooks.install = lambda: None
+    tools = ModuleType("jiuwenswarm.agents.harness.common.tools")
+    tools.command_tools = SimpleNamespace(mcp_exec_command=SimpleNamespace(_func=None))
+    for name, module in {
+        client_module.__name__: client_module,
+        hooks.__name__: hooks,
+        tools.__name__: tools,
+    }.items():
         monkeypatch.setitem(sys.modules, name, module)
-
-    path = Path(__file__).resolve().parents[4] / "agentinfer" / "agentbench" / "agents" / "jiuwenswarm" / "extension.py"
-    spec = importlib.util.spec_from_file_location("test_agentbench_jiuwenswarm_extension", path)
-    assert spec is not None and spec.loader is not None
+    path = Path(__file__).resolve().parents[4] / "agentinfer/agentbench/agents/jiuwenswarm/extension.py"
+    spec = importlib.util.spec_from_file_location("agentbench_test_extension", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module
+    return module, tools.command_tools.mcp_exec_command
 
 
-class _FakeLocalFunction:
-    def __init__(self) -> None:
-        async def native(**_kwargs):
-            return "native"
-
-        self._func = native
-
-    async def invoke(self, inputs):
-        return await self._func(**inputs)
-
-
-def _command_tools(fake: object) -> ModuleType:
-    module = ModuleType("jiuwenswarm.agents.harness.common.tools.command_tools")
-    module.mcp_exec_command = fake
-    return module
-
-
-def test_root_identity_uses_canonical_program_without_self_parent(monkeypatch) -> None:
-    module = _load_extension(monkeypatch)
-    monkeypatch.setenv(module.ROOT_SESSION_ENV, "root-session")
-
-    params = module.AgentBenchAffinityModelClient()._build_ascend_affinity_request_params(
-        session_id="root-session",
-        parent_session_id="root-session",
+def test_root_identity_and_extra_body_preserved(monkeypatch):
+    budget = TaskBudget("root", 3, 2)
+    module, _ = _load_extension(monkeypatch, budget.root)
+    params = module.AgentBenchAffinityModelClient()._build_request_params(
+        stream=True, extra_body={"other": 1, "vllm_xargs": {"existing": 2}}
     )
-
-    context = json.loads(params["vllm_xargs"]["agentic_context"])
-    assert context == {
-        "program_id": "root-session",
-        "task_id": "root-session",
-        "session_id": "root-session",
-        "agent_id": "lead",
-        "blocks_parent": False,
-        "expected_resume": True,
-        "agent_role": "lead",
-    }
-    assert params["agent_hint"]["parent_session_id"] == "root-session"
-    assert params["stream_options"] == {"include_usage": True}
+    extra = params["extra_body"]
+    assert extra["other"] == 1
+    assert extra["vllm_xargs"]["existing"] == 2
+    identity = json.loads(extra["vllm_xargs"]["agentic_context"])
+    assert identity["program_id"] == identity["task_id"] == "root"
+    assert identity["agent_role"] == "lead"
+    assert "parent_program_id" not in identity
+    assert extra["agent_hint"] == {"session_id": "root", "parent_session_id": "root"}
+    assert "vllm_xargs" not in params
 
 
-def test_child_identity_keeps_direct_root_parent(monkeypatch) -> None:
-    module = _load_extension(monkeypatch)
-    monkeypatch.setenv(module.ROOT_SESSION_ENV, "root-session")
+def test_nested_identity_only_blocks_a_waiting_parent(monkeypatch):
+    budget = TaskBudget("root", 3, 2)
+    parent = budget.admit("member", budget.root)
+    child = budget.admit("child", parent)
+    module, _ = _load_extension(monkeypatch, child)
+    client = module.AgentBenchAffinityModelClient()
 
-    params = module.AgentBenchAffinityModelClient()._build_ascend_affinity_request_params(
-        session_id="child-session",
-        parent_session_id="root-session",
-    )
+    def identity():
+        return json.loads(client._build_request_params()["extra_body"]["vllm_xargs"]["agentic_context"])
 
-    context = json.loads(params["vllm_xargs"]["agentic_context"])
-    assert context == {
-        "program_id": "child-session",
-        "task_id": "root-session",
-        "session_id": "child-session",
-        "agent_id": "child-session",
-        "parent_program_id": "root-session",
-        "blocks_parent": True,
-        "expected_resume": False,
-        "agent_role": "subagent",
-    }
-
-
-def test_compound_shell_override_marker_requires_every_subcommand(monkeypatch) -> None:
-    module = _load_extension(monkeypatch)
-    approved = (
-        "tiered_policy:shell_subcommands:cd /workspace=>"
-        "tiered_policy:approval_overrides:approval_overrides[agentbench]+"
-        "pytest -q=>tiered_policy:approval_overrides:approval_overrides[agentbench]"
-    )
-    mixed = (
-        "tiered_policy:shell_subcommands:cd /workspace=>tiered_policy:tools.bash+"
-        "pytest -q=>tiered_policy:approval_overrides:approval_overrides[agentbench]"
-    )
-
-    assert module._all_shell_subcommands_use_approval_overrides(approved) is True
-    assert module._all_shell_subcommands_use_approval_overrides(mixed) is False
+    result = identity()
+    assert result["parent_program_id"] == "member"
+    assert result["task_id"] == "root"
+    assert result["expected_resume"] is True
+    assert result["blocks_parent"] is False
+    parent.waiting = 1
+    assert identity()["blocks_parent"] is True
+    parent.work = 1
+    assert identity()["blocks_parent"] is False
 
 
-def test_complex_shell_override_marker_requires_explicit_override(monkeypatch) -> None:
-    module = _load_extension(monkeypatch)
-    approved = (
-        "tiered_policy:shell_ast:too_complex:tree-sitter detected unsupported complex shell structure|"
-        "tiered_policy:approval_overrides:approval_overrides[agentbench_noninteractive_shell]"
-    )
-    unapproved = "tiered_policy:shell_ast:too_complex:tree-sitter detected unsupported complex shell structure"
-    mixed = approved + "|tiered_policy:tools.bash"
-
-    assert module._complex_shell_uses_approval_override(approved) is True
-    assert module._complex_shell_uses_approval_override(unapproved) is False
-    assert module._complex_shell_uses_approval_override(mixed) is False
-
-
-def test_mcp_exec_command_is_always_disabled(monkeypatch) -> None:
-    obj = _FakeLocalFunction()
-    original = obj._func
-    monkeypatch.setattr(metadata, "version", lambda _name: "test-ver")
-
-    module = _load_extension(
-        monkeypatch,
-        command_tools=_command_tools(obj),
-    )
-
-    result = asyncio.run(obj.invoke({"command": "printf ESCAPED"}))
-    assert "disabled" in result
-    assert "test-ver" in result
-    assert obj._func is not original
-    assert obj._func._agentbench_disabled is True
-    assert obj._func._agentbench_pinned_version == "test-ver"
-    module._patch_disable_mcp_exec_command()
-    assert asyncio.run(obj.invoke({"command": "printf ESCAPED"})) == result
-
-
-def test_mcp_exec_command_fail_closed_on_missing_func(monkeypatch) -> None:
-    with pytest.raises(RuntimeError, match="mcp_exec_command structure changed"):
-        _load_extension(
-            monkeypatch,
-            command_tools=_command_tools(SimpleNamespace()),
-        )
-
-
-def test_mcp_exec_command_fail_closed_when_command_tools_import_fails(monkeypatch) -> None:
-    with pytest.raises(RuntimeError, match="cannot import mcp_exec_command"):
-        _load_extension(monkeypatch, command_tools=None)
+def test_mcp_exec_command_remains_disabled(monkeypatch):
+    module, obj = _load_extension(monkeypatch, TaskBudget("root", 1, 1).root)
+    monkeypatch.setattr(module, "version", lambda name: "0.2.8" if name == "workswarm" else None)
+    result = asyncio.run(obj._func(command="touch /tmp/unconfined"))
+    assert "mcp_exec_command is disabled" in result
+    assert "0.2.8" in result

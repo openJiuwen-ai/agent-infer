@@ -72,7 +72,7 @@ DSH 将清理预算耗尽记录为 `cleanup_timeout`，保留已有的任务超�
 | 字段 | 默认值 | 约束和含义 |
 | --- | --- | --- |
 | `type` | `claude` | `claude`、`jiuwenswarm`、`dsh` 或 `zcode`。 |
-| `profile` | `single` | Claude/DSH/ZCode：`single` 或 `plan-subagent`；JiuwenSwarm：`code.normal`。 |
+| `profile` | `single` | Claude/DSH/ZCode：`single` 或 `plan-subagent`；JiuwenSwarm：`agent.code.normal` 或 `team.code.normal`（兼容 `code.normal`、`code.team`）。 |
 | `executable` | `claude` | Agent CLI 命令名或路径。 |
 | `tmux_startup_seconds` | `2.0` | tmux 会话启动等待时间，必须 `>= 0`。 |
 | `terminal_capture_interval_seconds` | `30` | 终端证据采集间隔，必须 `>= 1`。 |
