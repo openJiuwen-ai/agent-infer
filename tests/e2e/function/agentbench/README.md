@@ -43,8 +43,8 @@ vLLM. Git is checked separately because the local fixture creates a repository.
 ZCode must be CLI 0.17.1 with the pinned build documented in the
 [benchmark guide](../../../../docs/en/how-to/run-benchmark.md).
 
-Cases use Qwen/Qwen3-Coder-30B-A3B-Instruct in BF16 on two L20s. Adjust model
-paths, executables, serving options, and hardware marks for your machine.
+The default case uses Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8 on two L20s.
+Adjust model paths, executables, serving options, and hardware marks for your machine.
 The 1x1 in a case name means one task and one concurrent task, not GPU count.
 The local suite requires task-num=1 and max-concurrency=1.
 
