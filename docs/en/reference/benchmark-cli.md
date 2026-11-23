@@ -52,6 +52,8 @@ vllm bench serve --agentinfer run --config PATH [OVERRIDES]
 | `--agent-type {claude,jiuwenswarm,dsh}` | Enum | `agent.type` |
 | `--agent-profile PROFILE` | Enum | `agent.profile` |
 | `--agent-executable PATH` | Path or command name | `agent.executable` |
+| `--context-window INT` | `>= 1` | `agent.context_window` |
+| `--max-tokens INT` | `>= 1` | `agent.max_tokens` |
 | `--base-url URL` | HTTP URL | `backend.base_url` |
 | `--model NAME` | String | `backend.model` |
 | `--endpoint PATH` | API path | `backend.endpoint` |
@@ -59,6 +61,10 @@ vllm bench serve --agentinfer run --config PATH [OVERRIDES]
 Precedence is built-in defaults, YAML, then explicit CLI overrides. Relative YAML paths resolve from the YAML file;
 CLI paths resolve from the current directory. Unknown YAML fields are rejected. For Router runs, use `--base-url`
 for the transparent upstream and `--metrics-url` for vLLM metrics.
+
+DSH and ZCode use these agent token budgets. Set `--context-window` to the served model's context limit;
+omitting these flags preserves the YAML values or built-in defaults. Claude Code uses its own environment
+variables for token budgets; these flags do not change its adapter's behavior.
 
 With `--with-correctness`, evaluation configuration is validated before the run, defaulting to the current Python
 environment and standard evaluation settings. Run and evaluation configurations are separate. After successful

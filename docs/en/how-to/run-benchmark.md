@@ -452,7 +452,8 @@ parsing warnings does not establish that no model error occurred.
 ## Accuracy CI configuration
 
 The accuracy E2E cases reuse `swebench_vllm.yaml` for Claude and `swebench_vllm_dsh.yaml` for DSH,
-retaining their existing agent budget defaults.
+preserving those shared YAMLs. DSH cases pass `--context-window` to match their serve limit;
+other callers keep the original defaults when they omit the override.
 Claude accuracy cases pass the serve context limit and an 8,192-token output budget through the Claude
 environment variables. When pytest runs as root, the E2E helper reclaims the repo cache before each case,
 hands it to the requested regular user, and returns it to root after the case, including on failure.

@@ -37,8 +37,9 @@ pytest process starts serve twice. A failed agent test does not prevent later te
 
 Claude and DSH reuse `swebench_vllm.yaml` and `swebench_vllm_dsh.yaml`, respectively.
 ZCode and JiuwenSwarm use `swebench_vllm_zcode.yaml` and `swebench_vllm_jiuwenswarm.yaml`, respectively.
-The cases retain each repository config's agent budgets and enable accuracy scoring with `with-correctness`.
-The serve context remains 65,536 tokens; DSH currently inherits the 262,144-token agent context default.
+The cases enable accuracy scoring with `with-correctness` and reuse the repository YAMLs.
+DSH entries override `context-window` to match the serve limit through the CLI; the shared DSH YAML is preserved.
+`context-window` and `max-tokens` in `benchmark_params` map to the corresponding CLI budget overrides.
 For Claude, the accuracy fixture sets `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to the case's serve limit and
 `CLAUDE_CODE_MAX_OUTPUT_TOKENS=8192`, including when bench runs through sudo.
 When pytest runs as root, the shared benchmark helper reclaims the configured repo cache before each case,

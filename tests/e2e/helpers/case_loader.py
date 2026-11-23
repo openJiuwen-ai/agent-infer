@@ -502,6 +502,8 @@ def benchmark_params_to_run_args(params: dict[str, Any], result_dir: Path, repo:
         "agent-type": "--agent-type",
         "agent-executable": "--agent-executable",
         "agent-profile": "--agent-profile",
+        "context-window": "--context-window",
+        "max-tokens": "--max-tokens",
         "endpoint": "--endpoint",
         "metrics-url": "--metrics-url",
         "task-num": "--task-num",

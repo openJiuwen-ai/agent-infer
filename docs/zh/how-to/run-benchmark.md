@@ -450,7 +450,8 @@ ZCode 的原生 `turn.failed` 错误保存在 `zcode-run-status.json` 的 `nativ
 ## 精度 CI 配置
 
 精度 E2E 的 Claude、DSH 分别复用 `swebench_vllm.yaml` 和 `swebench_vllm_dsh.yaml`，
-沿用仓里配置的 agent 预算默认值。
+保留共享 YAML 的原值。DSH 精度 case 通过 `--context-window` 与 serve 上限对齐，
+其他入口未传覆盖参数时继续沿用原有默认值。
 Claude 精度用例通过环境变量传入 serve 上下文上限及 `8192` 的输出预算。
 pytest 按 root 运行时，E2E 公共 helper 在每个 case 开始前收回缓存所有权，运行时交给指定普通用户，
 并在 case 结束的 `finally` 中交回 root；case 失败时同样恢复。

@@ -14,7 +14,7 @@ import pytest
 
 from tests.agentbench.test_compare import write_run
 from tests.e2e.acc import conftest as accuracy_fixtures, test_correctness as accuracy
-from tests.e2e.helpers.case_loader import E2EConfig, load_case_file, load_case_group
+from tests.e2e.helpers.case_loader import E2EConfig, benchmark_params_to_run_args, load_case_file, load_case_group
 from tests.helpers.marks import test_marks
 
 pytestmark = test_marks(hardware="cpu", ci="ready")
@@ -207,27 +207,30 @@ def test_jiuwen_ci_stops_before_download_if_sandbox_probe_fails(ci_environment, 
 
 
 @pytest.mark.parametrize("agent,stem", [("claude", "swebench_vllm"), ("dsh", "swebench_vllm_dsh")])
-def test_accuracy_reuses_shared_config_defaults(agent, stem):
+def test_accuracy_reuses_shared_agent_config(agent, stem):
+    for _, case in BENCHMARKS:
+        if case.benchmark_params["agent-type"] == agent:
+            assert Path(case.benchmark_params["config"]) == Path("agentinfer/agentbench/configs") / f"{stem}.yaml"
+
+
+@pytest.mark.parametrize("case_path,case", BENCHMARKS, ids=[case.test_name for _, case in BENCHMARKS])
+def test_accuracy_effective_config_matches_served_model_and_context(tmp_path, case_path, case):
+    from agentinfer.agentbench.benchkit.cli import _apply_cli_overrides, _parser
     from agentinfer.agentbench.benchkit.config import load_config
 
     repo = Path(__file__).resolve().parents[2]
-    shared = load_config(repo / "agentinfer/agentbench/configs" / f"{stem}.yaml")
-    assert shared.agent.context_window == 262144
-    assert shared.backend.model.endswith("-FP8")
-    for _, case in BENCHMARKS:
-        if case.benchmark_params["agent-type"] == agent:
-            config = load_config(repo / case.benchmark_params["config"])
-            assert Path(case.benchmark_params["config"]).stem == stem
-            assert config.agent == shared.agent
-            assert config.backend.model == case.deploy.model.as_posix()
-
-
-def test_accuracy_cases_use_fp8_with_65536_server_context():
-    for _, case in BENCHMARKS:
-        model = "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
-        assert case.deploy.model.as_posix() == case.benchmark_params["model"] == model
-        assert case.deploy.serve_args["served-model-name"] == model
-        assert case.deploy.serve_args["max-model-len"] == 65536
+    config_path = repo / case.benchmark_params["config"]
+    original = config_path.read_bytes()
+    argv = benchmark_params_to_run_args(case.benchmark_params, tmp_path / "run", repo)
+    args = _parser().parse_args(argv[4:])
+    effective = _apply_cli_overrides(args, load_config(config_path))
+    served_model = case.deploy.serve_args.get("served-model-name", case.deploy.model.as_posix())
+    assert effective.backend.model == served_model
+    # Claude's effective budget is checked through its actual accuracy fixture.
+    if effective.agent.type != "claude":
+        assert effective.agent.context_window == case.deploy.serve_args["max-model-len"]
+        assert effective.agent.max_tokens <= effective.agent.context_window
+    assert config_path.read_bytes() == original
 
 
 def test_jiuwen_probe_uses_selected_cli_environment(tmp_path, monkeypatch):
