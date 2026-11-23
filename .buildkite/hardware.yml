@@ -36,7 +36,7 @@ mirror_hardwares:
       - docker-compose#v4.9.0:
           config: docker/docker-compose.yml
           cli-version: 2
-          run: agentinfer-agentbench
+          run: agentinfer-ci
           skip-pull: true
           require-prebuild: true
           environment:
