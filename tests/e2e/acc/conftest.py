@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.e2e.helpers.case_loader import BenchmarkCase, E2EConfig, load_case_group
+from tests.e2e.helpers.case_loader import BenchmarkCase, E2EConfig, load_case_group, resolve_benchmark_run_as_user
 from tests.e2e.helpers.server import managed_vllm
 
 _CHECKOUT_OWNER = pytest.StashKey[tuple[Path, int, int]]()
@@ -33,7 +33,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
-    """Choose CI report paths before pytest initializes JUnit and logging."""
+    """Choose the CI log path; JUnit is opt-in through pytest's own option."""
     if not config.getoption("--correctness-ci"):
         return
     agents = {
@@ -43,8 +43,6 @@ def pytest_configure(config: pytest.Config) -> None:
     }
     selected = config.getoption("keyword")
     logs = Path("nightly-logs") / (selected if selected in agents | {"baseline", "agentinfer"} else "all")
-    if not config.option.xmlpath:
-        config.option.xmlpath = str(logs / "results.xml")
     if not config.option.log_file:
         config.option.log_file = str(logs / "pytest.log")
 
@@ -64,14 +62,19 @@ def _jiuwen_python(executable: str) -> Path:
 @pytest.fixture(scope="session")
 def correctness_ci_environment(pytestconfig: pytest.Config):
     """Prepare CI once; regular/manual pytest runs do not change the host."""
+    return _prepare_correctness_ci_environment(pytestconfig)
+
+
+def _prepare_correctness_ci_environment(pytestconfig: pytest.Config):
+    """Return a per-agent preparation callback only when CI setup is requested."""
     if not pytestconfig.getoption("--correctness-ci"):
         return None
     if os.name != "posix" or os.geteuid() != 0:
         raise pytest.UsageError("--correctness-ci requires root inside the accuracy container")
     user = pytestconfig.getoption("--benchmark-run-as-user")
     evaluation = pytestconfig.getoption("--correctness-evaluation-config")
-    if not user or not evaluation:
-        raise pytest.UsageError("--correctness-ci requires --benchmark-run-as-user and --correctness-evaluation-config")
+    if not evaluation:
+        raise pytest.UsageError("--correctness-ci requires --correctness-evaluation-config")
 
     import grp
 
@@ -83,15 +86,17 @@ def correctness_ci_environment(pytestconfig: pytest.Config):
     checkout = Path(__file__).resolve().parents[3]
     owner = checkout.stat()
     pytestconfig.stash[_CHECKOUT_OWNER] = (checkout, owner.st_uid, owner.st_gid)
-    if subprocess.run(["id", "-u", user], capture_output=True).returncode:
-        subprocess.run(["useradd", "-m", "-s", "/bin/bash", user], check=True)
-    docker_gid = Path("/var/run/docker.sock").stat().st_gid
-    try:
-        grp.getgrgid(docker_gid)
-    except KeyError:
-        subprocess.run(["groupadd", "-g", str(docker_gid), "accuracy-docker"], check=True)
-    subprocess.run(["usermod", "-aG", str(docker_gid), user], check=True)
-    sudo = ["sudo", "-u", user, "-E", "env", f"PATH={os.environ['PATH']}"]
+    sudo = []
+    if user:
+        if subprocess.run(["id", "-u", user], capture_output=True).returncode:
+            subprocess.run(["useradd", "-m", "-s", "/bin/bash", user], check=True)
+        docker_gid = Path("/var/run/docker.sock").stat().st_gid
+        try:
+            grp.getgrgid(docker_gid)
+        except KeyError:
+            subprocess.run(["groupadd", "-g", str(docker_gid), "accuracy-docker"], check=True)
+        subprocess.run(["usermod", "-aG", str(docker_gid), user], check=True)
+        sudo = ["sudo", "-u", user, "-E", "env", f"PATH={os.environ['PATH']}"]
     harness = load_evaluation_config(Path(evaluation)).harness_python
     subprocess.run(
         sudo
@@ -109,6 +114,10 @@ def correctness_ci_environment(pytestconfig: pytest.Config):
 
     def prepare(case: BenchmarkCase) -> None:
         agent = case.benchmark_params.get("agent-type", "claude")
+        profile = case.benchmark_params.get("agent-profile", "plan-subagent")
+        if profile == "plan-subagent" and not user:
+            raise pytest.UsageError("--correctness-ci requires --benchmark-run-as-user for plan-subagent")
+        probe_prefix = sudo if resolve_benchmark_run_as_user(agent_profile=profile, benchmark_run_as_user=user) else []
         logs = checkout / "nightly-logs" / agent
         logs.mkdir(parents=True, exist_ok=True)
         if agent not in agents:
@@ -125,7 +134,7 @@ def correctness_ci_environment(pytestconfig: pytest.Config):
                     "/dev",
                     "/bin/true",
                 ]
-                subprocess.run(sudo + ["bwrap", *namespace_probe], check=True)
+                subprocess.run(probe_prefix + ["bwrap", *namespace_probe], check=True)
             asyncio.run(get_runtime(agent).preflight(Path(case.benchmark_params["agent-executable"])))
             if agent == "jiuwenswarm":
                 python = _jiuwen_python(case.benchmark_params["agent-executable"])
@@ -140,7 +149,9 @@ def correctness_ci_environment(pytestconfig: pytest.Config):
                         assert version("jiuwenswarm") == "0.2.4b3"
                         print(AgentBenchAffinityModelClient.__client_name__)
                     """)
-                subprocess.run(sudo + ["env", "-u", "PYTHONPATH", str(python), "-c", client_probe_script], check=True)
+                subprocess.run(
+                    probe_prefix + ["env", "-u", "PYTHONPATH", str(python), "-c", client_probe_script], check=True
+                )
                 _freeze(python, logs / "agent-requirements.txt")
             _freeze(sys.executable, logs / "bench-requirements.txt")
             _freeze(harness, logs / "evaluation-requirements.txt")
@@ -148,7 +159,7 @@ def correctness_ci_environment(pytestconfig: pytest.Config):
         model = case.deploy.model.as_posix()
         if model not in models:
             if not case.deploy.model.is_dir():
-                snapshot_download(model, cache_dir=os.environ["HF_HUB_CACHE"], max_workers=4)
+                snapshot_download(model, cache_dir=os.environ.get("HF_HUB_CACHE"), max_workers=4)
             models.add(model)
 
     return prepare

@@ -8,6 +8,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      target: ci
     image: agentinfer-ci:${BUILDKITE_BUILD_ID:-local}-gpu
     # Runs as root, then ci-entrypoint.sh switches to the UID that owns the
     # checkout (the working directory). Do not set `user:` here.
@@ -49,11 +50,14 @@ services:
     image: agentinfer-ci:${BUILDKITE_BUILD_ID:-local}-cpu
     deploy: !override {}
 
-  # Accuracy runs pytest as root, and bench/scoring as the requested regular user.
-  # Only this service exposes Docker and permits the agent bubblewrap sandboxes.
+  # Accuracy runs pytest as root; plan-subagent benchmarks use the requested user.
+  # Accuracy services expose Docker and permit the agent bubblewrap sandboxes.
   agentinfer-accuracy:
     extends:
       service: agentinfer-ci
+    build:
+      target: accuracy
+    image: agentinfer-ci:${BUILDKITE_BUILD_ID:-local}-nightly-gpu
     profiles: [accuracy]
     environment:
       AGENTINFER_CI_AS_ROOT: "1"
@@ -62,3 +66,11 @@ services:
       - apparmor=unconfined
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+
+  # Ready exercises only Jiuwen; reuse its scoring/SDK layers in nightly.
+  agentinfer-accuracy-jiuwen:
+    extends:
+      service: agentinfer-accuracy
+    build:
+      target: accuracy-jiuwen
+    image: agentinfer-ci:${BUILDKITE_BUILD_ID:-local}-ready-accuracy-gpu

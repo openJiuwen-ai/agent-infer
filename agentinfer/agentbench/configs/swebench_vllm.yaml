@@ -26,8 +26,6 @@ agent:
   type: claude                         # agent runtime implementation
   profile: plan-subagent               # single | plan-subagent
   executable: claude                   # PATH lookup when bare; relative paths resolve from this YAML
-  context_window: 65536                # keep within the served model's context limit
-  max_tokens: 8192
 
   # For JiuwenSwarm (uncomment, comment out the Claude lines above,
   # and set backend.endpoint to /v1/chat/completions):

@@ -7,8 +7,8 @@ Run on Linux with AgentInfer, vLLM, the selected agent CLI, Verified/test data, 
 and `swebench==4.1.0` in the evaluation Python environment. Use a non-root benchmark account for `plan-subagent`.
 See the [benchmark guide](../../../docs/en/how-to/run-benchmark.md).
 
-The Qwen3-Coder-30B-A3B-Instruct baseline and AgentInfer JSON examples use BF16 on two L20 GPUs (TP=2),
-a 125,536-token server context, and two tasks per agent with one concurrent agent. Agent executables are
+The baseline and AgentInfer JSON examples use `Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8` on two L20 GPUs (TP=2),
+a 65,536-token server context, and two tasks per agent with one concurrent agent. Agent executables are
 resolved from `PATH`; CI must install each selected CLI and expose it on the benchmark user's `PATH`.
 Adjust model paths, benchmark user, and hardware parameters for your host. Add `"evaluation-config":
 "/absolute/path/evaluation.yaml"` to each selected `benchmark_params` entry for a separate evaluation environment.
@@ -35,12 +35,11 @@ reuses the same server across them. The server stops before switching files; run
 pytest process starts serve twice. A failed agent test does not prevent later tests from running, unless pytest's
 `-x` or `--maxfail` option stops the session. Agent selection with `-k` is preserved.
 
-The server context uses Claude's existing 125,536-token setting for both groups. The other agents previously
-used a 65,536-token server context; their benchmark configurations and generation budgets are unchanged.
-Configuration names follow PR #92: Claude uses `swebench_vllm.yaml`; DSH, ZCode, and JiuwenSwarm use
-`swebench_vllm_dsh.yaml`, `swebench_vllm_zcode.yaml`, and `swebench_vllm_jiuwenswarm.yaml`, respectively.
-The latter three configs set a 65,536-token agent context and an 8,192-token output budget.
-Accuracy scoring is enabled by `with-correctness` in each case, sharing the agent configs with functional tests.
+Claude and DSH reuse `swebench_vllm.yaml` and `swebench_vllm_dsh.yaml`, respectively.
+ZCode and JiuwenSwarm use `swebench_vllm_zcode.yaml` and `swebench_vllm_jiuwenswarm.yaml`, respectively.
+The cases retain each repository config's agent budgets and enable accuracy scoring with `with-correctness`.
+The serve context remains 65,536 tokens; DSH currently inherits the 262,144-token agent context default.
+Ports are omitted so pytest reserves a free loopback port, then shares it among the agents in that file.
 
 | Agent | Selector | Profile | Executable on PATH |
 | ----- | ------------- | ------- | ------------------ |
@@ -66,6 +65,24 @@ python -m pytest -s -v tests/e2e/acc/test_correctness.py::test_run_with_correctn
 
 Compare baseline and AgentInfer results from the same agent and profile.
 
+## Ready CI
+
+The `ready` pipeline runs only JiuwenSwarm accuracy, covering baseline and AgentInfer with two tasks each.
+Its `agentinfer-accuracy-jiuwen` Compose service builds the `accuracy-jiuwen` target, which adds the scorer
+and Jiuwen SDK to the common CI dependencies. Claude and ZCode CLIs are installed only in the full nightly image.
+Pytest and Jiuwen run as root; the `code.normal` profile does not require `--benchmark-run-as-user`.
+Inside that container, the job runs:
+
+```bash
+pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k jiuwenswarm \
+  --correctness-ci --correctness-evaluation-config /opt/agentbench/evaluation.yaml
+```
+
+The pipeline records pytest output in `ready-logs/jiuwenswarm/pytest.log`, dependency records in
+`nightly-logs/jiuwenswarm/`, and all benchmark/scoring artifacts in `test-results/acc/jiuwenswarm/`.
+Server logs are also uploaded. Known sandbox failures fail the job; this configuration does not fix the
+tracked Jiuwen sandbox issue.
+
 ## Nightly CI
 
 ### Nightly triggers
@@ -82,8 +99,12 @@ The bootstrap in `.buildkite/pipeline.yml` follows vLLM-Omni's
 Ordinary PR builds and main-branch pushes do not run nightly without these conditions.
 The `ready` and `nightly-test` labels select their pipelines independently. When both labels are present,
 both pipelines run in the same build; execution order follows their dependencies and agent availability.
-Their GPU image tags are separate: ready uses `agentinfer-ci:<build-id>-gpu`, while nightly uses
-`agentinfer-ci:<build-id>-nightly-gpu`. Both use the same Dockerfile and can reuse cached layers.
+Their GPU image tags are separate: ordinary ready jobs use `agentinfer-ci:<build-id>-gpu`, Jiuwen accuracy uses
+`agentinfer-ci:<build-id>-ready-accuracy-gpu`, and nightly uses `agentinfer-ci:<build-id>-nightly-gpu`.
+All use the same Dockerfile: ordinary ready/CPU jobs build `ci`, ready accuracy builds `accuracy-jiuwen`,
+and nightly builds `accuracy`. The targets share `ci-deps`, preserving the existing dependency installs
+and package mirror. Both accuracy targets also share the scoring and Jiuwen dependency layers.
+Accuracy builds reuse those cached layers without forcing another base-image pull with `--pull`.
 The nightly file also applies the bootstrap's trigger condition to its outer group, covering image build,
 both accuracy jobs, and cleanup. Uploading that file directly still requires the nightly label or `NIGHTLY=1`.
 
@@ -112,7 +133,9 @@ Use the schedule's **Run now** action to check the trigger before its next sched
 ### Accuracy jobs
 
 The nightly pipeline uses the `agentinfer-accuracy` Compose service and invokes pytest directly.
-Its two jobs run all agents for baseline and AgentInfer respectively, each with one serve startup.
+Its two jobs run Claude, DSH, ZCode, and JiuwenSwarm for baseline and AgentInfer respectively,
+each with one serve startup. Full agent coverage means eight cases, with two tasks in each case;
+it does not select the entire SWE-bench Verified dataset.
 Inside that container, run one group with:
 
 ```bash
@@ -122,17 +145,21 @@ pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k baseli
 ```
 
 Replace `baseline` with `agentinfer` for the other group. Use `-k dsh` to run just DSH in both groups.
-`--correctness-ci` requires root in the accuracy container. Its fixtures prepare the benchmark user,
-Docker access, runtime checks, shared model cache, and dependency records. Manual runs omit this flag.
+`--correctness-ci` requires root in the accuracy container. Its fixtures prepare Docker access, runtime checks,
+the shared model cache, and dependency records. The requested benchmark user is prepared for `plan-subagent`;
+Jiuwen's `code.normal` profile continues to run as root. Manual runs omit this flag.
 The evaluation config overrides the loaded case in memory; the JSON files are preserved.
-The pipeline uploads pytest logs and JUnit reports per serve group, dependency records per agent,
+The pipeline uploads pytest logs per serve group, dependency records per agent,
 and benchmark/scoring artifacts per agent and scenario.
-Shared pytest arguments come from the accuracy hardware preset's `PYTEST_ADDOPTS`; each job only names its
-test target and group selector. CI reports default to `nightly-logs/<scenario>/`; selecting just one agent
-uses `nightly-logs/<agent>/`. Explicit report paths take precedence when supplied.
+Both jobs use the `l20_2` hardware preset. Each job declares its accuracy `PYTEST_ADDOPTS` and Compose plugin
+configuration in `test-nightly.yml`; job-level plugins override the hardware preset's defaults.
+The pytest command names its test target and group selector. The jobs set their log files to
+`nightly-logs/<scenario>/pytest.log`. Selecting just one agent defaults to `nightly-logs/<agent>/pytest.log`.
+Explicit log paths take precedence. JUnit output is generated only when requested with `--junitxml`.
 
 Jiuwen runs `jiuwenbox-server` as a local process in the benchmark environment. The CI preflight checks
-that the benchmark user can create the required bubblewrap PID/user namespaces before its benchmark starts.
+that its execution account can create the required bubblewrap PID/user namespaces before its benchmark starts.
+It also rejects completed runs whose `jiuwenbox-server.stderr.log` contains `bwrap: Can't mount proc`.
 The accuracy suite uses the existing agent adapters without extra tool filtering or sandbox path mappings.
 Unexpected confirmation events still fail the task.
 

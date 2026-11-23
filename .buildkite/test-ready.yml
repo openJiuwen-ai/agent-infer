@@ -24,7 +24,6 @@ steps:
 
   # Functional E2E. l20_1 and l20_2 share one Docker daemon, so reuse ci-image.
   # DSH still runs on the l20_2 queue to reserve both GPUs.
-  # e2e accuracy has no ready step yet, so that group is omitted.
   - group: ":card_index_dividers: e2e function"
     depends_on: ci-image
     steps:
@@ -68,6 +67,49 @@ steps:
             pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/dsh --test-config-file tests/e2e/function/agentbench/dsh/cases/qwen3_coder_dsh_2x1.json
             pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/dsh --test-config-file tests/e2e/function/agentbench/dsh/cases/qwen3_coder_dsh_2x1_plan_subagent.json
 
+  - group: ":card_index_dividers: e2e accuracy"
+    depends_on: ci-image
+    steps:
+      - label: ":docker: Build Jiuwen accuracy image"
+        key: ready-accuracy-image
+        mirror_hardwares: l20_2
+        host_only: true
+        timeout_in_minutes: 90
+        commands:
+          - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-ready-accuracy-gpu" || true
+          - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose --profile accuracy -f docker/docker-compose.yml build agentinfer-accuracy-jiuwen
+          - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-accuracy-jiuwen-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-ready-accuracy-gpu"
+
+      - label: "accuracy: JiuwenSwarm"
+        key: ready-accuracy-jiuwenswarm
+        depends_on: ready-accuracy-image
+        mirror_hardwares: l20_2
+        timeout_in_minutes: 180
+        concurrency: 1
+        concurrency_group: agentinfer/nightly-accuracy-l20
+        env:
+          PYTEST_ADDOPTS: >-
+            -o cache_dir=/tmp/pytest-cache --capture=tee-sys -m "L20 and cards_2"
+            --correctness-ci --correctness-evaluation-config /opt/agentbench/evaluation.yaml
+            --log-file=ready-logs/jiuwenswarm/pytest.log
+        plugins:
+          - docker-compose#v4.9.0:
+              config: docker/docker-compose.yml
+              cli-version: 2
+              run: agentinfer-accuracy-jiuwen
+              skip-pull: true
+              require-prebuild: true
+              environment:
+                - HOME=/tmp/ci-home
+                - PYTEST_ADDOPTS
+        artifact_paths:
+          - "ready-logs/jiuwenswarm/**/*"
+          - "nightly-logs/jiuwenswarm/**/*"
+          - "test-results/acc/jiuwenswarm/**/*"
+          - "test-results/acc/*/vllm-logs/**/*"
+        commands:
+          - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k jiuwenswarm
+
   # cpu_small is another machine, so it builds the same Dockerfile itself.
   - label: ":docker: Build CI image (cpu)"
     key: ci-image-cpu
@@ -98,6 +140,7 @@ steps:
     host_only: true
     commands:
       - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu" || true
+      - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-ready-accuracy-gpu" || true
       - docker image prune -f
   - label: ":broom: Cleanup CPU agent"
     mirror_hardwares: cpu_small

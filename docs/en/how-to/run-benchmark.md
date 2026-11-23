@@ -448,3 +448,15 @@ Heartbeats produce no model content; task deadlines and ZCode's model progress c
 Malformed auxiliary log records, missing fields and read errors are reported in `model_log_warnings` without
 overriding task outcomes or cancellation. Error counts cover successfully parsed records only; a zero count with
 parsing warnings does not establish that no model error occurred.
+
+## Accuracy CI configuration
+
+The accuracy E2E cases reuse `swebench_vllm.yaml` for Claude and `swebench_vllm_dsh.yaml` for DSH,
+retaining their existing agent budget defaults.
+The cases use `Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8` with a 65,536-token server context and
+reserve a loopback port per serve group. Ready selects JiuwenSwarm; nightly selects all four agents.
+Jiuwen runs as root in CI. Its tracked native sandbox issue can still cause the job to fail.
+
+`docker/Dockerfile` provides `ci`, `accuracy-jiuwen`, and `accuracy` targets with shared dependency stages.
+The scorer and Jiuwen SDK are added for ready accuracy; nightly also installs the remaining agent CLIs.
+See the [accuracy E2E guide](../../../tests/e2e/acc/README.md) for triggers, scoring artifacts, and commands.

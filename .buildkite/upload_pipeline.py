@@ -74,7 +74,8 @@ def _apply_preset(step: dict, presets: dict) -> None:
     env.setdefault("BUILDX_NO_DEFAULT_ATTESTATIONS", "1")
     step["env"] = env
 
-    plugins = copy.deepcopy(preset.get("plugins") or [])
+    # Explicit job plugins override the hardware preset's defaults.
+    plugins = copy.deepcopy(step.get("plugins", preset.get("plugins")) or [])
     if image_build:
         for plugin in plugins:
             for config in plugin.values():

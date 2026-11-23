@@ -29,6 +29,13 @@ def _cli(*args: str) -> str:
 
 
 def _validate(run_dir: Path, evaluation: Path, *, expected_task_num: int | None = None) -> None:
+    for log in (run_dir / "tasks").glob("*/jiuwenbox-server.stderr.log"):
+        sandbox_errors = [
+            line
+            for line in log.read_text(encoding="utf-8", errors="replace").splitlines()
+            if "bwrap:" in line and "Can't mount proc" in line
+        ]
+        assert not sandbox_errors, f"Jiuwen sandbox failed: {sandbox_errors}; see {log}"
     run_summary = validate_completed_run(run_dir)
     source = json.loads((run_dir / "manifest.json").read_bytes())
     index = json.loads((run_dir / "task_index.json").read_bytes())

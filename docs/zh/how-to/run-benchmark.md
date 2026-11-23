@@ -446,3 +446,15 @@ ZCode 的原生 `turn.failed` 错误保存在 `zcode-run-status.json` 的 `nativ
 `last_model_error`；即使最终超时，也能查看此前的 SDK 流错误及日志位置。
 辅助日志中的损坏行、缺字段和读取异常记录到 `model_log_warnings`，不覆盖任务状态或取消结果。
 错误计数只包含成功解析的记录；有解析告警时，不能将计数为 0 理解为没有模型错误。
+
+## 精度 CI 配置
+
+精度 E2E 的 Claude、DSH 分别复用 `swebench_vllm.yaml` 和 `swebench_vllm_dsh.yaml`，
+沿用仓里配置的 agent 预算默认值。
+用例使用 `Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8`，serve 上限为 65536，每组自动申请一个本地端口。
+ready 只执行九问精度，nightly 执行四个 agent。九问在 CI 中按 root 运行，
+已跟踪的原生沙箱问题仍可能导致用例失败。
+
+`docker/Dockerfile` 提供 `ci`、`accuracy-jiuwen`、`accuracy` 三个 target，复用公共依赖 stage。
+ready 精度增加评分环境和九问 SDK，nightly 在此基础上补齐其他 agent CLI。
+触发方式、评分产物及命令见[精度 E2E 文档](../../../tests/e2e/acc/README.md)。

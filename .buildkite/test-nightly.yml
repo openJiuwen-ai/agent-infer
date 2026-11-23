@@ -8,21 +8,38 @@ steps:
     key: nightly-accuracy
     if: build.env("NIGHTLY") == "1" || build.pull_request.labels includes "nightly-test"
     steps:
-      - label: ":docker: Build CI image"
+      - label: ":docker: Build accuracy image"
         key: nightly-accuracy-image
         mirror_hardwares: l20_2
         host_only: true
         timeout_in_minutes: 90
         commands:
-          # Scope the suffix to Compose so ready and nightly build distinct image tags.
+          # Accuracy extends the cached CI dependency stage; do not pull/rebuild
+          # the ready image a second time when both labels run in this build.
           - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-nightly-gpu" || true
-          - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 BUILDKITE_BUILD_ID="$$BUILDKITE_BUILD_ID-nightly" docker compose -f docker/docker-compose.yml build --pull agentinfer-ci
+          - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose --profile accuracy -f docker/docker-compose.yml build agentinfer-accuracy
           - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-accuracy-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-nightly-gpu"
 
-      - label: "accuracy: baseline (all agents)"
+      - label: "accuracy: baseline"
         key: nightly-accuracy-baseline
         depends_on: nightly-accuracy-image
-        mirror_hardwares: l20_2_accuracy
+        mirror_hardwares: l20_2
+        env:
+          PYTEST_ADDOPTS: >-
+            -o cache_dir=/tmp/pytest-cache --capture=tee-sys -m "L20 and cards_2"
+            --correctness-ci --benchmark-run-as-user test-user
+            --correctness-evaluation-config /opt/agentbench/evaluation.yaml
+            --log-file=nightly-logs/baseline/pytest.log
+        plugins:
+          - docker-compose#v4.9.0:
+              config: docker/docker-compose.yml
+              cli-version: 2
+              run: agentinfer-accuracy
+              skip-pull: true
+              require-prebuild: true
+              environment:
+                - HOME=/tmp/ci-home
+                - PYTEST_ADDOPTS
         concurrency: 1
         concurrency_group: agentinfer/nightly-accuracy-l20
         timeout_in_minutes: 360
@@ -33,10 +50,26 @@ steps:
         commands:
           - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k baseline
 
-      - label: "accuracy: AgentInfer (all agents)"
+      - label: "accuracy: AgentInfer"
         key: nightly-accuracy-agentinfer
         depends_on: nightly-accuracy-image
-        mirror_hardwares: l20_2_accuracy
+        mirror_hardwares: l20_2
+        env:
+          PYTEST_ADDOPTS: >-
+            -o cache_dir=/tmp/pytest-cache --capture=tee-sys -m "L20 and cards_2"
+            --correctness-ci --benchmark-run-as-user test-user
+            --correctness-evaluation-config /opt/agentbench/evaluation.yaml
+            --log-file=nightly-logs/agentinfer/pytest.log
+        plugins:
+          - docker-compose#v4.9.0:
+              config: docker/docker-compose.yml
+              cli-version: 2
+              run: agentinfer-accuracy
+              skip-pull: true
+              require-prebuild: true
+              environment:
+                - HOME=/tmp/ci-home
+                - PYTEST_ADDOPTS
         concurrency: 1
         concurrency_group: agentinfer/nightly-accuracy-l20
         timeout_in_minutes: 360
