@@ -12,11 +12,10 @@ from pathlib import Path
 import pytest
 
 from agentinfer.agentbench.agents.preflight import check_agent_preflight
-from agentinfer.agentbench.benchkit.compare import load_summary
 from agentinfer.agentbench.benchkit.config import AgentBenchConfig, load_config
 from tests.e2e.function.agentbench.artifact_validation import validate_agent_artifacts
 from tests.e2e.function.agentbench.smoke_inputs import prepare_smoke_case
-from tests.e2e.helpers.benchmark import run_benchmark
+from tests.e2e.helpers.benchmark import run_benchmark, validate_completed_run
 from tests.e2e.helpers.case_loader import E2EConfig, load_pytest_case, validate_benchmark_user
 
 
@@ -39,7 +38,7 @@ def test_agent_smoke(
     benchmark_index: int,
     agentbench_server: Callable[[E2EConfig], E2EConfig],
 ) -> None:
-    """Require every selected task to finish and common artifacts to exist."""
+    """Require task completion, at least one model request, and common artifacts."""
     config = load_pytest_case(pytestconfig, case_file, benchmark_index=benchmark_index)
     validate_benchmark_user(config)
     agent_type = resolve_agent_type(config)
@@ -56,8 +55,7 @@ def test_agent_smoke(
     config = agentbench_server(config)
     run_dir = run_benchmark(config, manage_server=False)
     print(f"{agent_type} functional artifacts: {run_dir}", flush=True)
-    summary = load_summary(run_dir)
-    assert summary["lifecycle"]["status"] == "completed", summary["lifecycle"]
+    summary = validate_completed_run(run_dir)
     assert summary["tasks"]["completed"] == config.task_num, summary["tasks"]
     assert summary["tasks"]["failed"] == 0, summary["tasks"]
     validate_agent_artifacts(run_dir)

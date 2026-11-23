@@ -93,8 +93,9 @@ Performance and replay suites retain their previous service lifecycle.
 
 ## Validation and evidence
 
-The run must finalize, complete its one task, and have no failed tasks. Request
-failure counts are not pass criteria. Common files must exist: agents.csv,
+The run must finalize, complete its one task, have no failed tasks, and record
+at least one model request. Request failure counts are not pass criteria.
+Common files must exist: agents.csv,
 distribution_samples.csv, manifest.json, requests.jsonl, sessions.csv,
 summary.json, task_index.json, proxy.stdout.log, and proxy.stderr.log. The
 evidence, tasks, and workspaces directories must exist. Extra files/directories
