@@ -93,8 +93,15 @@ def test_benchmark_array_requires_valid_explicit_index(index) -> None:
         load_case_file(SMOKE_CASE, benchmark_index=index)
 
 
-def test_pytest_overrides_come_from_command_not_json(tmp_path: Path) -> None:
-    """The shared loader applies load overrides and ignores a JSON OS user."""
+@pytest.mark.parametrize(
+    ("benchmark_user_from_cli_only", "expected_user"),
+    [(False, "json-user"), (True, None)],
+    ids=["perf", "smoke"],
+)
+def test_pytest_user_override_respects_suite_policy(
+    tmp_path: Path, benchmark_user_from_cli_only: bool, expected_user: str | None
+) -> None:
+    """Performance keeps its JSON user by default and smoke requires a CLI user."""
     payload = json.loads(SMOKE_CASE.read_text(encoding="utf-8"))
     payload["benchmark_params"] = payload["benchmark_params"][1]
     payload["benchmark_params"]["benchmark-run-as-user"] = "json-user"
@@ -105,11 +112,15 @@ def test_pytest_overrides_come_from_command_not_json(tmp_path: Path) -> None:
         "--max-concurrency": None,
         "--benchmark-run-as-user": None,
     }
-    config = load_pytest_case(SimpleNamespace(getoption=options.get), path)
-    assert config.benchmark_run_as_user is None
+    config = load_pytest_case(
+        SimpleNamespace(getoption=options.get), path, benchmark_user_from_cli_only=benchmark_user_from_cli_only
+    )
+    assert config.benchmark_run_as_user == expected_user
     assert config.task_num == config.max_concurrency == 1
     options.update({"--task-num": 2, "--max-concurrency": 2, "--benchmark-run-as-user": " bench-user "})
-    config = load_pytest_case(SimpleNamespace(getoption=options.get), path)
+    config = load_pytest_case(
+        SimpleNamespace(getoption=options.get), path, benchmark_user_from_cli_only=benchmark_user_from_cli_only
+    )
     assert config.task_num == config.max_concurrency == 2
     assert config.benchmark_run_as_user == "bench-user"
 

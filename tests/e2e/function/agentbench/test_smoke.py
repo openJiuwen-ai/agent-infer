@@ -39,7 +39,12 @@ def test_agent_smoke(
     agentbench_server: Callable[[E2EConfig], E2EConfig],
 ) -> None:
     """Require task completion, at least one model request, and common artifacts."""
-    config = load_pytest_case(pytestconfig, case_file, benchmark_index=benchmark_index)
+    config = load_pytest_case(
+        pytestconfig,
+        case_file,
+        benchmark_index=benchmark_index,
+        benchmark_user_from_cli_only=True,
+    )
     validate_benchmark_user(config)
     agent_type = resolve_agent_type(config)
     if config.task_num <= 0 or config.max_concurrency <= 0:

@@ -56,7 +56,7 @@ RUN sed -i '1{/^#!/d;}' /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
  && test "$(zcode --version)" = "0.17.1"
 
 # JiuwenSwarm uses its own Python environment so its dependencies cannot replace vLLM's.
-ARG JIUWENSWARM_VERSION=0.2.3
+ARG JIUWENSWARM_VERSION=0.2.4b3
 RUN python3 -m venv --system-site-packages /opt/jiuwenswarm \
  && /opt/jiuwenswarm/bin/pip install --no-cache-dir "jiuwenswarm==${JIUWENSWARM_VERSION}" \
  && for command in jiuwenswarm jiuwenswarm-init jiuwenswarm-start jiuwenbox-server; do \

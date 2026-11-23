@@ -264,11 +264,17 @@ class E2EConfig:
         return blockers
 
 
-def load_pytest_case(pytestconfig: pytest.Config, case_file: Path, *, benchmark_index: int | None = None) -> E2EConfig:
+def load_pytest_case(
+    pytestconfig: pytest.Config,
+    case_file: Path,
+    *,
+    benchmark_index: int | None = None,
+    benchmark_user_from_cli_only: bool = False,
+) -> E2EConfig:
     """Load one E2E case and apply pytest load/user overrides.
 
-    The benchmark OS user comes only from --benchmark-run-as-user. Omitted
-    options preserve the configured task count and concurrency.
+    Omitted options preserve the case values. The smoke suite can require the
+    benchmark OS user to come from --benchmark-run-as-user.
     """
     config = E2EConfig.from_case(load_case_file(case_file, benchmark_index=benchmark_index)).with_benchmark_load(
         task_num=pytestconfig.getoption("--task-num"),
@@ -278,7 +284,7 @@ def load_pytest_case(pytestconfig: pytest.Config, case_file: Path, *, benchmark_
     benchmark_user = str(raw_user).strip() if raw_user is not None else None
     return config.with_runtime_overrides(
         benchmark_run_as_user=benchmark_user or None,
-        benchmark_run_as_user_set=True,
+        benchmark_run_as_user_set=benchmark_user_from_cli_only or raw_user is not None,
     )
 
 
@@ -286,7 +292,7 @@ def validate_benchmark_user(config: E2EConfig, *, effective_uid: int | None = No
     """Require an explicit non-root bench user for root-launched plan-subagent smoke runs.
 
     Other profiles and pytest already running as an ordinary user keep the
-    invoking user. Performance callers opt in to this policy explicitly.
+    invoking user.
     """
     if effective_uid is None:
         effective_uid = os.geteuid() if os.name != "nt" else None
