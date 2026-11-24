@@ -16,8 +16,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.helpers.marks import test_marks
+
 pytestmark = [
-    pytest.mark.e2e_function,
+    *test_marks(hardware="cpu"),
     pytest.mark.skipif(
         os.environ.get("AGENTBENCH_JIUWEN_NATIVE") != "1", reason="requires the WorkSwarm 0.2.8 environment"
     ),

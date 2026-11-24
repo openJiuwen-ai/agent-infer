@@ -10,13 +10,14 @@ from pathlib import Path
 import pytest
 
 from agentinfer.agentbench.benchkit.cli import main
+from tests.helpers.marks import test_marks
 
 _REPO = Path(__file__).resolve().parents[5]
 _BASE_URL = os.environ.get("AGENTBENCH_VLLM_URL", "")
 _MODEL = os.environ.get("AGENTBENCH_VLLM_MODEL", "")
 
 pytestmark = [
-    pytest.mark.e2e_function,
+    *test_marks(hardware="cpu"),
     pytest.mark.skipif(not (_BASE_URL and _MODEL), reason="requires AGENTBENCH_VLLM_URL and AGENTBENCH_VLLM_MODEL"),
 ]
 

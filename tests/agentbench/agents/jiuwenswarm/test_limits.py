@@ -6,6 +6,9 @@ import asyncio
 import pytest
 
 from agentinfer.agentbench.agents.jiuwenswarm.limits import QuotaExceeded, TaskBudget
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def test_quota_cumulative_resume_rebuild_and_failed_creation():
