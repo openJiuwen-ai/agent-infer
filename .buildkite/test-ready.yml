@@ -91,7 +91,6 @@ steps:
           PYTEST_ADDOPTS: >-
             -o cache_dir=/tmp/pytest-cache --capture=tee-sys -m "L20 and cards_2"
             --correctness-ci --correctness-evaluation-config /opt/agentbench/evaluation.yaml
-            --log-file=ready-logs/jiuwenswarm/pytest.log
         plugins:
           - docker-compose#v4.9.0:
               config: docker/docker-compose.yml
@@ -103,10 +102,8 @@ steps:
                 - HOME=/tmp/ci-home
                 - PYTEST_ADDOPTS
         artifact_paths:
-          - "ready-logs/jiuwenswarm/**/*"
-          - "nightly-logs/jiuwenswarm/**/*"
-          - "test-results/acc/jiuwenswarm/**/*"
-          - "test-results/acc/*/vllm-logs/**/*"
+          - "tests/run/acc/jiuwenswarm-*/**/*"
+          - "tests/result/acc/jiuwenswarm-*/**/*"
         commands:
           - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k jiuwenswarm
 

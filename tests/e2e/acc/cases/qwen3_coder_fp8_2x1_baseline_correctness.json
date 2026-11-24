@@ -1,18 +1,14 @@
 {
-  "test_name": "qwen3_coder_2x1_agentinfer_correctness",
-  "scenario": "agentinfer",
+  "test_name": "qwen3_coder_fp8_2x1_baseline_correctness",
+  "scenario": "baseline",
   "mark": {
     "hardware": "L20",
     "num_cards": 2
   },
-  "description": "Qwen3-Coder FP8 on 2x L20, agentinfer: shared serve for four agents with automatic SWE-bench scoring",
+  "description": "Qwen3-Coder FP8 on 2x L20, baseline: shared serve for four agents with automatic SWE-bench scoring",
   "serve_env": {},
   "server_params": {
     "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
-    "middleware": [
-      "agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware",
-      "agentinfer.agentcache.core.api_adapter.AgentCacheLifecycleMiddleware"
-    ],
     "serve_args": {
       "served-model-name": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
       "tensor-parallel-size": 2,
@@ -26,42 +22,10 @@
       "gpu-memory-utilization": 0.92,
       "enable-prompt-tokens-details": true,
       "async-scheduling": true,
-      "scheduler-cls": "agentinfer.agentcache.core.scheduler.AgentCacheAsyncSchedulerBridge",
-      "additional-config": {
-        "agentcache": {
-          "observability": {
-            "enabled": true,
-            "log_interval_seconds": 5
-          },
-          "backend_id": "replay-local-auto-prefix",
-          "schedule_interval_seconds": 3,
-          "progress_ttl": {
-            "mode": "auto",
-            "ttl_min_seconds": 0.05,
-            "ttl_max_seconds": 32,
-            "ttl_max_cache_miss_impact_ratio": 1.0,
-            "shared_prefix_freshness_warmup_seconds": 100.0,
-            "auto_enable_utility_seconds": 20.0,
-            "auto_disable_utility_seconds": 5.0,
-            "target_max_segment_rounds": 9,
-            "resume_capacity_ratio": 1.0,
-            "pause_capacity_ratio": 1.0,
-            "privileged_max_context_tokens": 85000,
-            "privileged_ttl_seconds": 5,
-            "paused_program_ttl_seconds": 1800,
-            "ttl_prefill_model_intercept_seconds": 0.0,
-            "ttl_prefill_model_linear_seconds_per_1k_tokens": 0.0,
-            "ttl_prefill_model_quadratic_seconds_per_1k_tokens_squared": 0.001,
-            "ttl_decode_throughput_alpha": 1.0,
-            "decode_step_fixed_seconds": 0.03,
-            "decode_step_seconds_per_request": 0.0,
-            "decode_step_seconds_per_context_token": 5.2631579e-08
-          }
-        }
-      }
+      "scheduler-cls": "vllm.v1.core.sched.async_scheduler.AsyncScheduler"
     }
   },
-  "result_root": "test-results/acc",
+  "result_root": "tests/run/acc",
   "benchmark_params": [
     {
       "config": "agentinfer/agentbench/configs/swebench_vllm.yaml",

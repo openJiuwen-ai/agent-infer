@@ -17,19 +17,19 @@ Adjust model paths, benchmark user, and hardware parameters for your host. Add `
 
 ```bash
 python -m pytest -s -v tests/e2e/acc/test_correctness.py::test_run_with_correctness \
-  --test-config-file tests/e2e/acc/cases/qwen3_coder_2x1_baseline_correctness.json \
+  --test-config-file tests/e2e/acc/cases/qwen3_coder_fp8_2x1_baseline_correctness.json \
   --benchmark-run-as-user test-user
 ```
 
-Use `qwen3_coder_2x1_agentinfer_correctness.json` for AgentInfer. Supports `--task-num`, `--max-concurrency`, and
+Use `qwen3_coder_fp8_2x1_agentinfer_correctness.json` for AgentInfer. Supports `--task-num`, `--max-concurrency`, and
 `--benchmark-run-as-user` overrides. No case hardcodes a benchmark username.
 When pytest runs as root, Claude `plan-subagent` requires `--benchmark-run-as-user USER`
 with an existing non-root account that can access Docker. When running as that account directly, omit the option.
 
 ## Grouped agent cases
 
-`cases/` contains two files, `qwen3_coder_2x1_baseline_correctness.json` and
-`qwen3_coder_2x1_agentinfer_correctness.json`. Each defines one `server_params` object and a `benchmark_params`
+`cases/` contains two files, `qwen3_coder_fp8_2x1_baseline_correctness.json` and
+`qwen3_coder_fp8_2x1_agentinfer_correctness.json`. Each defines one `server_params` object and a `benchmark_params`
 array for Claude Code, DSH, ZCode, and JiuwenSwarm. Pytest expands the array into four independent tests and
 reuses the same server across them. The server stops before switching files; running the full matrix in one
 pytest process starts serve twice. A failed agent test does not prevent later tests from running, unless pytest's
@@ -46,6 +46,9 @@ When pytest runs as root, the shared benchmark helper reclaims the configured re
 hands it to the requested benchmark user, and returns it to root in `finally`, including when a case fails.
 Ownership changes stay within the cache and do not follow symlinks. Non-root pytest runs keep their ownership.
 Ports are omitted so pytest reserves a free loopback port, then shares it among the agents in that file.
+The referenced YAML keeps `backend.base_url: http://127.0.0.1:8000` as an example. E2E passes the selected
+port to `vllm serve --port` and overrides that YAML value with the same `--base-url` in the benchmark command.
+The proxy's `request_proxy.listen_url: http://127.0.0.1:0` already requests an OS-assigned port.
 
 | Agent | Selector | Profile | Executable on PATH |
 | ----- | ------------- | ------- | ------------------ |
@@ -65,7 +68,7 @@ For example, run DSH with automatic scoring:
 
 ```bash
 python -m pytest -s -v tests/e2e/acc/test_correctness.py::test_run_with_correctness \
-  --test-config-file tests/e2e/acc/cases/qwen3_coder_2x1_agentinfer_correctness.json \
+  --test-config-file tests/e2e/acc/cases/qwen3_coder_fp8_2x1_agentinfer_correctness.json \
   -k dsh --benchmark-run-as-user test-user
 ```
 
@@ -84,10 +87,10 @@ pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k jiuwen
   --correctness-ci --correctness-evaluation-config /opt/agentbench/evaluation.yaml
 ```
 
-The pipeline records pytest output in `ready-logs/jiuwenswarm/pytest.log`, dependency records in
-`nightly-logs/jiuwenswarm/`, and all benchmark/scoring artifacts in `test-results/acc/jiuwenswarm/`.
-Server logs are also uploaded. Known sandbox failures fail the job; this configuration does not fix the
-tracked Jiuwen sandbox issue.
+The pipeline puts shared invocation logs under `tests/run/acc/jiuwenswarm-<timestamp>/`, complete benchmark
+artifacts under `tests/run/acc/jiuwenswarm-<scenario>-<timestamp>/`, and exported score summaries under
+`tests/result/acc/jiuwenswarm-<scenario>-<timestamp>/`. It uploads both the run and result directories.
+Known sandbox failures fail the job; this configuration does not fix the tracked Jiuwen sandbox issue.
 
 ## Nightly CI
 
@@ -155,12 +158,12 @@ Replace `baseline` with `agentinfer` for the other group. Use `-k dsh` to run ju
 the shared model cache, and dependency records. The requested benchmark user is prepared for `plan-subagent`;
 Jiuwen's `code.normal` profile continues to run as root. Manual runs omit this flag.
 The evaluation config overrides the loaded case in memory; the JSON files are preserved.
-The pipeline uploads pytest logs per serve group, dependency records per agent,
-and benchmark/scoring artifacts per agent and scenario.
+The pipeline uploads shared invocation logs, complete benchmark/scoring artifacts per agent and scenario,
+and the corresponding exported score summaries.
 Both jobs use the `l20_2` hardware preset. Each job declares its accuracy `PYTEST_ADDOPTS` and Compose plugin
 configuration in `test-nightly.yml`; job-level plugins override the hardware preset's defaults.
-The pytest command names its test target and group selector. The jobs set their log files to
-`nightly-logs/<scenario>/pytest.log`. Selecting just one agent defaults to `nightly-logs/<agent>/pytest.log`.
+The pytest command names its test target and group selector. Each job automatically saves `pytest.log` under
+`tests/run/acc/<scenario>-<timestamp>/`. Selecting just one agent uses that agent's name in place of the scenario.
 Explicit log paths take precedence. JUnit output is generated only when requested with `--junitxml`.
 
 Jiuwen runs `jiuwenbox-server` as a local process in the benchmark environment. The CI preflight checks
@@ -171,13 +174,44 @@ Unexpected confirmation events still fail the task.
 
 ## Result directories
 
-Each benchmark saves its runs under `test-results/acc/<agent>/<scenario>/`, where `<scenario>` is
-`baseline` or `agentinfer`. Each run gets a unique subdirectory; automatic scoring writes
-`evaluations/<evaluation_id>/correctness.json` inside that run directory. Shared server logs are kept
-under `test-results/acc/<scenario>/vllm-logs/`. The JSON's `result_root` sets the base directory
-(`test-results/acc`); pytest adds the agent and scenario for benchmark artifacts.
+Automatic scoring uses paired directories for each agent and scenario. The feature is `<agent>-<scenario>`,
+for example `claude-baseline`. Both directories share the same timestamp and unique suffix:
 
-For example, Claude baseline results are saved under `test-results/acc/claude/baseline/`.
+```text
+tests/run/acc/claude-baseline-20261124-103000-a1b2c3/
+  manifest.json
+  task_index.json
+  tasks/
+  evaluations/<evaluation_id>/
+    correctness.json
+    task_results.jsonl
+    evaluation_manifest.json
+    harness.stdout.log
+    harness.stderr.log
+    inputs/
+    raw/
+
+tests/result/acc/claude-baseline-20261124-103000-a1b2c3/
+  correctness.json
+```
+
+`run` keeps the complete benchmark and original evaluation evidence, including task logs, patches, official reports,
+and raw harness logs. `result/correctness.json` is a byte-for-byte copy of the original summary for convenient
+inspection.
+The matching directory name under `tests/run/acc/` identifies the complete original benchmark and evaluation.
+Export happens before the pytest assertions, including when bench exits nonzero after producing an error summary.
+Runs that fail before producing a score have no exported `correctness.json`.
+
+Shared pytest/server logs and dependency records sit under `tests/run/acc/<selection>-<timestamp>/`.
+The selection is an agent (`-k jiuwenswarm`), scenario (`-k baseline` or `-k agentinfer`), or `all` for a full run
+or other keyword expressions. Selecting one JSON without a recognized keyword uses its scenario.
+This directory contains `pytest.log`, `<agent>/*-requirements.txt` with `--correctness-ci`, and
+`<scenario>/vllm-logs/` for shared workers. It is printed as `[correctness] artifacts=...`.
+Manual and CI runs use the same layout. The JSON's `result_root` sets the raw run base directory;
+cases in one invocation must share it. Score exports use `tests/result/acc/`.
+`--collect-only` does not create artifact directories. Generated `tests/run/` and `tests/result/` trees are excluded
+from pytest discovery. Existing functional/performance suites retain their current output paths.
+Explicit `--log-file` and `--junitxml` paths take precedence over the automatic layout.
 When running BenchKit directly, use `--result-dir` to select the run directory explicitly.
 
 ## Score an existing run
@@ -202,6 +236,10 @@ python -m pytest -s -v tests/e2e/acc/test_correctness.py::test_compare_correctne
 
 Task sets, generation parameters, evaluation configurations, and image identities must be compatible. Previously
 resolved tasks regressing, missing evidence, or incompatible evidence fail the test.
+Use the original `correctness.json` under `tests/run/acc/.../evaluations/<evaluation_id>/` for this command:
+its sibling manifests, task results, frozen inputs, and raw evidence are required for validation.
+The exported `tests/result/acc/.../correctness.json` provides a summary. Find the complete evaluation under the
+same-named directory in `tests/run/acc/`.
 
 ## Acceptance and evidence
 

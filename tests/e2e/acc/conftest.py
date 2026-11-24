@@ -19,7 +19,10 @@ import pytest
 from tests.e2e.helpers.case_loader import BenchmarkCase, E2EConfig, load_case_group, resolve_benchmark_run_as_user
 from tests.e2e.helpers.server import managed_vllm
 
+from .output import output_dir_name
+
 _CHECKOUT_OWNER = pytest.StashKey[tuple[Path, int, int]]()
+_ARTIFACT_ROOT = pytest.StashKey[Path]()
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -33,18 +36,50 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
-    """Choose the CI log path; JUnit is opt-in through pytest's own option."""
-    if not config.getoption("--correctness-ci"):
+    """Default pytest logs to this invocation's artifacts; leave explicit paths intact."""
+    if config.getoption("collectonly"):
         return
-    agents = {
-        case.benchmark_params.get("agent-type", "claude")
-        for path in (Path(__file__).parent / "cases").glob("*.json")
-        for case in load_case_group(path)
-    }
-    selected = config.getoption("keyword")
-    logs = Path("nightly-logs") / (selected if selected in agents | {"baseline", "agentinfer"} else "all")
+    artifacts = _artifact_root(config)
     if not config.option.log_file:
-        config.option.log_file = str(logs / "pytest.log")
+        config.option.log_file = str(artifacts / "pytest.log")
+
+
+def _artifact_root(config: pytest.Config) -> Path:
+    """Return one feature/timestamp directory shared by this pytest invocation."""
+    existing = config.stash.get(_ARTIFACT_ROOT, None)
+    if existing is not None:
+        return existing
+    selected_file = config.getoption("--test-config-file")
+    paths = [Path(selected_file)] if selected_file else sorted((Path(__file__).parent / "cases").glob("*.json"))
+    cases = [case for path in paths for case in load_case_group(path)]
+    agents = {case.benchmark_params.get("agent-type", "claude") for case in cases}
+    selected = config.getoption("keyword")
+    feature = selected if selected in agents | {"baseline", "agentinfer"} else "all"
+    if feature == "all" and selected_file:
+        feature = cases[0].scenario.value
+    bases = {case.deploy.result_root for case in cases} or {Path("tests/run/acc")}
+    if len(bases) != 1:
+        raise pytest.UsageError("accuracy cases in one invocation must share result_root")
+    base = bases.pop().expanduser()
+    if not base.is_absolute():
+        base = Path(__file__).resolve().parents[3] / base
+    artifacts = base.resolve() / output_dir_name(feature)
+    config.stash[_ARTIFACT_ROOT] = artifacts
+    return artifacts
+
+
+@pytest.fixture(scope="session")
+def correctness_artifacts(pytestconfig: pytest.Config) -> Path:
+    """Share the output root across agent cases and their server/pytest logs."""
+    artifacts = _artifact_root(pytestconfig)
+    print(f"[correctness] artifacts={artifacts}", flush=True)
+    return artifacts
+
+
+@pytest.fixture(scope="session")
+def correctness_results() -> Path:
+    """Return the score-summary base directory paired with the accuracy run artifacts."""
+    return Path(__file__).resolve().parents[3] / "tests/result/acc"
 
 
 def _freeze(python: str | Path, path: Path) -> None:
@@ -118,7 +153,7 @@ def _prepare_correctness_ci_environment(pytestconfig: pytest.Config):
         if profile == "plan-subagent" and not user:
             raise pytest.UsageError("--correctness-ci requires --benchmark-run-as-user for plan-subagent")
         probe_prefix = sudo if resolve_benchmark_run_as_user(agent_profile=profile, benchmark_run_as_user=user) else []
-        logs = checkout / "nightly-logs" / agent
+        logs = _artifact_root(pytestconfig) / agent
         logs.mkdir(parents=True, exist_ok=True)
         if agent not in agents:
             if agent == "jiuwenswarm":

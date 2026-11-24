@@ -16,6 +16,8 @@ from agentinfer.agentbench.benchkit.evaluation.inputs import digest
 from tests.e2e.helpers.benchmark import run_benchmark, validate_completed_run
 from tests.e2e.helpers.case_loader import BenchmarkCase, E2EConfig
 
+from .output import export_correctness, output_dir_name
+
 
 def _cli(*args: str) -> str:
     completed = subprocess.run(
@@ -69,7 +71,13 @@ def _validate(run_dir: Path, evaluation: Path, *, expected_task_num: int | None 
 
 
 @pytest.mark.usefixtures("correctness_environment")
-def test_run_with_correctness(pytestconfig: pytest.Config, benchmark_case: BenchmarkCase, correctness_server) -> None:
+def test_run_with_correctness(
+    pytestconfig: pytest.Config,
+    benchmark_case: BenchmarkCase,
+    correctness_server,
+    correctness_artifacts: Path,
+    correctness_results: Path,
+) -> None:
     case = benchmark_case
     assert case.benchmark_params.get("with-correctness") is True
     evaluation_config = pytestconfig.getoption("--correctness-evaluation-config")
@@ -88,13 +96,18 @@ def test_run_with_correctness(pytestconfig: pytest.Config, benchmark_case: Bench
     agent = case.benchmark_params.get("agent-type", "claude")
     config = replace(
         config,
-        result_root=config.result_root / agent / config.scenario.value,
-        vllm_log_dir=config.result_root / config.scenario.value / "vllm-logs",
+        result_root=correctness_artifacts.parent,
+        vllm_log_dir=correctness_artifacts / config.scenario.value / "vllm-logs",
     )
     config = correctness_server(config)
     print(f"[correctness] agent={agent} scenario={config.scenario.value}", flush=True)
-    run_dir = run_benchmark(config, start_server=False)
-    evaluations = list((run_dir / "evaluations").glob("*/correctness.json"))
+    run_dir = config.result_root / output_dir_name(f"{agent}-{config.scenario.value}")
+    try:
+        run_benchmark(config, result_dir=run_dir, start_server=False)
+    finally:
+        evaluations = list((run_dir / "evaluations").glob("*/correctness.json"))
+        if len(evaluations) == 1:
+            export_correctness(evaluations[0], correctness_results / run_dir.name)
     assert len(evaluations) == 1, evaluations
     _validate(run_dir, evaluations[0], expected_task_num=config.task_num)
 

@@ -44,6 +44,8 @@ def run_benchmark(
         hardware_slug = config.resolve_run_hardware_slug()
         print(f"[benchmark:{config.scenario.value}] hardware slug: {hardware_slug}", flush=True)
         output_dir = result_dir or config.make_result_dir(hardware_slug=hardware_slug)
+        if result_dir is not None:
+            ensure_directory(output_dir.parent, run_as_user=config.effective_benchmark_run_as_user())
         if output_dir.exists():
             raise FileExistsError(f"result directory already exists: {output_dir}")
 

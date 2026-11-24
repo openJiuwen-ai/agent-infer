@@ -29,7 +29,6 @@ steps:
             -o cache_dir=/tmp/pytest-cache --capture=tee-sys -m "L20 and cards_2"
             --correctness-ci --benchmark-run-as-user test-user
             --correctness-evaluation-config /opt/agentbench/evaluation.yaml
-            --log-file=nightly-logs/baseline/pytest.log
         plugins:
           - docker-compose#v4.9.0:
               config: docker/docker-compose.yml
@@ -44,9 +43,9 @@ steps:
         concurrency_group: agentinfer/nightly-accuracy-l20
         timeout_in_minutes: 360
         artifact_paths:
-          - "nightly-logs/**/*"
-          - "test-results/acc/*/baseline/**/*"
-          - "test-results/acc/baseline/vllm-logs/**/*"
+          - "tests/run/acc/baseline-*/**/*"
+          - "tests/run/acc/*-baseline-*/**/*"
+          - "tests/result/acc/*-baseline-*/**/*"
         commands:
           - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k baseline
 
@@ -59,7 +58,6 @@ steps:
             -o cache_dir=/tmp/pytest-cache --capture=tee-sys -m "L20 and cards_2"
             --correctness-ci --benchmark-run-as-user test-user
             --correctness-evaluation-config /opt/agentbench/evaluation.yaml
-            --log-file=nightly-logs/agentinfer/pytest.log
         plugins:
           - docker-compose#v4.9.0:
               config: docker/docker-compose.yml
@@ -74,9 +72,9 @@ steps:
         concurrency_group: agentinfer/nightly-accuracy-l20
         timeout_in_minutes: 360
         artifact_paths:
-          - "nightly-logs/**/*"
-          - "test-results/acc/*/agentinfer/**/*"
-          - "test-results/acc/agentinfer/vllm-logs/**/*"
+          - "tests/run/acc/agentinfer-*/**/*"
+          - "tests/run/acc/*-agentinfer-*/**/*"
+          - "tests/result/acc/*-agentinfer-*/**/*"
         commands:
           - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k agentinfer
 
