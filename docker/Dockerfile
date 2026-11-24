@@ -1,11 +1,17 @@
 # Build the exact ZCode CLI supported by the adapter, with its pinned toolchain.
 FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/node:24.14.0-bookworm AS zcode-build
 ARG ZCODE_COMMIT=a9fe401eede6e6e5e01be9048679c206fe6f02d9
+ARG ZCODE_REPOSITORY=https://github.com/zai-org/ZCode.git
 RUN npm install -g pnpm@10.33.2
 WORKDIR /opt/zcode
 RUN git init . \
- && git remote add origin https://github.com/zai-org/ZCode.git \
- && git fetch --depth 1 origin "${ZCODE_COMMIT}" \
+ && git remote add origin "${ZCODE_REPOSITORY}" \
+ && for fetch_attempt in 1 2 3; do \
+      echo "Fetching ZCode source (attempt ${fetch_attempt}/3)"; \
+      if git -c http.version=HTTP/1.1 fetch --depth 1 origin "${ZCODE_COMMIT}"; then break; fi; \
+      if [ "${fetch_attempt}" -eq 3 ]; then exit 1; fi; \
+      sleep 5; \
+    done \
  && git checkout --detach FETCH_HEAD \
  && test "$(git rev-parse HEAD)" = "${ZCODE_COMMIT}" \
  && pnpm install --frozen-lockfile \
@@ -13,6 +19,7 @@ RUN git init . \
  && test "$(node apps/zcode-cli/packages/cli/dist/zcode.cjs --version)" = "0.17.1"
 
 FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/vllm/vllm-openai:v0.23.0
+ARG PIP_INDEX_URL
 
 # Unit tests create throwaway repos with `git init` / `git commit`.
 # curl/xz unpack the Node tarball used by the DSH functional E2E.
@@ -66,15 +73,11 @@ RUN python3 -m venv --system-site-packages /opt/jiuwenswarm \
 
 # Install deps before COPY so unchanged deps hit layer cache across PRs (vllm-omni deps-cache pattern).
 RUN pip install --no-cache-dir \
-      -i https://mirrors.aliyun.com/pypi/simple/ \
-      --trusted-host mirrors.aliyun.com \
       'huggingface-hub>=1.5.0,<2.0' \
       datasets matplotlib zstandard \
       pytest pytest-timeout pytest-html pytest-xdist \
       'setuptools>=68,<85' wheel \
  && pip install --no-cache-dir \
-      -i https://mirrors.aliyun.com/pypi/simple/ \
-      --trusted-host mirrors.aliyun.com \
       'huggingface-hub>=1.5.0,<2.0' --force-reinstall
 
 ENV HF_ENDPOINT=https://hf-mirror.com \
@@ -91,8 +94,6 @@ RUN chmod 755 /usr/local/bin/ci-entrypoint.sh \
 WORKDIR /app
 COPY . .
 RUN pip install --no-cache-dir \
-      -i https://mirrors.aliyun.com/pypi/simple/ \
-      --trusted-host mirrors.aliyun.com \
       -e . --no-deps
 
 # CI image runs pytest. The entrypoint replaces `vllm serve` and drops privileges.

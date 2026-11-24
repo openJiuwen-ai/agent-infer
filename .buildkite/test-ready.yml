@@ -11,7 +11,11 @@ steps:
     host_only: true
     commands:
       - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu" || true
-      - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose -f docker/docker-compose.yml build --pull agentinfer-ci
+      - |
+        COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 \
+          docker compose -f docker/docker-compose.yml build --pull \
+          --build-arg ZCODE_REPOSITORY="$$(git ls-remote --get-url https://github.com/zai-org/ZCode.git)" \
+          --build-arg PIP_INDEX_URL agentinfer-ci
       - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-ci-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu"
 
   # GPU smoke for the AgentInfer serve flag. Not the tests/e2e suite.
@@ -65,7 +69,11 @@ steps:
     host_only: true
     commands:
       - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-cpu" || true
-      - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose -f docker/docker-compose.yml build --pull agentinfer-cpu
+      - |
+        COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 \
+          docker compose -f docker/docker-compose.yml build --pull \
+          --build-arg ZCODE_REPOSITORY="$$(git ls-remote --get-url https://github.com/zai-org/ZCode.git)" \
+          --build-arg PIP_INDEX_URL agentinfer-cpu
       - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-cpu-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-cpu"
 
   - group: ":card_index_dividers: ut"
