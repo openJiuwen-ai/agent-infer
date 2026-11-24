@@ -68,8 +68,14 @@ TraceLab sends token ID arrays to `/v1/completions`; the backend must return gen
 and every input plus output target. Replay reads that limit from `max_model_len` on the `/v1/models` entry for the
 configured model. When the replay target is a gRPC Router, whose model list carries no `max_model_len`, the limit is
 read from `backend.tokenizer_base_url` instead, provided it is set and serves the same model; otherwise Replay fails
-before sending any request. Set `experiment.task_timeout_seconds: null` to avoid truncating long sessions;
-the packaged TraceLab template does this by default.
+before sending the warmup and measured completion requests (the warmup token IDs themselves still come from that
+tokenizer, so `/tokenize` calls have already gone out).
+
+Workers in a Router pool may carry different limits: the limit reported by the worker behind `tokenizer_base_url`
+holds only for that worker, and the Router can still dispatch a request to a same-model worker with a smaller one.
+Point `tokenizer_base_url` at the pool's **smallest** limit, or keep every same-model worker in the pool at the same
+limit — Replay cannot derive the pool minimum itself. Set `experiment.task_timeout_seconds: null` to avoid
+truncating long sessions; the packaged TraceLab template does this by default.
 
 `send_after` still controls release after predecessor completion plus the configured interval. The shared graph
 executor requires a successful predecessor response; failed requests cause dependent successors to skip. Missing
