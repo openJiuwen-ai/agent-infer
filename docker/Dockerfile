@@ -1,5 +1,5 @@
 # Build the exact ZCode CLI supported by the adapter, with its pinned toolchain.
-FROM node:24.14.0-bookworm AS zcode-build
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/node:24.14.0-bookworm AS zcode-build
 ARG ZCODE_COMMIT=a9fe401eede6e6e5e01be9048679c206fe6f02d9
 RUN npm install -g pnpm@10.33.2
 WORKDIR /opt/zcode
