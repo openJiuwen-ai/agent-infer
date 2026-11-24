@@ -36,8 +36,9 @@ array contains seven agent/profile entries. Pytest collects each entry as an
 independent item, with IDs ending in agent/profile, such as claude/single.
 
 Run on Linux with GPU access, vLLM, Git, and the selected agent installed.
-Claude needs tmux; DSH and ZCode need Node.js; JiuwenSwarm needs its companion
-commands, jiuwenbox-server, bubblewrap, and host support for its sandbox.
+Claude needs tmux, bubblewrap, and socat. DSH and ZCode need Node.js.
+JiuwenSwarm needs its companion commands, jiuwenbox-server, bubblewrap, and
+host support for its sandbox.
 Agent dependency/version checks reuse each runtime's preflight before starting
 vLLM. Git is checked separately because the local fixture creates a repository.
 ZCode must be CLI 0.17.1 with the pinned build documented in the

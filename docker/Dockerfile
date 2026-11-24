@@ -26,7 +26,7 @@ ARG PIP_INDEX_URL
 # sudo is required when the DSH step stays root and wraps plan-subagent
 # with `sudo -u test-user`.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl git sudo xz-utils tmux bubblewrap \
+ && apt-get install -y --no-install-recommends ca-certificates curl git sudo xz-utils tmux bubblewrap socat \
  && rm -rf /var/lib/apt/lists/*
 
 # DSH 0.2.1-rc.2 for the unified AgentBench functional suite. Install under /usr/local
