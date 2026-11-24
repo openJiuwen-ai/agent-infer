@@ -18,7 +18,7 @@ steps:
     agents:
       queue: L20-cpu-small
 
-  - label: ":full_moon: Upload nightly pipeline"
+  - label: ":pipeline: Upload nightly pipeline"
     key: upload-nightly-pipeline
     if: build.env("NIGHTLY") == "1" || build.pull_request.labels includes "nightly-test"
     command: python3 .buildkite/upload_pipeline.py .buildkite/test-nightly.yml
