@@ -66,7 +66,8 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 
                 for case in load_case_group(path):
                     agent = case.benchmark_params.get("agent-type", "claude")
-                    params.append(pytest.param(path, case, marks=marks, id=f"{case_id}-{agent}"))
+                    case_marks = resolve_pytest_marks(case.mark, metafunc.config)
+                    params.append(pytest.param(path, case, marks=case_marks, id=f"{case_id}-{agent}"))
             else:
                 params.append(pytest.param(path, marks=marks, id=case_id))
         except (OSError, ValueError, TypeError) as exc:

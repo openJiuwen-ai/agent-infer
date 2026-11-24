@@ -357,6 +357,10 @@ def _parse_case(payload: dict[str, Any], *, scenario: PerfScenario) -> Benchmark
     benchmark_params = payload.get("benchmark_params")
     if not isinstance(benchmark_params, dict):
         raise ValueError(f"{scenario.value} case {test_name!r} missing benchmark_params object")
+    benchmark_params = dict(benchmark_params)
+    mark_override = benchmark_params.pop("mark", {})
+    if not isinstance(mark_override, dict) or not set(mark_override) <= {"ci"}:
+        raise ValueError("benchmark_params.mark may only override ci")
 
     serve_env_raw = payload.get("serve_env", {})
     if not isinstance(serve_env_raw, dict):
@@ -385,7 +389,7 @@ def _parse_case(payload: dict[str, Any], *, scenario: PerfScenario) -> Benchmark
         test_name=test_name,
         scenario=scenario,
         description=str(payload.get("description", "")),
-        mark=dict(mark_raw),
+        mark=dict(mark_raw) | mark_override,
         deploy=deploy,
         benchmark_params=dict(benchmark_params),
         wait_for_vllm_ready=wait_for_vllm_ready,

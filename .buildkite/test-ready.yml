@@ -89,7 +89,7 @@ steps:
         concurrency_group: agentinfer/nightly-accuracy-l20
         env:
           PYTEST_ADDOPTS: >-
-            -o cache_dir=/tmp/pytest-cache --capture=tee-sys -m "L20 and cards_2"
+            -o cache_dir=/tmp/pytest-cache --capture=tee-sys -m "L20 and cards_2 and ready"
             --correctness-ci --correctness-evaluation-config /opt/agentbench/evaluation.yaml
         plugins:
           - docker-compose#v4.9.0:

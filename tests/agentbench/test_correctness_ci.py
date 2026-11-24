@@ -367,16 +367,6 @@ def test_real_pytest_keeps_repeated_invocation_logs_separate(pytester, report_co
         assert (directory / "case-artifact.txt").read_text() == "completed"
 
 
-def test_generated_artifacts_are_not_collected_as_tests(pytester):
-    pytester.makeconftest("from tests.conftest import collect_ignore")
-    for name in ("run", "result"):
-        directory = pytester.path / name / "acc" / "example"
-        directory.mkdir(parents=True)
-        (directory / "test_generated.py").write_text("raise AssertionError('generated artifact was collected')")
-    pytester.makepyfile("def test_real(): pass")
-    pytester.runpytest_inprocess("-q").assert_outcomes(passed=1)
-
-
 @pytest.mark.parametrize("pipeline", ["test-ready.yml", "test-nightly.yml"])
 def test_ci_uploads_every_accuracy_artifact(report_config, pipeline):
     import shlex
@@ -608,8 +598,23 @@ def test_group_loader_rejects_duplicate_agents_or_different_servers(tmp_path, fi
         load_case_group(path)
 
 
-@pytest.mark.parametrize("keyword", [None, "dsh", "baseline", "agentinfer", "jiuwenswarm"])
-def test_grouped_pytest_reuses_server_and_continues_after_agent_failure(pytester, monkeypatch, keyword):
+@pytest.mark.parametrize(
+    "keyword,lane,total,failures",
+    [
+        (None, None, 8, 1),
+        ("dsh", None, 2, 1),
+        ("baseline", None, 4, 1),
+        ("agentinfer", None, 4, 0),
+        ("jiuwenswarm", None, 2, 0),
+        (None, "ready", 2, 0),
+        (None, "nightly", 6, 1),
+        ("baseline", "nightly", 3, 1),
+        ("agentinfer", "nightly", 3, 0),
+    ],
+)
+def test_grouped_pytest_reuses_server_and_continues_after_agent_failure(
+    pytester, monkeypatch, keyword, lane, total, failures
+):
     from contextlib import contextmanager
 
     cases_dir = pytester.path / "cases"
@@ -632,7 +637,10 @@ def test_grouped_pytest_reuses_server_and_continues_after_agent_failure(pytester
     monkeypatch.setattr(accuracy_fixtures, "managed_vllm", server)
     monkeypatch.setattr(E2EConfig, "validate_prerequisites", lambda self: [])
     monkeypatch.setattr(accuracy_fixtures, "_record_test_request", request, raising=False)
-    pytester.makeini("[pytest]\nmarkers =\n    L20: [hardware] GPU\n    cards_2: two GPUs")
+    pytester.makeini(
+        "[pytest]\nmarkers =\n    L20: [hardware] GPU\n    cards_2: two GPUs\n"
+        "    ready: ready pipeline\n    nightly: nightly pipeline"
+    )
     pytester.makepyfile("""
         from tests.e2e.conftest import pytest_generate_tests
         from tests.e2e.acc.conftest import correctness_server, _record_test_request
@@ -642,12 +650,14 @@ def test_grouped_pytest_reuses_server_and_continues_after_agent_failure(pytester
             config = correctness_server(E2EConfig.from_case(benchmark_case))
             _record_test_request(config)
             agent = benchmark_case.benchmark_params['agent-type']
+            assert benchmark_case.mark['ci'] == ('ready' if agent == 'jiuwenswarm' else 'nightly')
+            assert 'mark' not in benchmark_case.benchmark_params
             assert not (agent == 'dsh' and config.scenario.value == 'baseline'), 'simulated agent failure'
     """)
     args = ["-q"] + (["-k", keyword] if keyword else [])
+    if lane:
+        args.extend(["-m", lane])
     result = pytester.runpytest_inprocess(*args)
-    total = {None: 8, "dsh": 2, "baseline": 4, "agentinfer": 4, "jiuwenswarm": 2}[keyword]
-    failures = 0 if keyword in {"agentinfer", "jiuwenswarm"} else 1
     result.assert_outcomes(passed=total - failures, failed=failures, deselected=8 - total)
     starts = [event for event in events if event[0] == "start"]
     stops = [event for event in events if event[0] == "stop"]
@@ -656,3 +666,13 @@ def test_grouped_pytest_reuses_server_and_continues_after_agent_failure(pytester
     for _, scenario, lifecycle_socket, port in starts:
         requests = [event for event in events if event[:2] == ("request", scenario)]
         assert all(event[2:] == (lifecycle_socket, port) for event in requests)
+
+
+@pytest.mark.parametrize("invalid", [None, [], {"hardware": "cpu"}, {"num_cards": 1}])
+def test_benchmark_mark_override_only_changes_ci_lane(tmp_path, invalid):
+    payload = json.loads(CASES[0].read_text(encoding="utf-8"))
+    payload["benchmark_params"][-1]["mark"] = invalid
+    path = tmp_path / "invalid-mark.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="may only override ci"):
+        load_case_group(path)

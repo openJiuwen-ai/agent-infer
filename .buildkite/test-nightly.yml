@@ -1,5 +1,6 @@
 # Uploaded by pipeline.yml for the `nightly-test` PR label or NIGHTLY=1.
 # Buildkite Schedule setup: tests/e2e/acc/README.md (Nightly triggers).
+# The schedule sets NIGHTLY=1; this step YAML does not register a timer.
 # Accuracy coverage follows PR #64 / RFC #54. Use an x86_64 L20 agent.
 # All steps must share a Docker daemon, as in test-ready.yml.
 
@@ -26,7 +27,7 @@ steps:
         mirror_hardwares: l20_2
         env:
           PYTEST_ADDOPTS: >-
-            -o cache_dir=/tmp/pytest-cache --capture=tee-sys -m "L20 and cards_2"
+            -o cache_dir=/tmp/pytest-cache --capture=tee-sys -m "L20 and cards_2 and nightly"
             --correctness-ci --benchmark-run-as-user test-user
             --correctness-evaluation-config /opt/agentbench/evaluation.yaml
         plugins:
@@ -55,7 +56,7 @@ steps:
         mirror_hardwares: l20_2
         env:
           PYTEST_ADDOPTS: >-
-            -o cache_dir=/tmp/pytest-cache --capture=tee-sys -m "L20 and cards_2"
+            -o cache_dir=/tmp/pytest-cache --capture=tee-sys -m "L20 and cards_2 and nightly"
             --correctness-ci --benchmark-run-as-user test-user
             --correctness-evaluation-config /opt/agentbench/evaluation.yaml
         plugins:

@@ -28,7 +28,7 @@ markers = [
     "cards_2: two accelerator cards",
     "cards_16: sixteen accelerator cards",
     "ready: selected by the ready pipeline",
-    "nightly: reserved for a future nightly pipeline",
+    "nightly: selected by the nightly pipeline",
 ]
 
 [tool.setuptools.packages.find]

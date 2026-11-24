@@ -35,6 +35,11 @@ reuses the same server across them. The server stops before switching files; run
 pytest process starts serve twice. A failed agent test does not prevent later tests from running, unless pytest's
 `-x` or `--maxfail` option stops the session. Agent selection with `-k` is preserved.
 
+The common `mark.ci` is `nightly`. JiuwenSwarm overrides only its CI lane with
+`"mark": {"ci": "ready"}` inside its `benchmark_params` entry. Expanded cases inherit the common hardware/card
+markers. Per-benchmark mark overrides may contain only `ci`; they are consumed by E2E collection and are not
+passed to BenchKit. Ready selects Jiuwen's two cases; nightly selects the other three agents' six cases.
+
 Claude and DSH reuse `swebench_vllm.yaml` and `swebench_vllm_dsh.yaml`, respectively.
 ZCode and JiuwenSwarm use `swebench_vllm_zcode.yaml` and `swebench_vllm_jiuwenswarm.yaml`, respectively.
 The cases enable accuracy scoring with `with-correctness` and reuse the repository YAMLs.
@@ -50,12 +55,12 @@ The referenced YAML keeps `backend.base_url: http://127.0.0.1:8000` as an exampl
 port to `vllm serve --port` and overrides that YAML value with the same `--base-url` in the benchmark command.
 The proxy's `request_proxy.listen_url: http://127.0.0.1:0` already requests an OS-assigned port.
 
-| Agent | Selector | Profile | Executable on PATH |
-| ----- | ------------- | ------- | ------------------ |
-| Claude Code | `-k claude` | `plan-subagent` | `claude` |
-| DSH | `-k dsh` | `plan-subagent` | `dsh` |
-| ZCode | `-k zcode` | `plan-subagent` | `zcode-launcher` |
-| JiuwenSwarm | `-k jiuwenswarm` | `code.normal` | `jiuwenswarm` |
+| Agent | Selector | CI lane | Profile | Executable on PATH |
+| ----- | ------------- | ------- | ------- | ------------------ |
+| Claude Code | `-k claude` | `nightly` | `plan-subagent` | `claude` |
+| DSH | `-k dsh` | `nightly` | `plan-subagent` | `dsh` |
+| ZCode | `-k zcode` | `nightly` | `plan-subagent` | `zcode-launcher` |
+| JiuwenSwarm | `-k jiuwenswarm` | `ready` | `code.normal` | `jiuwenswarm` |
 
 The three additional agents use `/v1/chat/completions`; Claude uses `/v1/messages`.
 Install DSH `0.2.1-rc.2` with a supported Node runtime. ZCode requires the documented Node-based CLI `0.17.1`
@@ -84,6 +89,7 @@ Inside that container, the job runs:
 
 ```bash
 pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k jiuwenswarm \
+  -m "L20 and cards_2 and ready" \
   --correctness-ci --correctness-evaluation-config /opt/agentbench/evaluation.yaml
 ```
 
@@ -92,18 +98,27 @@ artifacts under `tests/run/acc/jiuwenswarm-<scenario>-<timestamp>/`, and exporte
 `tests/result/acc/jiuwenswarm-<scenario>-<timestamp>/`. It uploads both the run and result directories.
 Known sandbox failures fail the job; this configuration does not fix the tracked Jiuwen sandbox issue.
 
+Jiuwen runs `jiuwenbox-server` as a local process in the benchmark environment. The CI preflight checks
+that its execution account can create the required bubblewrap PID/user namespaces before its benchmark starts.
+It also rejects completed runs whose `jiuwenbox-server.stderr.log` contains `bwrap: Can't mount proc`.
+The accuracy suite uses the existing agent adapters without extra tool filtering or sandbox path mappings.
+Unexpected confirmation events still fail the task.
+
 ## Nightly CI
 
 ### Nightly triggers
 
-The bootstrap in `.buildkite/pipeline.yml` follows vLLM-Omni's
-[nightly entry points](https://github.com/vllm-project/vllm-omni/blob/main/.buildkite/cuda/bootstrap-upload-steps.yml):
+The bootstrap and nightly group use the same `NIGHTLY=1` or `nightly-test` condition as vLLM-Omni's
+[nightly pipeline](https://github.com/vllm-project/vllm-omni/blob/main/.buildkite/cuda/test-nightly.yml):
 
 | Trigger | Configuration | Code tested |
 | ------- | ------------- | ----------- |
 | PR label | Add `nightly-test` to an open PR | The PR revision checked out by Buildkite |
 | Scheduled build | Buildkite Schedule on `main`, with `NIGHTLY=1` | Latest `main` (`HEAD`) |
 | Manual build | New Build with `NIGHTLY=1` | The selected branch and commit |
+
+`nightly-test` is a GitHub PR trigger label; `nightly` is a pytest marker. The trigger label starts the
+pipeline, while pytest markers select the cases inside its jobs. Both `ready` and `nightly` markers are registered.
 
 Ordinary PR builds and main-branch pushes do not run nightly without these conditions.
 The `ready` and `nightly-test` labels select their pipelines independently. When both labels are present,
@@ -142,21 +157,22 @@ Use the schedule's **Run now** action to check the trigger before its next sched
 ### Accuracy jobs
 
 The nightly pipeline uses the `agentinfer-accuracy` Compose service and invokes pytest directly.
-Its two jobs run Claude, DSH, ZCode, and JiuwenSwarm for baseline and AgentInfer respectively,
-each with one serve startup. Full agent coverage means eight cases, with two tasks in each case;
-it does not select the entire SWE-bench Verified dataset.
+Its two jobs run Claude, DSH, and ZCode for baseline and AgentInfer respectively,
+each with one serve startup. Nightly covers six cases, with two tasks in each case;
+JiuwenSwarm runs only in ready CI. Nightly does not select the entire SWE-bench Verified dataset.
 Inside that container, run one group with:
 
 ```bash
 pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k baseline \
+  -m "L20 and cards_2 and nightly" \
   --correctness-ci --benchmark-run-as-user test-user \
   --correctness-evaluation-config /opt/agentbench/evaluation.yaml
 ```
 
 Replace `baseline` with `agentinfer` for the other group. Use `-k dsh` to run just DSH in both groups.
 `--correctness-ci` requires root in the accuracy container. Its fixtures prepare Docker access, runtime checks,
-the shared model cache, and dependency records. The requested benchmark user is prepared for `plan-subagent`;
-Jiuwen's `code.normal` profile continues to run as root. Manual runs omit this flag.
+the shared model cache, and dependency records. The requested benchmark user is prepared for `plan-subagent`.
+Manual runs omit `--correctness-ci`.
 The evaluation config overrides the loaded case in memory; the JSON files are preserved.
 The pipeline uploads shared invocation logs, complete benchmark/scoring artifacts per agent and scenario,
 and the corresponding exported score summaries.
@@ -165,12 +181,6 @@ configuration in `test-nightly.yml`; job-level plugins override the hardware pre
 The pytest command names its test target and group selector. Each job automatically saves `pytest.log` under
 `tests/run/acc/<scenario>-<timestamp>/`. Selecting just one agent uses that agent's name in place of the scenario.
 Explicit log paths take precedence. JUnit output is generated only when requested with `--junitxml`.
-
-Jiuwen runs `jiuwenbox-server` as a local process in the benchmark environment. The CI preflight checks
-that its execution account can create the required bubblewrap PID/user namespaces before its benchmark starts.
-It also rejects completed runs whose `jiuwenbox-server.stderr.log` contains `bwrap: Can't mount proc`.
-The accuracy suite uses the existing agent adapters without extra tool filtering or sandbox path mappings.
-Unexpected confirmation events still fail the task.
 
 ## Result directories
 
@@ -209,8 +219,8 @@ This directory contains `pytest.log`, `<agent>/*-requirements.txt` with `--corre
 `<scenario>/vllm-logs/` for shared workers. It is printed as `[correctness] artifacts=...`.
 Manual and CI runs use the same layout. The JSON's `result_root` sets the raw run base directory;
 cases in one invocation must share it. Score exports use `tests/result/acc/`.
-`--collect-only` does not create artifact directories. Generated `tests/run/` and `tests/result/` trees are excluded
-from pytest discovery. Existing functional/performance suites retain their current output paths.
+`--collect-only` does not create artifact directories. Existing functional/performance suites retain their
+current output paths.
 Explicit `--log-file` and `--junitxml` paths take precedence over the automatic layout.
 When running BenchKit directly, use `--result-dir` to select the run directory explicitly.
 

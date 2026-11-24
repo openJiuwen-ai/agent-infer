@@ -7,8 +7,6 @@ import pytest
 
 from tests.helpers.marks import validate_marks
 
-collect_ignore = ["run", "result"]
-
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

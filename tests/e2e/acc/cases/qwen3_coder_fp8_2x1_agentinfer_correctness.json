@@ -3,7 +3,8 @@
   "scenario": "agentinfer",
   "mark": {
     "hardware": "L20",
-    "num_cards": 2
+    "num_cards": 2,
+    "ci": "nightly"
   },
   "description": "Qwen3-Coder FP8 on 2x L20, agentinfer: shared serve for four agents with automatic SWE-bench scoring",
   "serve_env": {},
@@ -116,6 +117,9 @@
       "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
       "agent-executable": "jiuwenswarm",
       "agent-profile": "code.normal",
+      "mark": {
+        "ci": "ready"
+      },
       "task-num": 2,
       "max-concurrency": 1,
       "timeout": 3600,
