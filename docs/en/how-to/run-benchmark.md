@@ -1,7 +1,7 @@
 # Run a Benchmark
 
-This guide compares a cold upstream vLLM async scheduler with the AgentInfer Progress-TTL agent-aware scheduler using
-the same Claude Code workload. BenchKit records both arms through the same Request Proxy to avoid observation-path bias.
+This guide covers installation and benchmark execution for Claude Code, JiuwenSwarm, DSH, and ZCode.
+BenchKit records model requests through the Request Proxy and saves task results, logs, and code patches.
 It also covers SWE-bench Verified correctness evaluation, including automatic scoring after a run.
 
 ## Prepare the Environment
@@ -9,9 +9,9 @@ It also covers SWE-bench Verified correctness evaluation, including automatic sc
 The workflow requires:
 
 - Linux, Python 3.10 or later, and vLLM 0.23.0.
-- CUDA GPUs capable of running the target model; the script defaults to two tensor-parallel workers.
-- Claude Code, tmux, and Git, with Claude Code authentication completed.
-- A model that supports Anthropic `POST /v1/messages`.
+- CUDA GPUs capable of running the target model.
+- Git and the CLI and runtime dependencies of your selected agent.
+- A model service with tool calling: `/v1/messages` for Claude Code, `/v1/chat/completions` for the other three agents.
 
 Run Claude's `plan-subagent` profile as a non-root user (`id -u` must not be `0`). This profile uses
 `--permission-mode bypassPermissions`; Claude rejects root/sudo execution with
@@ -37,6 +37,152 @@ python -m pip install "vllm==0.23.0"
 python -m pip install -e .
 ```
 
+## Install an Agent
+
+Install only the agent you need. These commands target Linux Bash. Agent installation does not install the test
+dependencies of benchmark tasks. AgentInfer and the agent may use separate environments; pass the full executable
+path with `--agent-executable`.
+
+| Agent | Adapter requirements | Additional dependencies |
+| --- | --- | --- |
+| Claude Code | No pinned CLI version; record `claude --version` and validate one task first | tmux, bubblewrap, socat |
+| JiuwenSwarm | `code.normal`; CLI capability checks, no pinned package version | Separate Python environment, jiuwenbox-server, bubblewrap |
+| DSH | Exactly `0.2.1-rc.2`; other versions fail preflight | Node `^22.19.0` or `>=24`, a working local sandbox |
+| ZCode | Exactly CLI `0.17.1`, built from the source commit below | Node `24.14.0`, pnpm `10.33.2`, an external sandbox or container for benchmarks |
+
+### System Dependencies and Node
+
+On Ubuntu/Debian, install the following packages; use equivalent packages on other distributions.
+Claude uses `tmux` and `socat`. The `bubblewrap` package provides `bwrap`; build tools support native dependencies.
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git curl tmux bubblewrap socat build-essential pkg-config python3-dev python3-venv
+```
+
+DSH and ZCode can both use Node `24.14.0`. The following uses the
+[official nvm installer](https://github.com/nvm-sh/nvm#install--update-script); skip the first line if nvm is installed:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.41.0/install.sh | bash
+export NVM_DIR="$HOME/.nvm"
+source "$NVM_DIR/nvm.sh"
+nvm install 24.14.0
+nvm use 24.14.0
+node --version
+npm --version
+```
+
+Use this Node in the terminal that runs the benchmark. Activating a Python environment does not switch Node.
+DSH preflight resolves `node` through `PATH`, even when the DSH executable uses an absolute path.
+
+### Claude Code
+
+Use the [official native installer](https://code.claude.com/docs/en/setup#install-a-specific-version),
+which does not require Node:
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash -s stable
+export PATH="$HOME/.local/bin:$PATH"
+CLAUDE_EXECUTABLE="$(command -v claude)"
+"$CLAUDE_EXECUTABLE" --version
+tmux -V
+bwrap --version
+socat -V
+```
+
+Use `stable` for an initial installation. For reproducible runs, replace it with a validated version number and
+save the version output. This adapter does not pin Claude; installation alone does not establish compatibility.
+For unauthenticated local vLLM, the adapter supplies a placeholder credential, so Anthropic login is unnecessary.
+Provide credentials when the backend requires them. Run `plan-subagent` as a non-root user because it uses
+`bypassPermissions`.
+
+### JiuwenSwarm
+
+The official Python package is [`workswarm`](https://pypi.org/project/workswarm/0.2.8/).
+This installation example pins `0.2.8`, whose published package requires Python `>=3.11,<3.14`.
+It assumes Python 3.12 is already installed:
+
+```bash
+JIUWEN_VENV="$HOME/.venvs/agentbench-jiuwenswarm"
+python3.12 -m venv "$JIUWEN_VENV"
+"$JIUWEN_VENV/bin/python" -m pip install "workswarm==0.2.8"
+"$JIUWEN_VENV/bin/python" -m pip show workswarm
+JIUWEN_EXECUTABLE="$JIUWEN_VENV/bin/jiuwenswarm"
+"$JIUWEN_EXECUTABLE" --help
+"$JIUWEN_EXECUTABLE" chat --help
+test -x "$JIUWEN_VENV/bin/jiuwenswarm-init"
+test -x "$JIUWEN_VENV/bin/jiuwenswarm-start"
+"$JIUWEN_VENV/bin/jiuwenbox-server" --help
+```
+
+See the [official JiuwenSwarm repository](https://github.com/openJiuwen-ai/jiuwenswarm) for package and entry points.
+`chat --help` must include `--jsonl`, `--mode`, `--session`, `--cwd`, `--project-dir`, `--gateway-url`, and `--timeout`.
+If an entry point or option is missing, select a version that provides it. This guide has not validated `0.2.8`
+with a real benchmark task.
+
+Pass `"$JIUWEN_EXECUTABLE"` to `--agent-executable`. AgentBench initializes each task, writes isolated configuration,
+and starts its services. Do not run `jiuwenswarm-init` or `jiuwenswarm-start` manually beforehand.
+
+### DSH
+
+Prepare Node as above, then install the supported
+[`@deepseek-ai/dsh@0.2.1-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.2.1-rc.2):
+
+```bash
+node --version
+npm install --global @deepseek-ai/dsh@0.2.1-rc.2
+DSH_EXECUTABLE="$(command -v dsh)"
+"$DSH_EXECUTABLE" --version
+"$DSH_EXECUTABLE" --profile headless --help
+```
+
+The version must be `0.2.1-rc.2`; headless help must include JSON output, stdin, and session options.
+AgentBench also checks sandbox operation before execution. Python `zstandard`, needed to read session artifacts,
+is an AgentInfer dependency and belongs in the Python environment running the benchmark.
+
+### Build ZCode and Create a Launcher
+
+With Node `24.14.0` selected, follow the [build instructions for the supported ZCode source][zcode-build]:
+
+```bash
+node --version
+npm install --global pnpm@10.33.2
+pnpm --version
+ZCODE_SOURCE="$HOME/.local/src/agentbench-zcode"
+mkdir -p "$HOME/.local/src"
+git clone https://github.com/zai-org/ZCode.git "$ZCODE_SOURCE"
+git -C "$ZCODE_SOURCE" checkout --detach a9fe401eede6e6e5e01be9048679c206fe6f02d9
+(
+  cd "$ZCODE_SOURCE"
+  pnpm install --frozen-lockfile
+  pnpm --filter '@zcode/cli...' build
+)
+```
+
+Installation downloads dependencies and runtime resources; do not skip install scripts.
+Keep the source checkout and adjacent resources after building, rather than copying only `zcode.cjs`.
+Create a launcher that fixes the absolute paths to Node and the bundle:
+
+```bash
+ZCODE_NODE="$(command -v node)"
+ZCODE_CLI="$ZCODE_SOURCE/apps/zcode-cli/packages/cli/dist/zcode.cjs"
+ZCODE_EXECUTABLE="$HOME/.local/bin/agentbench-zcode"
+mkdir -p "$HOME/.local/bin"
+printf '#!/bin/bash\nexec %q %q "$@"\n' "$ZCODE_NODE" "$ZCODE_CLI" > "$ZCODE_EXECUTABLE"
+chmod +x "$ZCODE_EXECUTABLE"
+"$ZCODE_EXECUTABLE" --version
+git -C "$ZCODE_SOURCE" rev-parse HEAD
+sha256sum "$ZCODE_CLI"
+```
+
+The version must print `0.17.1`; the repository version `3.17.2` is not the CLI version.
+Pass `"$ZCODE_EXECUTABLE"` to `--agent-executable`. This launcher preserves `NODE_OPTIONS` and forwards all arguments
+so the adapter can load long prompts. It only launches ZCode; use an external sandbox or container for benchmarks.
+See [ZCode](#zcode) below for version checks and execution limits.
+
+[zcode-build]: https://github.com/zai-org/ZCode/blob/a9fe401eede6e6e5e01be9048679c206fe6f02d9/apps/zcode-cli/docs/usage/01-quickstart.md
+
 ## Prepare SWE-bench Data
 
 ```bash
@@ -45,74 +191,6 @@ vllm bench serve --agentinfer prepare swebench \
 ```
 
 The command creates `instances.jsonl`, `task-lists/default.txt`, and `manifest.json`.
-
-## Run One Cold Comparison
-
-The repository script starts the baseline, runs the workload, stops the service completely, starts the candidate,
-and prints the comparison report:
-
-```bash
-REPO=$PWD \
-VENV=$PWD/.venv \
-MODEL=Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8 \
-TASK_NUM=1 \
-CONCURRENCY=1 \
-bash tests/agentbench/run-scheduler-e2e-compare.sh
-```
-
-Set `TENSOR_PARALLEL_SIZE=1` when the model fits on one GPU. Set `VLLM_EXTRA_ARGS` to append deployment-specific vLLM
-arguments.
-
-The script performs this sequence:
-
-1. Starts the baseline with `vllm.v1.core.sched.async_scheduler.AsyncScheduler` and `--async-scheduling`.
-2. Runs BenchKit with requests sent directly to the baseline vLLM server.
-3. Stops the baseline process to clear process-local metrics and Prefix Cache state.
-4. Starts the candidate with `AgentCacheAsyncSchedulerBridge`, the Progress-TTL controller, and lifecycle middleware.
-5. Runs the same tasks, model, concurrency, and configuration, then compares the two finalized result directories.
-
-If the model or virtual environment is elsewhere, set `MODEL` and `VENV` to absolute paths. The script rejects an
-existing tmux session or lifecycle socket so an earlier run cannot contaminate the experiment.
-
-## Scale Up the Experiment
-
-After the one-task smoke run succeeds, increase task count and concurrency:
-
-```bash
-REPO=$PWD \
-VENV=$PWD/.venv \
-MODEL=Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8 \
-TASK_NUM=64 \
-CONCURRENCY=32 \
-bash tests/agentbench/run-scheduler-e2e-compare.sh
-```
-
-Use repeated cold runs for release decisions. Give every run a new result directory and keep the commit, task set and
-order, model, agent profile, timeouts, tensor parallelism, vLLM arguments, and hardware identical.
-
-## Compare Again or Summarize
-
-Compare one or more finalized runs:
-
-```bash
-vllm bench serve --agentinfer compare \
-  --baseline results/vllm/run1 results/vllm/run2 \
-  --candidate results/agentinfer/run1 results/agentinfer/run2
-```
-
-Export run summaries to CSV:
-
-```bash
-vllm bench serve --agentinfer summarize \
-  results/agentinfer/run1 results/agentinfer/run2 \
-  --output-csv combined-summary.csv
-```
-
-See [Benchmark CLI](../reference/benchmark-cli.md) for command options,
-[Benchmark configuration](../reference/benchmark-config.md) for YAML fields, and
-[Run artifacts](../reference/run-artifacts.md) for output files. `completed` means that the agent process completed,
-not that its patch is correct; read [Benchmark methodology](../explanation/benchmark-methodology.md) before making a
-release claim.
 
 ## Evaluate SWE-bench Verified correctness
 
@@ -239,32 +317,22 @@ evidence). This is a fixed-task check, not a statistical capability claim.
 See the [official guide](https://www.swebench.com/SWE-bench/guides/evaluation/)
 and [benchmark methodology](../explanation/benchmark-methodology.md).
 
-## Select an agent and transparent Router
+## Select an Agent and Transparent Router
 
 The default example is `agentinfer/agentbench/configs/swebench_vllm.yaml`. Claude Code supports `single` and
-`plan-subagent` and requires the Claude CLI and tmux. JiuwenSwarm supports `code.normal` and requires its CLI; DSH
-supports `single` and `plan-subagent` and requires the DeepSeek Harness CLI. Change the runtime, profile,
+`plan-subagent` and requires the Claude CLI and tmux. JiuwenSwarm supports `code.normal`; DSH and ZCode support
+`single` and `plan-subagent`. [Install the CLI](#install-an-agent), then change the runtime, profile,
 executable, and endpoint together:
 
 ```bash
 vllm bench serve --agentinfer run \
   --config agentinfer/agentbench/configs/swebench_vllm.yaml \
   --agent-type jiuwenswarm --agent-profile code.normal \
-  --agent-executable jiuwenswarm --endpoint /v1/chat/completions \
-  --task-num 1 --result-dir results/jiuwenswarm-smoke
+  --agent-executable "$JIUWEN_EXECUTABLE" --endpoint /v1/chat/completions \
+  --task-num 1 --result-dir results/jiuwenswarm-run
 ```
 
-DSH live runs require **0.2.1-rc.2** and Node `^22.19.0 || >=24`.
-Put a supported Node on `PATH` first; activating a Python virtual environment does not switch Node.
-DSH and runtime preflight look up `node` through `PATH` even when `--agent-executable` is an absolute path.
-Install the required DSH version in the external environment and check versions:
-
-```bash
-node --version
-npm install --global @deepseek-ai/dsh@0.2.1-rc.2
-DSH_EXECUTABLE="$(command -v dsh)"
-"$DSH_EXECUTABLE" --version
-```
+See [DSH](#dsh) above for installation and version requirements. The examples use the saved `DSH_EXECUTABLE`.
 
 Prepare the SWE-bench data and vLLM service described above, then set dataset paths, backend address, and model name
 in `swebench_vllm.yaml`. Merge these fields into that YAML, keeping `agent:` as an uncommented top-level section:
@@ -301,22 +369,10 @@ The `plan-subagent` profile enforces initial plan mode, read-only child tools, a
 The lead must wait for every child to complete successfully before submitting a plan for approval.
 Only explicit plan-review questions are approved automatically.
 
-The lead may execute at most 200 steps (`agent_step_limit`); Explore subagents may execute at most 100 steps.
-A fourth identical read within the last eight tool calls
-(same file, offset, and limit) stops the task. These limits produce `subagent_step_limit` and `subagent_read_loop`;
-other unsuccessful child endings produce `subagent_failed`.
-If the lead tries to finish in plan mode after all children have completed, it receives one recovery reminder
-to submit its plan. Finishing again without approval produces `plan_not_approved`. The reminder does not exit
-plan mode or approve the plan. Model length truncation is reported as `max_tokens`.
-For both roles, four equivalent argument-validation errors or inactive-plan exit errors from the same tool
-within the last eight tool results produce `validation_error_loop`. Successful calls age old errors out of the window.
-Calling `exit_plan_mode` after plan mode closes returns guidance to continue implementation or reply with the final
-result; it is not a task-completion tool.
-These controls run on DSH lifecycle events; the overall task timeout still applies.
-
-DSH uses pi-ai Chat Completions through the Request Proxy and receives the prompt on stdin.
-Runtime versions and the npm lockfile hash are recorded in `evidence/dsh-runtime.json`.
-DSH runs currently reject a nonempty `backend.api_key_env`.
+Adjust task count and task concurrency with `--task-num` and `--max-concurrency`; use a new result directory each time.
+DSH currently supports only unauthenticated model services; leave `backend.api_key_env` empty.
+Runtime versions are recorded in `evidence/dsh-runtime.json`. See [Run artifacts](../reference/run-artifacts.md)
+for step limits and loop termination reasons.
 
 The default DSH cleanup budget is 10 seconds. Configure it through YAML's `experiment.cleanup_timeout_seconds`.
 For example, increase it for large logs or slow storage:
@@ -326,83 +382,37 @@ experiment:
   cleanup_timeout_seconds: 60.0
 ```
 
-Log collection, patch flush waiting, and patch export share this budget. Flush waiting is limited to the smaller of
-`patch_flush_seconds` and half the budget. An exhausted budget is reported as `cleanup_timeout`; existing execution
-timeout or cancellation reasons are preserved. Cleanup details are recorded in
-`tasks/<instance_id>/dsh-run-status.json`; successful completion still requires validated session evidence.
+Log collection, patch flush waiting, and patch export share this budget. An exhausted budget is reported as
+`cleanup_timeout`; see `tasks/<instance_id>/dsh-run-status.json` for details.
 
 For Router runs use `swebench_agentinfer.yaml`, with `backend.base_url` pointing to the Router and
 `backend.metrics_url` directly to vLLM. The Router forwards transparently without the old registration/cleanup API.
 
-## Historical DSH execution record (2026-10-29)
-
-The run `test-dsh-20261029-102951` exercised 16 SWE-bench Verified Astropy tasks
-at task concurrency 8, with a 3600-second per-task timeout and no overall timeout.
-It used DSH 0.2.1-rc.2, Node 24.22.1, Python 3.12.13 and
-Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8 in the plan-subagent profile.
-
-| Observation | Result |
-| --- | --- |
-| Agent tasks completed / failed | 14 / 2 |
-| Tasks with exported patches | 14 |
-| Run wall time | 3614.25 seconds |
-| Model requests successful / failed | 1971 / 1 |
-| Request Proxy TTFT mean / P95 | 1.201 / 2.887 seconds |
-
-Task 13033 timed out after a child repeatedly read the same source; its final
-request was cancelled during cleanup. Task 13579 failed because the lead ended
-without completing plan approval. These are observations from that dated run,
-not outcomes guaranteed by the current runtime safeguards.
-
-No official correctness evaluation was available for this run. The 87.5% agent
-completion rate is not a SWE-bench resolved rate, and its long-tail behavior does
-not establish normal-workload scaling. The [Chinese run record](../../zh/how-to/run-benchmark.md)
-retains the full parameters, task evidence and reproduction example.
-
-For captured traces, see [Trace Replay](run-trace-replay.md).
-
-## Local smoke validation
-
-Run `python -m pytest tests/agentbench/test_benchmark_smoke.py -q` without a model service to validate the
-production CLI, configuration, workspace, dispatch, request proxy, and finalization. The local test runtime and
-loopback backend do not establish model quality or performance. The scheduler comparison script uses fields
-supported by the destination controller factory.
-
 ## ZCode
 
+Complete the [source build and launcher setup](#build-zcode-and-create-a-launcher) above.
 The [RFC #71](https://github.com/openJiuwen-ai/agent-infer/issues/71) adapter supports `single` and
-`plan-subagent` on Linux. Build source commit `a9fe401eede6e6e5e01be9048679c206fe6f02d9`
-(CLI `0.17.1`) with Node `24.14.0` and pnpm `10.33.2`, following ZCode's build instructions.
-Point `agent.executable` at an executable launcher that runs the built `zcode.cjs` with a fixed Node path
-and forwards all arguments.
-The launcher must preserve `NODE_OPTIONS`. A Node preload module reads `prompt.txt` inside the process,
-avoiding the OS limit on a single command argument; preflight verifies this capability.
-Native SEA executables are not supported by this launch path.
+`plan-subagent` on Linux. Native SEA executables are not supported by this launch path.
 
-Only CLI `0.17.1` is currently supported. Preflight requires an exact `--version` match; other versions,
-including `0.17.10`, fail with `Expected ZCode CLI 0.17.1, got ...` before any task starts.
-Rebuild using the verified source and toolchain above, or validate compatibility before updating the supported
-version. Do not bypass the check. Preflight verifies the CLI version and required capabilities, **not the Git
-commit that produced the bundle**. `launcher_sha256` hashes the launcher, not `zcode.cjs`; retain the actual
-bundle hash and build provenance when reproducing experiments. All CLI probes use a temporary working directory,
-private HOME and ZCode state paths, excluding inherited personal configuration and credentials.
+Preflight requires exactly CLI `0.17.1`. Other versions fail with `Expected ZCode CLI 0.17.1, got ...`
+before tasks start. It checks the version and required capabilities, **not the Git commit that produced the bundle**.
+`launcher_sha256` hashes the launcher; also retain the `zcode.cjs` hash and source version for reproducibility.
+Preflight uses a temporary working directory, private HOME, and isolated ZCode state paths.
 
 ```bash
 vllm bench serve --agentinfer run \
   --config agentinfer/agentbench/configs/swebench_vllm.yaml \
   --agent-type zcode --agent-profile single \
-  --agent-executable /absolute/path/to/zcode-launcher \
+  --agent-executable "$ZCODE_EXECUTABLE" \
   --endpoint /v1/chat/completions --task-num 1 --result-dir results/zcode-single
 ```
 
 Set `context_window` and `max_tokens` to the served model's limits. Only unauthenticated local backends
-are supported; leave `backend.api_key_env` empty. Each task has independent ZCode state and a local adapter
-endpoint that attaches canonical identity before forwarding to the Request Proxy. This endpoint also owns
-synchronous Hook decisions, using the official CLI without patching ZCode.
+are supported; leave `backend.api_key_env` empty. Each task has independent configuration, state, and logs.
 
 `single` disables delegation. `plan-subagent` defaults to one read-only Explore delegation before plan approval
-and lead implementation. Explore exposes and permits only Read, Glob and Grep, returning its report
-as final text; task Hooks handle the lead's tool policy and approvals. Background work is disabled.
+and lead implementation. Explore can use only Read, Glob, and Grep, with at most eight tool rounds before
+returning a report. Background work is disabled in both profiles.
 Permission modes are not OS sandboxes; use an
 external sandbox or container for production benchmarks.
 
@@ -418,7 +428,8 @@ agent:
 ```
 
 This permits up to four accepted exploration launches per task, with at most two running together.
-Both limits default to 1; the lead need not use the entire budget. Launch children in parallel in one response,
+Both limits default to 1; the lead need not use the entire budget. The concurrency limit must not exceed the total limit.
+Launch children in parallel in one response,
 or in successive batches. Excess calls are rejected before execution, without queuing. Failed launches still
 consume the total budget. Once a report is available, the lead may explore further or submit a plan;
 approval requires all accepted children to finish without failure. No delegation is allowed after approval.
@@ -430,21 +441,30 @@ Task artifacts include raw `transcript.jsonl`, `zcode.stderr.log`, `zcode-hooks.
 `zcode-config.json` and `zcode-run-status.json`. Patches use the existing `model.patch` format and exclude
 only the current session's generated plan file. Execution completion is separate from independent scoring.
 
-Native ZCode `turn.failed` details are preserved as `native_error` in `zcode-run-status.json`;
-context capacity/compaction failures use `model_context_exceeded`. The advertised tools follow the
-planning phase and constrain delegation to the task-owned read-only profile. Explore has eight tool
-rounds, followed by a report without tools. When the child concurrency limit exceeds one, initial exploration
-uses `tool_choice: required` and `parallel_tool_calls: true` to permit multiple delegations in one response.
-Single-child delegation and approval retain named tool choice. Required choice means at least one call;
-it does not force the model to fill all slots. Verify actual overlap and peak concurrency in the artifacts;
-conversation messages are preserved. Prepare the task's test dependencies in its execution environment
-before starting the agent.
-Preflight requires the exact CLI version `0.17.1`. Nonzero exits without a more specific error are classified
-as `harness_error` rather than an unapproved plan.
-The model SSE stream emits a comment heartbeat every 15 idle seconds to prevent premature HTTP body timeouts.
-Heartbeats produce no model content; task deadlines and ZCode's model progress checks remain active.
-`zcode-run-status.json` records `prompt_loaded`, `execution_phase`, `model_stream_error_count` and
-`last_model_error`, preserving earlier SDK stream errors and their log location even when the task times out.
-Malformed auxiliary log records, missing fields and read errors are reported in `model_log_warnings` without
-overriding task outcomes or cancellation. Error counts cover successfully parsed records only; a zero count with
-parsing warnings does not establish that no model error occurred.
+For failures, inspect `native_error`, `last_model_error`, and `model_log_warnings` in `zcode-run-status.json`,
+which identify native errors, model request errors, and log parsing issues. Then consult the raw logs.
+A zero error count with parsing warnings does not establish that no model error occurred.
+
+## Compare or Summarize Results
+
+Compare one or more finalized runs:
+
+```bash
+vllm bench serve --agentinfer compare \
+  --baseline results/vllm/run1 results/vllm/run2 \
+  --candidate results/agentinfer/run1 results/agentinfer/run2
+```
+
+Export run summaries to CSV:
+
+```bash
+vllm bench serve --agentinfer summarize \
+  results/agentinfer/run1 results/agentinfer/run2 \
+  --output-csv combined-summary.csv
+```
+
+See [Benchmark CLI](../reference/benchmark-cli.md) for command options,
+[Benchmark configuration](../reference/benchmark-config.md) for YAML fields, and
+[Run artifacts](../reference/run-artifacts.md) for output files. `completed` means that the agent process completed,
+not that its patch is correct; read [Benchmark methodology](../explanation/benchmark-methodology.md) before making a
+release claim.
