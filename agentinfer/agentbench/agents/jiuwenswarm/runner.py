@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import signal
 import time
@@ -16,6 +17,8 @@ from ...benchkit.workspace import export_patch
 from ..contracts import AgentRunOutcome, AgentRunRequest, AgentRunResult, TerminationReason
 from .instance import JiuwenInstance
 from .profiles import get_profile
+
+logger = logging.getLogger(__name__)
 
 
 async def run_jiuwenswarm(request: AgentRunRequest) -> AgentRunResult:
@@ -120,7 +123,8 @@ async def run_jiuwenswarm(request: AgentRunRequest) -> AgentRunResult:
         try:
             await asyncio.shield(instance.stop())
         except Exception:
-            if cancellation is None:
+            logger.warning("JiuwenSwarm cleanup failed for %s", request.session_id, exc_info=True)
+            if result.outcome is AgentRunOutcome.COMPLETED:
                 result.outcome = AgentRunOutcome.FAILED
                 result.termination_reason = TerminationReason.HARNESS_ERROR
 

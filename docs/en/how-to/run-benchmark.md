@@ -241,16 +241,16 @@ and [benchmark methodology](../explanation/benchmark-methodology.md).
 
 ## Select an agent and transparent Router
 
-The default example is `agentinfer/agentbench/configs/swebench_vllm.yaml`. Claude Code supports `single` and
-`plan-subagent` and requires the Claude CLI and tmux. JiuwenSwarm supports `code.normal` and requires its CLI; DSH
-supports `single` and `plan-subagent` and requires the DeepSeek Harness CLI. Change the runtime, profile,
-executable, and endpoint together:
+The default example, `agentinfer/agentbench/configs/swebench_vllm.yaml`, runs Claude Code with `plan-subagent`.
+Claude Code also supports `single` and requires the Claude CLI and tmux. The same YAML includes the commented
+JiuwenSwarm settings. This command selects WorkSwarm team mode for one task, with up to eight child launches
+and four children executing model or tool work at a time. For single-agent mode, use `--agent-profile agent.code.normal`.
 
 ```bash
 vllm bench serve --agentinfer run \
   --config agentinfer/agentbench/configs/swebench_vllm.yaml \
-  --agent-type jiuwenswarm --agent-profile agent.code.normal \
-  --agent-executable jiuwenswarm --endpoint /v1/chat/completions \
+  --agent-type jiuwenswarm --agent-profile team.code.normal --agent-executable jiuwenswarm \
+  --endpoint /v1/chat/completions --max-subagents 8 --max-concurrent-subagents 4 \
   --task-num 1 --result-dir results/jiuwenswarm-smoke
 ```
 
@@ -451,7 +451,8 @@ parsing warnings does not establish that no model error occurred.
 
 ### WorkSwarm 0.2.8 Code modes
 
-Install `workswarm==0.2.8` (`openjiuwen==0.1.20`, Python 3.11–3.13) and AgentInfer in the agent environment.
+Run JiuwenSwarm on Linux with `bwrap`. Install `workswarm==0.2.8` (`openjiuwen==0.1.20`, Python 3.11–3.13)
+and AgentInfer in the agent environment.
 The executable remains `jiuwenswarm`. The aliases `code.normal` and `code.team` normalize to
 `agent.code.normal` and `team.code.normal`. Team members and their descendants use the configured model and workspace.
 
@@ -459,4 +460,21 @@ Both profiles accept `--max-subagents N --max-concurrent-subagents C` (defaults 
 N counts cumulative successful child launches across the entire task, including teammates and descendants,
 excluding the main agent/leader. Closing a child does not refund a launch; resuming an instance does not count again.
 C limits distinct children executing model/tool work. Idle, queued, and child-waiting operations consume no slot.
-A quota denial is returned to the calling tool so the agent can continue the work itself.
+Team members reserve a launch when registered. A member that fails to start releases the reservation.
+A quota denial is returned to the calling tool so it can choose how to handle the remaining work.
+
+The model request records whether the parent is waiting without doing other work at the time of the child's request.
+It also marks teammates and asynchronous subagents as able to receive later work.
+
+Run adapter tests without a model service using `python -m pytest tests/agentbench/agents/jiuwenswarm -q`.
+The following command exercises the real runtime with a local simulated model.
+
+```bash
+AGENTBENCH_JIUWEN_NATIVE=1 python -m pytest tests/e2e/function/agentbench/jiuwenswarm/test_native_runtime.py -q
+```
+
+For the live SWE-bench test, set `AGENTBENCH_VLLM_URL`, `AGENTBENCH_VLLM_MODEL`, and
+`AGENTBENCH_JIUWENSWARM_EXECUTABLE`. The test uses `swebench_vllm.yaml` and selects the JiuwenSwarm settings
+through CLI flags. Set `AGENTBENCH_JIUWEN_TEST_CONFIG` to use a different YAML file.
+Prepare the dataset and official evaluation environment before running `test_live_swebench.py`. Both modes
+use the first task of the same selection. Pytest skips the test when the model URL or name is unavailable.

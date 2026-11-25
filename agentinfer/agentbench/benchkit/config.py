@@ -73,8 +73,7 @@ class AgentConfig(StrictModel):
             profile = get_runtime(self.type).get_profile(self.profile)
         except ValueError as exc:
             raise ValueError(f"agent.profile {self.profile!r} is invalid for agent.type {self.type!r}") from exc
-        if self.type == "jiuwenswarm":
-            self.profile = profile.name
+        self.profile = profile.name
         # Defaults are also serialized by CLI overrides for profiles without limit support.
         if (self.max_subagents, self.max_concurrent_subagents) != (1, 1) and not profile.supports_subagent_limits:
             raise ValueError(

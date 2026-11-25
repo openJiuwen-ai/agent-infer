@@ -3,23 +3,28 @@
 
 """WorkSwarm 0.2.8 model identity and task execution integration."""
 
-from importlib.metadata import version
+from typing import Any
 
-from jiuwenswarm.agents.harness.common.tools import command_tools
 from openjiuwen.core.foundation.llm.model_clients.openai_model_client import OpenAIModelClient
 
-from agentinfer.agentbench.agents.jiuwenswarm.hooks import current_actor, install
+from agentinfer.agentbench.agents.jiuwenswarm.hooks import current_actor, install, record_extension_ready
 from agentinfer.scheduling.identity import AgentIdentity, encode_agent_identity
-
-install()
 
 
 async def _disabled_mcp_exec_command(**_kwargs: object) -> str:
-    return f"[ERROR]: mcp_exec_command is disabled under AgentBench isolation (workswarm {version('workswarm')})."
+    return "[ERROR]: mcp_exec_command is disabled under AgentBench isolation."
 
 
-# Without a sandbox execution binding this tool can run on the host.
-command_tools.mcp_exec_command._func = _disabled_mcp_exec_command
+def _seal_command_tool() -> None:
+    try:
+        from jiuwenswarm.agents.harness.common.tools import command_tools
+    except ImportError as exc:
+        raise RuntimeError("Cannot load mcp_exec_command under AgentBench isolation") from exc
+
+    tool = getattr(command_tools, "mcp_exec_command", None)
+    if tool is None or not callable(getattr(tool, "_func", None)) or not callable(getattr(tool, "invoke", None)):
+        raise RuntimeError("Cannot disable mcp_exec_command under AgentBench isolation: unexpected tool interface")
+    tool._func = _disabled_mcp_exec_command
 
 
 class AgentBenchAffinityModelClient(OpenAIModelClient):
@@ -27,7 +32,7 @@ class AgentBenchAffinityModelClient(OpenAIModelClient):
 
     __client_name__ = "AgentBenchAffinity"
 
-    def _build_request_params(self, **kwargs):
+    def _build_request_params(self, **kwargs: Any) -> dict[str, Any]:
         params = super()._build_request_params(**kwargs)
         actor = current_actor()
         root = actor.budget.root
@@ -52,3 +57,8 @@ class AgentBenchAffinityModelClient(OpenAIModelClient):
         }
         params["extra_body"] = extra_body
         return params
+
+
+_seal_command_tool()
+install()
+record_extension_ready()

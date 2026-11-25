@@ -188,6 +188,7 @@ def test_init_is_explicitly_non_interactive(
     assert captured["kwargs"]["stdin"] is asyncio.subprocess.DEVNULL
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="the WorkSwarm benchmark requires Linux abstract sockets")
 def test_wait_ready_rejects_another_tasks_listener_and_follows_fallback(tmp_path, monkeypatch):
     from agentinfer.agentbench.agents.jiuwenswarm import instance as instance_module
 
@@ -251,6 +252,52 @@ def test_wait_ready_rejects_another_tasks_listener_and_follows_fallback(tmp_path
         claim = instance_module._claim_gateway(gateway)
         assert claim is not None
         claim.close()
+
+
+def test_extension_readiness_requires_the_owned_worker_marker(tmp_path, monkeypatch):
+    from agentinfer.agentbench.agents.jiuwenswarm import instance as instance_module
+
+    instance = _instance(tmp_path)
+    instance._runtime_dir = SimpleNamespace(name=str(tmp_path))
+    instance._process = SimpleNamespace(pid=123, returncode=None)
+    instance.environment["JIUWENSWARM_RUNTIME_SOCKET"] = str(tmp_path / "worker.sock")
+    worker = SimpleNamespace(pid=456)
+    monkeypatch.setattr(instance_module, "_service_children", lambda _: [])
+    monkeypatch.setattr(instance_module, "_find_runtime_worker", lambda *_: (worker, sys.executable))
+    monkeypatch.setattr(instance_module, "_STARTUP_TIMEOUT_SECONDS", 0.01)
+    (tmp_path / "extension-123.ready").touch()
+
+    with pytest.raises(RuntimeError, match="extension did not initialize"):
+        asyncio.run(instance._wait_worker_extension())
+
+    (tmp_path / "extension-456.ready").touch()
+    asyncio.run(instance._wait_worker_extension())
+    assert instance._runtime_worker == (worker, sys.executable)
+
+
+def test_worker_stop_uses_worker_interpreter_and_falls_back(tmp_path, monkeypatch):
+    from agentinfer.agentbench.agents.jiuwenswarm import instance as instance_module
+
+    instance = _instance(tmp_path)
+    instance.artifact_dir.mkdir()
+    instance.environment["JIUWENSWARM_RUNTIME_SOCKET"] = str(tmp_path / "worker.sock")
+    worker = SimpleNamespace(pid=456)
+    instance._runtime_worker = (worker, "/agent-env/bin/python3")
+    monkeypatch.setattr(instance_module, "_worker_alive", lambda _: True)
+    stopped_workers = []
+    monkeypatch.setattr(instance_module, "_stop_owned_worker", stopped_workers.append)
+
+    async def missing_interpreter(executable, *args, **kwargs):
+        assert executable == "/agent-env/bin/python3"
+        assert args[:2] == ("-I", "-c")
+        assert kwargs["cwd"] == instance.artifact_dir
+        raise FileNotFoundError("interpreter unavailable")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", missing_interpreter)
+    asyncio.run(instance._stop_runtime_worker())
+
+    assert stopped_workers == [worker]
+    assert "interpreter unavailable" in (instance.artifact_dir / "jiuwenswarm-worker-stop.log").read_text()
 
 
 def test_jiuwenbox_server_uses_supported_listen_flag(

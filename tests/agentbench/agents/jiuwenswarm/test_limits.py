@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 
 import asyncio
+import json
 
 import pytest
 
@@ -108,5 +109,60 @@ def test_transactions_do_not_follow_a_spawned_task_context():
         await task
         assert budget.launched == 1
         assert "one" in budget.actors and "failed-in-child" not in budget.actors
+
+    asyncio.run(scenario())
+
+
+def test_reserved_teammates_share_quota_with_subagents_and_rollback(tmp_path):
+    log = tmp_path / "limits.jsonl"
+
+    async def scenario():
+        budget = TaskBudget("root", 1, 1, log)
+        token = budget.reserve_teammate("member")
+        with pytest.raises(QuotaExceeded, match="1/1"):
+            budget.admit("child", budget.root)
+        budget.release_teammate("member", token)
+        budget.reserve_teammate("member")
+        with pytest.raises(RuntimeError), budget.transaction():
+            budget.admit("member-session", budget.root, teammate_id="member")
+            raise RuntimeError("startup failed")
+        assert budget.launched == 0
+        assert budget.teammate_reservation("member") is None
+        budget.admit("child", budget.root)
+        assert budget.launched == 1
+
+    asyncio.run(scenario())
+    events = [json.loads(line)["event"] for line in log.read_text().splitlines()]
+    assert events == ["quota_denied", "launch", "launch_failed", "launch"]
+
+
+@pytest.mark.parametrize("failure_event", ["work_start", "work_end"])
+def test_limits_log_failure_cannot_block_another_actor(tmp_path, failure_event):
+    log = tmp_path / "limits.jsonl"
+
+    async def scenario():
+        budget = TaskBudget("root", 2, 1, log)
+        first = budget.admit("first", budget.root)
+        second = budget.admit("second", budget.root)
+        waiting = asyncio.Event()
+
+        async def run_second():
+            waiting.set()
+            async with budget.executing(second):
+                assert budget.running == 1
+
+        def break_log():
+            log.unlink()
+            log.mkdir()
+
+        if failure_event == "work_start":
+            break_log()
+        async with budget.executing(first):
+            task = asyncio.create_task(run_second())
+            await waiting.wait()
+            if failure_event == "work_end":
+                break_log()
+        await asyncio.wait_for(task, 2)
+        assert budget.running == first.work == second.work == 0
 
     asyncio.run(scenario())

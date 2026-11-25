@@ -59,6 +59,7 @@ def native(tmp_path_factory):
 def backend():
     class Requests(list):
         team = False
+        team_members = ("worker",)
         step = 0
         block_children = False
         child_started = threading.Event()
@@ -100,17 +101,20 @@ def backend():
                             "enable_hitt": False,
                         },
                     ),
+                ]
+                actions.extend(
                     (
                         "spawn_teammate",
                         {
-                            "member_name": "worker",
-                            "display_name": "Worker",
+                            "member_name": member,
+                            "display_name": member.title(),
                             "desc": "Reply done",
                             "prompt": "Reply done and stop.",
                         },
-                    ),
-                    ("send_message", {"to": "worker", "content": "Reply done and stop."}),
-                ]
+                    )
+                    for member in requests.team_members
+                )
+                actions.append(("send_message", {"to": "worker", "content": "Reply done and stop."}))
                 if requests.step < len(actions):
                     name, arguments = actions[requests.step]
                     message = {
@@ -581,6 +585,66 @@ def test_child_session_overrides_inherited_parent_context(native):
     finally:
         _current_session.reset(session_token)
         hooks._actor.reset(actor_token)
+
+
+def test_team_quota_denial_reaches_calling_tool(native, backend, tmp_path):
+    from agentinfer.agentbench.agents.contracts import AgentRunOutcome, AgentRunRequest
+    from agentinfer.agentbench.agents.jiuwenswarm.runner import run_jiuwenswarm
+    from agentinfer.agentbench.benchkit.dataset import Task
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "fixture",
+        ],
+        cwd=workspace,
+        check=True,
+    )
+    url, requests = backend
+    requests.team = True
+    requests.team_members = ("worker", "worker2")
+    request = AgentRunRequest(
+        agent_type="jiuwenswarm",
+        profile_name="team.code.normal",
+        task=Task("quota", "fixture/repo", "HEAD", "Ask a team member to reply done."),
+        executable=Path(sys.executable).with_name("jiuwenswarm"),
+        model="test",
+        api_base_url=url.removesuffix("/v1"),
+        workspace=workspace,
+        artifact_dir=tmp_path / "artifacts",
+        session_id="quota-root",
+        timeout_seconds=180,
+        patch_flush_seconds=0,
+        prompt_delivery_timeout_seconds=10,
+        tmux_startup_seconds=0,
+        terminal_capture_interval_seconds=1,
+        max_subagents=1,
+        max_concurrent_subagents=1,
+    )
+
+    result = asyncio.run(run_jiuwenswarm(request))
+    assert result.outcome is AgentRunOutcome.COMPLETED, result
+    tool_replies = [
+        message["content"] for body in requests for message in body["messages"] if message["role"] == "tool"
+    ]
+    assert any("Member spawned: member_name=worker " in reply for reply in tool_replies)
+    assert any("AgentBench task launch quota exhausted (1/1)" in reply for reply in tool_replies)
+    assert not any("Member spawned: member_name=worker2 " in reply for reply in tool_replies)
+    events = [
+        json.loads(line) for line in (request.artifact_dir / "jiuwenswarm-agent-limits.jsonl").read_text().splitlines()
+    ]
+    assert [event["event"] for event in events].count("launch") == 1
+    assert any(event["event"] == "quota_denied" and event["program_id"].endswith("_worker2") for event in events)
 
 
 def test_team_cancel_stops_active_member(native, backend, tmp_path):

@@ -57,7 +57,7 @@ def test_live_swebench(profile, tmp_path):
             "--with-correctness",
         ]
     )
-    assert code in (0, 1)  # An unresolved patch is independent of runtime completion.
+    assert code == 0  # An unresolved patch can still have a completed evaluation.
     summary = json.loads((output / "summary.json").read_text())
     assert summary["lifecycle"]["status"] == "completed"
     index = json.loads((output / "task_index.json").read_text())
@@ -73,6 +73,6 @@ def test_live_swebench(profile, tmp_path):
     assert max(event["peak"] for event in events) <= 4
     if profile == "team.code.normal":
         assert any(event["event"] == "launch" for event in events)
-    evaluations = list((output / "evaluations").glob("*/manifest.json"))
+    evaluations = list((output / "evaluations").glob("*/evaluation_manifest.json"))
     assert len(evaluations) == 1
     assert json.loads(evaluations[0].read_text())["status"] == "completed"

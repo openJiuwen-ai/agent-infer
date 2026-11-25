@@ -308,7 +308,7 @@ def test_bare_executable_remains_for_path_lookup(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("filename", "base_url", "metrics_url", "agent_type", "endpoint"),
     [
-        ("swebench_vllm.yaml", "http://127.0.0.1:8000", None, "jiuwenswarm", "/v1/chat/completions"),
+        ("swebench_vllm.yaml", "http://127.0.0.1:8000", None, "claude", "/v1/messages"),
         (
             "swebench_agentinfer.yaml",
             "http://127.0.0.1:8400",

@@ -100,6 +100,40 @@ def _request(tmp_path: Path) -> AgentRunRequest:
     )
 
 
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_startup_reason_survives_worker_cleanup_error(tmp_path, monkeypatch, caplog, cancelled):
+    from agentinfer.agentbench.agents.jiuwenswarm import runner
+
+    started = asyncio.Event()
+
+    async def fail_initialize(self):
+        started.set()
+        if cancelled:
+            await asyncio.Event().wait()
+        raise asyncio.TimeoutError
+
+    async def fail_cleanup(self):
+        raise RuntimeError("worker cleanup failed")
+
+    monkeypatch.setattr(runner.JiuwenInstance, "_initialize", fail_initialize)
+    monkeypatch.setattr(runner.JiuwenInstance, "_stop_runtime_worker", fail_cleanup)
+    monkeypatch.setattr(runner, "export_patch", lambda _: "")
+
+    async def scenario():
+        run = asyncio.create_task(runner.run_jiuwenswarm(_request(tmp_path)))
+        await started.wait()
+        if cancelled:
+            run.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await run
+        else:
+            result = await run
+            assert result.termination_reason is TerminationReason.AGENT_STARTUP_TIMEOUT
+
+    asyncio.run(scenario())
+    assert "Failed to clean up a JiuwenSwarm startup" in caplog.text
+
+
 @pytest.mark.parametrize("patch_error", [False, True])
 @pytest.mark.parametrize("profile_name", ["agent.code.normal", "team.code.normal"])
 def test_runner_passes_prompt_on_stdin_and_exports_patch(

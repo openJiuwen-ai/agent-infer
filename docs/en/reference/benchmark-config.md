@@ -80,8 +80,8 @@ successful completion still requires validated session evidence.
 | `terminal_capture_interval_seconds` | `30` | Terminal evidence capture interval; must be `>= 1`. |
 | `context_window` | `262144` | DSH/ZCode model context capacity; match the actual backend. YAML only. |
 | `max_tokens` | `8192` | DSH/ZCode output capacity; match the actual backend. YAML only. |
-| `max_subagents` | `1` | ZCode plan-subagent: total accepted child launches per task, including failed launches. |
-| `max_concurrent_subagents` | `1` | ZCode plan-subagent: concurrent child limit; must not exceed `max_subagents`. |
+| `max_subagents` | `1` | ZCode plan-subagent counts accepted child launches, including failed launches. JiuwenSwarm counts successful child launches per task, including teammates and descendants. |
+| `max_concurrent_subagents` | `1` | Concurrent child limit for ZCode plan-subagent and JiuwenSwarm. JiuwenSwarm counts children executing model or tool work. Must not exceed `max_subagents`. |
 
 The Claude `plan-subagent` profile uses `bypassPermissions`. Enable it only as a non-root user
 or with an approved Claude Code permission setup.
@@ -96,8 +96,10 @@ or with an approved Claude Code permission setup.
 | `endpoint` | `/v1/messages` | Claude uses `/v1/messages`; JiuwenSwarm/DSH/ZCode use `/v1/chat/completions`. |
 | `api_key_env` | `null` | Optional API-key environment variable name; never put the secret value in YAML. |
 
-Backend authentication is validated against the selected runtime capability: DSH and ZCode reject `backend.api_key_env`;
-Claude Code and JiuwenSwarm continue to support it.
+When `backend.api_key_env` is set for Claude Code or JiuwenSwarm, BenchKit reads the named environment variable.
+The model availability check and the Request Proxy use that value as a Bearer token. The proxy uses the configured
+credential for upstream requests in place of the client's authentication headers. A missing or empty variable fails
+the run before any task starts. The field is unsupported for DSH and ZCode.
 
 ## `request_proxy`
 

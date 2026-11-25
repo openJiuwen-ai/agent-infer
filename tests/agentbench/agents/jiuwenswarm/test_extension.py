@@ -8,13 +8,15 @@ import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+import pytest
+
 from agentinfer.agentbench.agents.jiuwenswarm.limits import TaskBudget
 from tests.helpers.marks import test_marks
 
 pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
-def _load_extension(monkeypatch, actor):
+def _load_extension(monkeypatch, actor, *, compatible_tool=True):
     class OpenAIModelClient:
         def _build_request_params(self, **kwargs):
             return kwargs
@@ -24,8 +26,12 @@ def _load_extension(monkeypatch, actor):
     hooks = ModuleType("agentinfer.agentbench.agents.jiuwenswarm.hooks")
     hooks.current_actor = lambda: actor
     hooks.install = lambda: None
+    hooks.record_extension_ready = lambda: None
     tools = ModuleType("jiuwenswarm.agents.harness.common.tools")
-    tools.command_tools = SimpleNamespace(mcp_exec_command=SimpleNamespace(_func=None))
+    tool = SimpleNamespace(invoke=lambda _: None)
+    if compatible_tool:
+        tool._func = lambda **_: None
+    tools.command_tools = SimpleNamespace(mcp_exec_command=tool)
     for name, module in {
         client_module.__name__: client_module,
         hooks.__name__: hooks,
@@ -78,8 +84,11 @@ def test_nested_identity_only_blocks_a_waiting_parent(monkeypatch):
 
 
 def test_mcp_exec_command_remains_disabled(monkeypatch):
-    module, obj = _load_extension(monkeypatch, TaskBudget("root", 1, 1).root)
-    monkeypatch.setattr(module, "version", lambda name: "0.2.8" if name == "workswarm" else None)
-    result = asyncio.run(obj._func(command="touch /tmp/unconfined"))
+    _, obj = _load_extension(monkeypatch, TaskBudget("root", 1, 1).root)
+    result = asyncio.run(obj._func(command="ignored"))
     assert "mcp_exec_command is disabled" in result
-    assert "0.2.8" in result
+
+
+def test_extension_rejects_unexpected_command_tool_interface(monkeypatch):
+    with pytest.raises(RuntimeError, match="unexpected tool interface"):
+        _load_extension(monkeypatch, TaskBudget("root", 1, 1).root, compatible_tool=False)

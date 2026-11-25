@@ -4,6 +4,7 @@
 """JiuwenSwarm agent runtime adapter for the benchmark harness."""
 
 import shutil
+import sys
 from pathlib import Path
 
 from ...request_proxy.observers import _OpenAISSEUsageObserver
@@ -26,6 +27,8 @@ class JiuwenSwarmRuntime:
         return get_profile(name)
 
     async def preflight(self, executable: Path) -> None:
+        if sys.platform != "linux":
+            raise RuntimeError("JiuwenSwarm benchmark tasks require Linux")
         command = str(executable)
         await check_executable_output(command, ["--help"], label="Agent", expected=("chat",))
         await check_executable_output(

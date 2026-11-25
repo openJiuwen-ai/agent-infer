@@ -142,7 +142,8 @@ def test_server_runner_reports_cleanup_failure_after_normal_exit(
     instances["writer"].close.assert_awaited_once()
 
 
-def test_transparent_nonstream_body_protocol_headers_status_and_response(tmp_path: Path):
+@pytest.mark.parametrize("api_key", [None, "configured-upstream-key"])
+def test_nonstream_preserves_protocol_and_selects_upstream_authentication(tmp_path: Path, api_key: str | None):
     async def run():
         seen = {}
         raw_response = b'{"content": [ ] , "usage":{"input_tokens":4,"output_tokens":2}}'
@@ -155,7 +156,9 @@ def test_transparent_nonstream_body_protocol_headers_status_and_response(tmp_pat
             )
 
         writer = RequestTraceWriter(tmp_path / "requests.jsonl")
-        server = RequestProxyServer("http://router", "run", writer, 10, "token", "/v1/messages")
+        server = RequestProxyServer(
+            "http://router", "run", writer, 10, "token", "/v1/messages", upstream_api_key=api_key
+        )
         server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
         await writer.start()
         body = b'{"model":"m","messages":[{"role":"user","content":"hello"}]}'
@@ -182,12 +185,18 @@ def test_transparent_nonstream_body_protocol_headers_status_and_response(tmp_pat
         assert seen["body"] == body
         assert seen["headers"][CLAUDE_SESSION_HEADER.lower()] == "s1"
         assert seen["headers"][CLAUDE_AGENT_HEADER.lower()] == "a1"
-        assert seen["headers"]["authorization"] == "Bearer secret"
-        assert seen["headers"]["x-api-key"] == "api-secret"
+        if api_key is None:
+            assert seen["headers"]["authorization"] == "Bearer secret"
+            assert seen["headers"]["x-api-key"] == "api-secret"
+        else:
+            assert seen["headers"]["authorization"] == f"Bearer {api_key}"
+            assert "x-api-key" not in seen["headers"]
         assert seen["headers"]["anthropic-version"] == "2023-06-01"
         assert seen["headers"]["anthropic-beta"] == "feature"
         assert "x-unrelated" not in seen["headers"]
-        row = json.loads((tmp_path / "requests.jsonl").read_text())
+        trace = (tmp_path / "requests.jsonl").read_text()
+        assert "configured-upstream-key" not in trace
+        row = json.loads(trace)
         assert (row["actor_id"], row["actor_role"], row["input_tokens"], row["status_code"]) == (
             "a1",
             "subagent",

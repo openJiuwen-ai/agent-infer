@@ -49,12 +49,15 @@ class RequestProxyLifecycle:
         run_id: str,
         output_dir: Path,
         endpoint: str,
+        *,
+        upstream_api_key: str | None = None,
     ) -> None:
         self.config = config
         self.upstream_url = upstream_url
         self.run_id = run_id
         self.output_dir = output_dir
         self.endpoint = endpoint
+        self._upstream_api_key = upstream_api_key
         self.trace_path = output_dir / "requests.jsonl"
         self.token = secrets.token_urlsafe(32)
         stdout_path = self.output_dir / "proxy.stdout.log"
@@ -80,6 +83,7 @@ class RequestProxyLifecycle:
             stdout_path=self.process.stdout_path,
             stderr_path=self.process.stderr_path,
             endpoint=self.endpoint,
+            upstream_api_key=self._upstream_api_key,
         )
         await self.process.start(self.launch_config)
         self.handle = RequestProxyHandle(base_url, self.trace_path)
@@ -151,8 +155,10 @@ def create_request_proxy_lifecycle(
     run_id: str,
     output_dir: Path,
     endpoint: str = "/v1/messages",
+    *,
+    upstream_api_key: str | None = None,
 ) -> RequestProxyLifecycle:
-    return RequestProxyLifecycle(config, upstream_url, run_id, output_dir, endpoint)
+    return RequestProxyLifecycle(config, upstream_url, run_id, output_dir, endpoint, upstream_api_key=upstream_api_key)
 
 
 def _available_port(host: str) -> int:

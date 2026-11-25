@@ -1,11 +1,12 @@
 # SWE-bench Verified directly on vLLM through the transparent Request Proxy.
 #
-# This config works for Claude Code, JiuwenSwarm, and DeepSeek Harness. Adjust the agent section
-# and pass --agent-executable / --agent-profile on the command line, or edit below.
+# This config defaults to Claude Code. To switch runtimes, override --agent-type,
+# --agent-profile, --agent-executable and --endpoint together, or edit the matching fields below.
 
 # === Experiment: per-run execution limits ===
 experiment:
   task_num: null                       # first N tasks; null = full selection_path list
+  # Set result_dir to ../result_vllm_jiuwenswarm for a separate WorkSwarm output directory.
   result_dir: ../result_vllm           # result output directory
   max_concurrency: 1                   # number of concurrent agent workers
   task_timeout_seconds: 3600           # per-task wall-clock cap in seconds
@@ -22,18 +23,21 @@ dataset:
 
 # === Agent: Claude Code, JiuwenSwarm, or DeepSeek Harness subprocess ===
 agent:
-  type: jiuwenswarm                   # agent runtime implementation
-  profile: team.code.normal           # agent.code.normal | team.code.normal
-  executable: jiuwenswarm            # PATH lookup when bare; relative paths resolve from this YAML
-  max_subagents: 8                    # cumulative child launches per task, including team members
-  max_concurrent_subagents: 4         # concurrently executing children per task
+  # For Claude Code:
+  type: claude                         # agent runtime implementation
+  profile: plan-subagent               # single | plan-subagent
+  executable: claude                   # PATH lookup when bare; relative paths resolve from this YAML
 
-  # For Claude Code (set backend.endpoint to /v1/messages and both limits above to 1):
-  # type: claude
-  # profile: plan-subagent             # single | plan-subagent
-  # executable: claude
+  # For WorkSwarm 0.2.8, replace the active Claude fields with this block
+  # and set backend.endpoint to /v1/chat/completions.
+  # type: jiuwenswarm
+  # profile: team.code.normal          # agent.code.normal | team.code.normal
+  # executable: jiuwenswarm
+  # max_subagents: 8                    # cumulative child launches per task, including team members
+  # max_concurrent_subagents: 4         # children concurrently executing model or tool work
 
-  # For DeepSeek Harness (replace the active JiuwenSwarm lines and set both limits to 1):
+  # For DeepSeek Harness (uncomment, comment out the Claude lines above,
+  # and set backend.endpoint to /v1/chat/completions):
   # type: dsh
   # profile: plan-subagent              # single | plan-subagent
   # executable: dsh
@@ -55,7 +59,7 @@ backend:
   type: vllm                           # backend type; currently only vllm
   base_url: http://127.0.0.1:8000      # vLLM API base URL
   model: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8  # model name sent in requests
-  endpoint: /v1/chat/completions        # /v1/messages (Claude Code) or /v1/chat/completions (JiuwenSwarm / DSH)
+  endpoint: /v1/messages               # /v1/messages (Claude Code) or /v1/chat/completions (JiuwenSwarm / DSH)
   api_key_env: null                    # environment variable containing the API key; null = none
 
 # === Request Proxy: transparent local listener ===
