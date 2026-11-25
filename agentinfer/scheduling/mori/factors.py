@@ -23,6 +23,7 @@ class MoriProgramFactors:
     future_credit: int | None = None
 
     def idleness(self, now: float) -> float:
+        """Port ThunderAgent Program.idleness and the Router's missing-history default."""
         acting = sum(self.acting_history)
         reasoning = sum(self.reasoning_history)
         if self.acting_since is not None:

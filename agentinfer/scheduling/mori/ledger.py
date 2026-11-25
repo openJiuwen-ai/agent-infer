@@ -19,6 +19,7 @@ class MoriLedger:
 
     @property
     def hbm_room(self) -> int | float:
+        """Port ThunderAgent BackendState.remaining_capacity for the local rank."""
         capacity = self.snapshot.total_kv_tokens
         if capacity is None:
             return float("inf")
@@ -28,6 +29,7 @@ class MoriLedger:
 
     @property
     def dram_room(self) -> int:
+        """Port ThunderAgent BackendState.cpu_remaining_capacity."""
         capacity = self.snapshot.total_dram_kv_tokens
         return capacity - sum(self.factors.global_factors.warm.values()) if capacity else 0
 
@@ -39,6 +41,7 @@ class MoriLedger:
         return self.factors.for_program(ref).tokens + BUFFER_PER_PROGRAM
 
     def update_shared_prefix(self, now: float) -> None:
+        """Port ThunderAgent shared_prefix_tokens using a Runtime clock sample."""
         state = self.factors.global_factors
         counts: dict[str, int] = {}
         for ref in state.active:

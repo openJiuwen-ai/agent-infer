@@ -23,6 +23,7 @@ class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
         self.config = config
 
     def on_request_arrived(self, factors: MoriFactors, event: SchedulingEvent) -> None:
+        """Port ThunderAgent update_program_before_request bookkeeping to an API arrival event."""
         ref = event.program
         program = factors.for_program(ref)
         if program is None:
@@ -34,11 +35,13 @@ class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
         program.start_reasoning(event.occurred_at_monotonic_s)
 
     def on_request_progress(self, factors: MoriFactors, event: SchedulingEvent) -> None:
+        """Port ThunderAgent update_program_tokens_streaming to the shared event stream."""
         program = factors.for_program(event.program)
         if program is not None:
             program.tokens += int(event.field("delta"))
 
     def on_request_finished(self, factors: MoriFactors, event: SchedulingEvent) -> None:
+        """Port ThunderAgent usage accounting, including its first cached sample per Program."""
         program = factors.for_program(event.program)
         if program is None:
             return
@@ -63,6 +66,7 @@ class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
                 state.prefix_lengths[program.prefix_group] = cached
 
     def on_program_admitted(self, factors: MoriFactors, event: SchedulingEvent) -> None:
+        """Mirror ThunderAgent _promote_to_running after the shared Runtime commits admission."""
         ref = event.program
         program = factors.for_program(ref)
         state = factors.global_factors
@@ -75,6 +79,7 @@ class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
     on_program_resumed = on_program_admitted
 
     def on_program_paused(self, factors: MoriFactors, event: SchedulingEvent) -> None:
+        """Mirror ThunderAgent warm and waiting queue changes on a committed transition."""
         ref = event.program
         program = factors.for_program(ref)
         state = factors.global_factors
@@ -88,6 +93,7 @@ class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
             state.waiting[ref] = None
 
     def on_program_released(self, factors: MoriFactors, event: SchedulingEvent) -> None:
+        """Drop the MORI indexes when the shared Runtime releases a Program."""
         state = factors.global_factors
         state.active.pop(event.program, None)
         state.warm.pop(event.program, None)
@@ -101,6 +107,11 @@ class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
         transitions: TransitionController,
         candidate: ProgramRef,
     ) -> AdmissionOutcome:
+        """Port ThunderAgent arrival promotion and new-Program selection to one rank.
+
+        The Runtime owns queue and admission state, so this hook requests typed
+        transitions at the original decision points.
+        """
         ledger = MoriLedger(snapshot, factors)
         state = factors.global_factors
         program = factors.for_program(candidate)
@@ -140,6 +151,7 @@ class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
         """Capacity repair runs inside the ordered MORI tick."""
 
     def handle_request_completion(self, snapshot, strategy_factors, transitions, completed) -> None:
+        """Port ThunderAgent _clear_mark_and_pause and _place_off_gpu to Runtime transitions."""
         program = strategy_factors.for_program(completed)
         if program.future_credit is None or snapshot.program(completed).status is not ProgramStatus.ACTING:
             return
@@ -155,6 +167,7 @@ class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
                 self._pause(transitions, completed, ProgramPlacement.INACTIVE, "mori_complete_waiting")
 
     def handle_scheduled_check(self, snapshot, strategy_factors, transitions) -> None:
+        """Port ThunderAgent _scheduled_check with one rank and local capacity observations."""
         if snapshot.total_kv_tokens is None:
             return
         ledger = MoriLedger(snapshot, strategy_factors)
@@ -171,6 +184,7 @@ class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
         self._repair_dram(ledger, transitions, now)
 
     def _displace_idle(self, ledger: MoriLedger, transitions: TransitionController, now: float) -> None:
+        """Port ThunderAgent _step_idle_displacement, including its DRAM prerequisite and quota."""
         demand = self._parked_demand(ledger)
         if not demand:
             return
@@ -194,6 +208,7 @@ class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
                 quota -= 1
 
     def _admit_parked(self, ledger: MoriLedger, transitions: TransitionController, now: float) -> None:
+        """Port the two ordered ThunderAgent WARM and WAITING admission phases."""
         state = ledger.factors.global_factors
         warm = sorted(
             (ref for ref in state.warm if self._reasoning(ledger, ref)),
@@ -212,6 +227,7 @@ class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
                     self._resume(ledger, transitions, ref, reason)
 
     def _repair_hbm(self, ledger: MoriLedger, transitions: TransitionController, now: float) -> None:
+        """Port ThunderAgent GPU overflow and victim selection with deferred HBM credit."""
         state = ledger.factors.global_factors
         while ledger.hbm_room + ledger.future_release < 0:
             candidates = [
@@ -234,6 +250,7 @@ class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
             self._pause(transitions, ref, placement, "mori_hbm_overflow")
 
     def _repair_dram(self, ledger: MoriLedger, transitions: TransitionController, now: float) -> None:
+        """Port ThunderAgent CPU overflow by updating the already parked Program's placement."""
         state = ledger.factors.global_factors
         while ledger.dram_room < 0 and state.warm:
             ref = min(
@@ -251,11 +268,13 @@ class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
         return [ledger.required(ref) for ref in (*state.warm, *state.waiting) if self._reasoning(ledger, ref)]
 
     def _resume(self, ledger, transitions, ref, reason) -> None:
+        """Emit the local equivalent of a ThunderAgent INTERACTIVE mark."""
         self._apply(
             transitions, TransitionKind.RESUME, ref, reason, ledger.snapshot.backend_id, ProgramPlacement.INTERACTIVE
         )
 
     def _pause(self, transitions, ref, placement, reason) -> None:
+        """Carry ThunderAgent ASYNC or INACTIVE placement on the shared pause transition."""
         self._apply(transitions, TransitionKind.PAUSE, ref, reason, placement=placement)
 
     @staticmethod

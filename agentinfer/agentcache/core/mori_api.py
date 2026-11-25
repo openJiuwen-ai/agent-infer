@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 def program_id(payload: dict) -> str:
+    """Port ThunderAgent app.get_program_id, preserving body-field precedence."""
     if "program_id" in payload:
         return str(payload["program_id"])
     extra = payload.get("extra_body")
@@ -29,6 +30,7 @@ def program_id(payload: dict) -> str:
 
 
 def extract_usage(payload: object) -> tuple[int | None, int, int]:
+    """Port ThunderAgent vllm_request_processor.extract_usage_info for the IPC tuple."""
     usage = payload.get("usage") if isinstance(payload, dict) else None
     if not isinstance(usage, dict):
         return None, 0, 0
@@ -67,6 +69,7 @@ class MoriResponseObserver:
         await self.send(message)
 
     def _read_frames(self) -> None:
+        """Port ThunderAgent's SSE progress rule to ASGI fragments."""
         while (boundary := self._buffer.find(b"\n\n")) != -1:
             frame = self._buffer[:boundary]
             del self._buffer[: boundary + 2]
@@ -101,46 +104,12 @@ class MoriResponseObserver:
         self.emit(Event.FINISH, self.attempt, *self._usage)
 
 
-async def run_ticks(send, interval: float, *, clock=None) -> None:
-    """Preserve separate observation and tick inputs and the v3 deadline rule."""
-    clock = clock or asyncio.get_running_loop().time
-    deadline = clock() + interval
-    while True:
-        await asyncio.sleep(max(0.0, deadline - clock()))
-        observation = send(Event.OBSERVE)
-        observed = clock()
-        applied = await send(Event.TICK)
-        await observation
-        deadline = (clock() if applied else observed) + interval
-
-
 class MoriSchedulingMiddleware:
     """Use the standard vLLM API as the source of MORI request facts."""
 
     def __init__(self, app) -> None:
         self.app = app
-        self._tick_task: asyncio.Task | None = None
-        self._observation_task: asyncio.Task | None = None
-        self._startup = asyncio.Lock()
         self._delivery: set[asyncio.Task] = set()
-
-    async def _start(self, send) -> None:
-        async with self._startup:
-            if self._tick_task is None:
-                interval = await send(Event.CONFIG)
-                await send(Event.OBSERVE)
-                self._tick_task = asyncio.create_task(run_ticks(send, interval))
-                self._observation_task = asyncio.create_task(self._observe(send))
-            elif self._tick_task.done():
-                self._tick_task.result()
-            if self._observation_task.done():
-                self._observation_task.result()
-
-    @staticmethod
-    async def _observe(send) -> None:
-        while True:
-            await asyncio.sleep(5)
-            await send(Event.OBSERVE)
 
     def _send(self, core, event: Event, *args) -> asyncio.Task:
         task = asyncio.create_task(core.call_utility_async(UTILITY_METHOD, event.value, list(args)))
@@ -171,15 +140,6 @@ class MoriSchedulingMiddleware:
             await asyncio.gather(disconnected, return_exceptions=True)
 
     async def __call__(self, scope, receive, send) -> None:
-        if scope["type"] == "lifespan":
-            try:
-                await self.app(scope, receive, send)
-            finally:
-                tasks = [task for task in (self._tick_task, self._observation_task) if task is not None]
-                for task in tasks:
-                    task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
-            return
         if scope["type"] != "http" or scope["method"] != "POST":
             await self.app(scope, receive, send)
             return
@@ -198,7 +158,6 @@ class MoriSchedulingMiddleware:
 
         core = scope["app"].state.engine_client.engine_core
         emit = partial(self._send, core)
-        await self._start(emit)
         pid = program_id(payload)
         if path == "/programs/release":
             if not payload.get("program_id"):

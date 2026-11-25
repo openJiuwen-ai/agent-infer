@@ -12,9 +12,6 @@ UTILITY_METHOD = "agentinfer_program_scheduling"
 
 
 class Event(str, Enum):
-    CONFIG = "config"
-    OBSERVE = "observe"
-    TICK = "tick"
     BEGIN = "begin"
     PROGRESS = "progress"
     FINISH = "finish"
@@ -23,7 +20,11 @@ class Event(str, Enum):
 
 
 def chat_facts(payload: dict) -> tuple[int, str]:
-    """Compute the exact ThunderAgent pre-template sizing and prefix-group inputs."""
+    """Port ThunderAgent router._prefix_group_key and its pre-template JSON size.
+
+    Extract the facts in the API process so the Core can receive a compact
+    admission message ahead of vLLM's native request.
+    """
     parts = []
     for message in payload.get("messages") or ():
         if not isinstance(message, dict) or message.get("role") != "system":
@@ -50,12 +51,6 @@ def chat_facts(payload: dict) -> tuple[int, str]:
 
 def handle_event(bridge, name: str, args: list):
     event = Event(name)
-    if event is Event.CONFIG:
-        return bridge.config.interval_seconds
-    if event is Event.OBSERVE:
-        return bridge.observe_backend()
-    if event is Event.TICK:
-        return bridge.tick()
     if event is Event.BEGIN:
         return bridge.begin(*args)
     if event is Event.PROGRESS:

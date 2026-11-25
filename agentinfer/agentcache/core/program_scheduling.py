@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from concurrent.futures import Future
 from dataclasses import dataclass
@@ -15,6 +16,8 @@ from agentinfer.scheduling.identity import AgentIdentity
 from agentinfer.scheduling.mori import MoriConfig, build_mori_strategy
 from agentinfer.scheduling.runtime import ProgramScheduler
 from agentinfer.scheduling.transitions import ProgramPlacement, TransitionRequest
+
+logger = logging.getLogger(__name__)
 
 ATTEMPT_ARG = "agentinfer_mori_attempt"
 
@@ -36,8 +39,12 @@ class ProgramOperation:
     placement: ProgramPlacement | None
 
 
-class ProgramSchedulingHost(Protocol):
-    """Scheduler-side capability supplied by the serving backend."""
+class ProgramCacheAdapter(Protocol):
+    """Read effective cache facts and apply cache operations in the local engine.
+
+    Operations set placement or release an exact Program generation. The
+    adapter must allow reapplying a batch after a partial failure.
+    """
 
     def observe_backend(self) -> BackendObservation: ...
 
@@ -54,15 +61,15 @@ class _Admission:
 class ProgramSchedulingBridge:
     """Run one ProgramScheduler on the EngineCore owner thread."""
 
-    def __init__(self, host: ProgramSchedulingHost, config: MoriConfig, backend_id: str = "vllm-local") -> None:
-        self.host = host
+    def __init__(self, cache: ProgramCacheAdapter, config: MoriConfig, backend_id: str = "vllm-local") -> None:
+        self.cache = cache
         self.config = config
         self.backend_id = backend_id
         self._pending: dict[str, _Admission] = {}
         self._ready: dict[str, tuple[ProgramRef, int]] = {}
         self._operations: list[ProgramOperation] = []
-        self._failure: Exception | None = None
-        self.observation = host.observe_backend()
+        self._admitted: dict[str, None] = {}
+        self.observation = cache.observe_backend()
         self._backend = self._backend_pool()
         components = build_mori_strategy(config)
         self.runtime = ProgramScheduler(
@@ -94,13 +101,12 @@ class ProgramSchedulingBridge:
         )
 
     def observe_backend(self) -> None:
-        self.observation = self.host.observe_backend()
+        self.observation = self.cache.observe_backend()
         self._backend = self._backend_pool()
 
     def begin(
         self, attempt: str, program_id: str, context_chars: int, prefix_group: str, native_count: int = 1
     ) -> Future[bool]:
-        self._check_operations()
         if not attempt or context_chars < 0 or not prefix_group or native_count < 1:
             raise ValueError("Invalid MORI admission facts")
         if attempt in self._pending or attempt in self._ready:
@@ -117,17 +123,14 @@ class ProgramSchedulingBridge:
         )
         ref = self.runtime.registry.current_ref(program_id)
         assert ref is not None
-        self._apply_operations()
+        self._pending[attempt] = _Admission(ref, reply, native_count)
         if admitted:
-            self._ready[attempt] = (ref, native_count)
-            reply.set_result(True)
-        else:
-            self._pending[attempt] = _Admission(ref, reply, native_count)
+            self._admitted[attempt] = None
+        self._flush_and_publish()
         return reply
 
     def attach(self, attempt: str) -> bool:
         """Consume the one-shot native dispatch permit."""
-        self._check_operations()
         admission = self._ready.pop(attempt, None)
         if admission is None:
             return False
@@ -137,89 +140,98 @@ class ProgramSchedulingBridge:
         return True
 
     def progress(self, attempt: str, delta: int) -> None:
-        self._check_operations()
         if delta <= 0:
             raise ValueError("MORI progress must be positive")
         self.runtime.on_response_progress(attempt, delta)
 
     def finish(self, attempt: str, total: int | None, prompt: int, cached: int) -> None:
-        self._check_operations()
         self._ready.pop(attempt, None)
         if attempt in self._pending:
             self.cancel(attempt)
             return
         self.runtime.on_reported_completion(attempt, total, prompt, cached)
-        self._apply_operations()
+        self._flush_and_publish()
 
-    def cancel(self, attempt: str) -> None:
+    def _cancel_attempt(self, attempt: str) -> None:
         self._ready.pop(attempt, None)
+        self._admitted.pop(attempt, None)
         pending = self._pending.pop(attempt, None)
         self.runtime.cancel_request(attempt)
-        self._apply_operations()
         if pending is not None:
             pending.reply.set_result(False)
+
+    def cancel(self, attempt: str) -> None:
+        self._cancel_attempt(attempt)
+        self._flush_and_publish()
 
     def cancel_gates(self) -> None:
         """Resolve pending API waiters when the native scheduler is stopping."""
         for attempt in (*self._pending, *self._ready):
-            self.cancel(attempt)
+            self._cancel_attempt(attempt)
 
     def tick(self) -> bool:
-        self._check_operations()
+        prior = self._flush_operations()
+        if prior is None:
+            return False
         self.runtime.run_host_check(self._backend)
-        applied = self._apply_operations()
-        for entry, _ in self.runtime.consume_admitted_requests():
-            admission = self._pending.pop(entry.request_id, None)
-            if admission is not None:
-                self._ready[entry.request_id] = (admission.program, admission.native_count)
-                admission.reply.set_result(True)
-        return applied
+        applied = self._flush_and_publish()
+        return bool(prior or applied)
 
     def release(self, program_id: str) -> bool:
-        self._check_operations()
         ref = self.runtime.registry.current_ref(program_id)
         if ref is None:
             return False
-        pending = [(attempt, entry) for attempt, entry in self._pending.items() if entry.program == ref]
-        for attempt, (program, _) in tuple(self._ready.items()):
-            if program == ref:
-                del self._ready[attempt]
-        active = self.runtime.strategy_factors.global_factors.active
-        warm = self.runtime.strategy_factors.global_factors.warm
-        if ref in active or ref in warm:
-            self._operations.append(ProgramOperation(ref, None))
-        released = self.runtime.release_program(ref)
-        self._apply_operations()
-        for attempt, entry in pending:
-            del self._pending[attempt]
-            entry.reply.set_result(False)
-        return released
+
+        # ThunderAgent removes a Program from its queues and releases its cache.
+        # Commit the local release after acknowledgement so this caller can retry
+        # a failed release, and leave already-granted native dispatches valid.
+        if any(op.program == ref for op in self._operations) and self._flush_operations() is None:
+            return False
+        factors = self.runtime.strategy_factors.global_factors
+        if (ref in factors.active or ref in factors.warm) and not self._send_operations((ProgramOperation(ref, None),)):
+            return False
+
+        if not self.runtime.release_program(ref):
+            return False
+        for attempt, admission in tuple(self._pending.items()):
+            if admission.program == ref:
+                self._pending.pop(attempt)
+                self._admitted.pop(attempt, None)
+                admission.reply.set_result(False)
+        self._flush_and_publish()
+        return True
 
     def _on_transition(self, transition: TransitionRequest) -> None:
         if transition.placement is not None:
             self._operations.append(ProgramOperation(transition.program, transition.placement))
 
-    def _apply_operations(self) -> bool:
-        if not self._operations:
-            return False
-        operations = tuple(self._operations)
-        self._operations.clear()
-        try:
-            self.host.apply_program_ops(operations)
-        except Exception as error:
-            # The host may have applied part of the batch. Stop at the first
-            # failed acknowledgement so no later request sees a false commit.
-            self._failure = error
-            self._ready.clear()
-            for attempt, pending in tuple(self._pending.items()):
-                self.runtime.cancel_request(attempt)
-                pending.reply.set_exception(error)
-            self._pending.clear()
-            raise
-        return True
+    def _flush_and_publish(self) -> int | None:
+        applied = self._flush_operations()
+        if applied is None:
+            return None
+        for entry, _ in self.runtime.consume_admitted_requests():
+            self._admitted[entry.request_id] = None
+        for attempt in self._admitted:
+            admission = self._pending.pop(attempt, None)
+            if admission is not None:
+                self._ready[attempt] = (admission.program, admission.native_count)
+                admission.reply.set_result(True)
+        self._admitted.clear()
+        return applied
 
-    def _check_operations(self) -> None:
-        if self._failure is not None:
-            raise RuntimeError(
-                "MORI Program operation failed; the scheduling host must be restarted"
-            ) from self._failure
+    def _flush_operations(self) -> int | None:
+        if not self._operations:
+            return 0
+        operations = tuple(self._operations)
+        if not self._send_operations(operations):
+            return None
+        self._operations.clear()
+        return len(operations)
+
+    def _send_operations(self, operations: tuple[ProgramOperation, ...]) -> bool:
+        try:
+            self.cache.apply_program_ops(operations)
+        except Exception:
+            logger.warning("MORI Program cache operation was not acknowledged", exc_info=True)
+            return False
+        return True

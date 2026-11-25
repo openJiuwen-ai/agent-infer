@@ -128,6 +128,7 @@ class _VllmAdmissionHooks:
         self.lifecycle_receiver: UnixLifecycleReceiver | None = None
         strategy = settings.get("strategy", "progress_ttl")
         if strategy == "mori":
+            from agentinfer.agentcache.core.mori_timer import install_mori_timer
             from agentinfer.agentcache.core.scheduling_ipc import install_core_utility
 
             if getattr(parallel_config, "data_parallel_size", 1) != 1:
@@ -135,6 +136,7 @@ class _VllmAdmissionHooks:
             self.program_scheduling = build_mori_controller(owner, settings, self.backend_id)
             self.controller = self.program_scheduling.runtime
             install_core_utility()
+            install_mori_timer()
             return
         if strategy != "progress_ttl":
             raise ValueError(f"Unknown AgentInfer scheduling strategy {strategy!r}")

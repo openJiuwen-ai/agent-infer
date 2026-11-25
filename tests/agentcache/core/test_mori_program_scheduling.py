@@ -133,23 +133,81 @@ def test_cancel_and_missing_observation_do_not_force_an_admission():
     assert not bridge.runtime.registry.views()
 
 
-def test_host_failure_fails_pending_admission_and_prevents_future_decisions(clock):
-    class FailedHost(RecordingHost):
-        def apply_program_ops(self, operations):
-            raise OSError("placement acknowledgement failed")
+class FlakyCache(RecordingHost):
+    fail_next = False
 
-    host = FailedHost(300, 160)
-    bridge = ProgramSchedulingBridge(host, MoriConfig())
+    def apply_program_ops(self, operations) -> None:
+        if self.fail_next:
+            self.fail_next = False
+            raise OSError("placement acknowledgement failed")
+        super().apply_program_ops(operations)
+
+
+def test_failed_placement_keeps_pending_admission_and_retries(clock):
+    cache = FlakyCache(300, 160)
+    bridge = ProgramSchedulingBridge(cache, MoriConfig())
     assert bridge.begin("a", "A", 500, "_empty_").result()
     bridge.finish("a", 160, 100, 0)
     pending = bridge.begin("b", "B", 500, "_empty_")
     clock.now = 3.0
-    with pytest.raises(OSError, match="acknowledgement"):
-        bridge.tick()
-    with pytest.raises(OSError, match="acknowledgement"):
-        pending.result()
-    with pytest.raises(RuntimeError, match="must be restarted"):
-        bridge.begin("c", "C", 100, "_empty_")
+
+    cache.fail_next = True
+    assert not bridge.tick()
+    assert not pending.done()
+    assert bridge.tick()
+    assert pending.result()
+    assert cache.operations == [("A", "async"), ("B", "interactive")]
+
+
+def test_failed_batch_retries_in_order_after_a_partial_apply(clock):
+    class PartialCache(RecordingHost):
+        def __init__(self):
+            super().__init__(300, 160)
+            self.placement = None
+            self.batches = []
+
+        def apply_program_ops(self, operations):
+            self.batches.append(operations)
+            if self.placement is None:
+                self.placement = {operations[0].program: operations[0].placement}
+                raise OSError("failed after applying the first operation")
+            for op in operations:
+                self.placement[op.program] = op.placement
+
+    cache = PartialCache()
+    bridge = ProgramSchedulingBridge(cache, MoriConfig())
+    assert bridge.begin("a", "A", 500, "_empty_").result()
+    bridge.finish("a", 160, 100, 0)
+    pending = bridge.begin("b", "B", 500, "_empty_")
+    clock.now = 3.0
+
+    assert not bridge.tick()
+    assert len(cache.placement) == 1
+    assert not pending.done()
+    assert bridge.tick()
+    assert pending.result()
+    assert cache.batches[0] == cache.batches[1]
+    assert {ref.program_id: placement.value for ref, placement in cache.placement.items()} == {
+        "A": "async",
+        "B": "interactive",
+    }
+
+
+def test_failed_release_is_retryable_and_does_not_stop_other_programs():
+    cache = FlakyCache(600, 160)
+    bridge = ProgramSchedulingBridge(cache, MoriConfig())
+    assert bridge.begin("a", "A", 100, "_empty_").result()
+
+    cache.fail_next = True
+    assert not bridge.release("A")
+    assert bridge.runtime.registry.current_ref("A") is not None
+    assert bridge.begin("b", "B", 100, "_empty_").result()
+    assert bridge.release("A")
+    assert bridge.attach("a")  # A request already granted admission can reach Core.
+    bridge.finish("a", 50, 30, 0)
+    assert bridge.runtime.registry.current_ref("A") is None
+    assert bridge.attach("b")
+    assert cache.operations == [("A", None)]
 
 
 def test_config_selects_mori_on_the_existing_bridge():
@@ -171,7 +229,7 @@ def test_shared_vllm_hook_consumes_the_pre_admission_permit():
     from agentinfer.agentcache.core.scheduling_ipc import UTILITY_METHOD
 
     host = RecordingHost(600, 200)
-    owner = SimpleNamespace(program_scheduling_host=host)
+    owner = SimpleNamespace(program_cache_adapter=host)
     config = SimpleNamespace(additional_config={"agentcache": {"strategy": "mori"}})
     hooks = _VllmAdmissionHooks(owner, config, SimpleNamespace(num_blocks=999), 16)
     assert hooks.program_scheduling.observation.hbm_capacity_tokens == 600
@@ -249,5 +307,39 @@ def test_api_preserves_begin_progress_end_and_release_order():
             assert response.json()["released"]
 
     asyncio.run(start())
-    assert events == ["config", "observe", "begin", "progress", "finish", "release"]
+    assert events == ["begin", "progress", "finish", "release"]
     assert host.operations == [("A", None)]
+
+
+def test_core_timer_wakes_idle_input_queue_and_executes_on_owner(monkeypatch):
+    from queue import Queue
+    from threading import get_ident
+
+    from vllm.v1.engine.core import EngineCoreProc
+
+    from agentinfer.agentcache.core.mori_timer import install_mori_timer
+
+    called = []
+    owner = get_ident()
+    bridge = SimpleNamespace(
+        config=MoriConfig(interval_seconds=0.01),
+        observe_backend=lambda: called.append(("observe", get_ident())),
+        tick=lambda: called.append(("tick", get_ident())),
+    )
+
+    def run_busy_loop(self):
+        request = self.input_queue.get(timeout=2)
+        assert called == []
+        self._handle_client_request(*request)
+
+    monkeypatch.setattr(EngineCoreProc, "run_busy_loop", run_busy_loop)
+    monkeypatch.setattr(EngineCoreProc, "_handle_client_request", lambda *_: pytest.fail("unexpected vLLM event"))
+    install_mori_timer()
+    core = object.__new__(EngineCoreProc)
+    core.scheduler = SimpleNamespace(_agentcache=SimpleNamespace(program_scheduling=bridge))
+    core.input_queue = Queue()
+    core.is_running = lambda: True
+
+    core.run_busy_loop()
+    assert called == [("observe", owner), ("tick", owner)]
+    assert core._agentinfer_mori_timer is None

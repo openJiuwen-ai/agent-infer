@@ -74,18 +74,18 @@ _REMOVED_PROGRESS_TTL_SETTINGS = frozenset(
 
 
 def build_mori_controller(owner, settings: JsonMapping, backend_id: str):
-    """Compose the MORI bridge with the host capability installed on a native Scheduler."""
+    """Compose the MORI bridge with the Program cache adapter installed on a native Scheduler."""
     from agentinfer.agentcache.core.program_scheduling import ProgramSchedulingBridge
     from agentinfer.scheduling.mori import MoriConfig
 
-    host = getattr(owner, "program_scheduling_host", None)
-    if host is None:
-        raise ValueError("MORI requires a scheduler host that reports HBM and DRAM and applies Program placement")
+    cache = getattr(owner, "program_cache_adapter", None)
+    if cache is None:
+        raise ValueError("MORI requires a Program cache adapter for HBM/DRAM capacities and placement operations")
     raw = settings.get("mori", {})
     if not isinstance(raw, dict) or set(raw) - {"interval_seconds"}:
         raise ValueError("agentcache.mori accepts only interval_seconds")
     interval = _float_setting(raw, "interval_seconds", 5.0, scope="mori")
-    return ProgramSchedulingBridge(host, MoriConfig(interval), backend_id)
+    return ProgramSchedulingBridge(cache, MoriConfig(interval), backend_id)
 
 
 def build_progress_ttl_controller(
