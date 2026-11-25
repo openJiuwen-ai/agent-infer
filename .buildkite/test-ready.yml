@@ -38,6 +38,19 @@ steps:
         env:
           AGENTINFER_CI_AS_ROOT: "1"
         timeout_in_minutes: 90
+        # Keep existing diagnostics from every profile, including failed runs.
+        # Narrow paths exclude repo caches, full workspaces, and agent installs.
+        artifact_paths:
+          - "test-results/function/agentbench/vllm-logs/*.log"
+          - "test-results/function/agentbench/run-*/*.{json,jsonl,csv,log}"
+          - "test-results/function/agentbench/run-*/evidence/*.json"
+          - "test-results/function/agentbench/run-*/tasks/*/*.{json,jsonl,log,txt,yaml,patch}"
+          - "test-results/function/agentbench/run-*/tasks/*/claude_state/projects/**/*.jsonl"
+          - "test-results/function/agentbench/run-*/tasks/*/dsh-{sessions,home/sessions}/**/*.{json,jsonl,zstd}"
+          - "test-results/function/agentbench/run-*/tasks/*/jiuwenswarm-instance/**/worker-logs/*.log"
+          - "test-results/function/agentbench/run-*/tasks/*/jiuwenbox-audit/**/*.log"
+          - "test-results/function/agentbench/run-*/tasks/*/zcode-home/logs/**/*.jsonl"
+          - "test-results/function/agentbench/run-*/workspaces/*/addition.py"
         commands:
           - |
             set -eu

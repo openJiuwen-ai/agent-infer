@@ -113,3 +113,17 @@ The model server log is retained under the first case's vllm-logs directory;
 each bench run keeps its own evidence and task artifacts. Fixture/cache tests
 can run on CPU. Full real-agent GPU execution has not been run in the Windows
 development environment.
+
+The functional CI step uploads existing diagnostics as Buildkite artifacts for
+successful and failed runs, preserving their paths and run IDs:
+
+- Shared `vllm-logs/*.log`, run-level JSON/JSONL/CSV/log files, and `evidence/*.json`.
+- Task results, prompts, launch commands, configuration files, transcripts,
+  `model.patch`, and logs including `smoke-check.log`.
+- Claude project/subagent JSONL transcripts and DSH decoded/raw session logs.
+- Jiuwen worker logs, sandbox policy, server logs, and audit logs.
+- ZCode native JSONL logs and the final workspace `addition.py` for each task.
+
+Pytest terminal output is available in the Buildkite job log. Artifact patterns
+select files already produced by the suite; no extra environment snapshot is
+generated. Full workspaces, repo caches, and agent installations are excluded.
