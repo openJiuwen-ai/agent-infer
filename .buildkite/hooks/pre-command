@@ -1,0 +1,9 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+set -eu
+
+# Apply the host's Git URL rewrites before either the build command or the
+# Compose plugin runs, including test retries that need to rebuild an image.
+ZCODE_REPOSITORY="$(git ls-remote --get-url "${ZCODE_REPOSITORY:-https://github.com/zai-org/ZCode.git}")"
+export ZCODE_REPOSITORY

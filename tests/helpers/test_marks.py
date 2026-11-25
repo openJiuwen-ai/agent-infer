@@ -84,6 +84,9 @@ def collection_tree(pytester):
         "tests/conftest.py",
         "tests/helpers/__init__.py",
         "tests/helpers/marks.py",
+        "tests/e2e/__init__.py",
+        "tests/e2e/helpers/__init__.py",
+        "tests/e2e/helpers/case_loader.py",
     ):
         target = pytester.path / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -163,6 +166,104 @@ def test_e2e_json_collection(collection_tree, fields, message):
     else:
         assert result.ret != pytest.ExitCode.OK
         assert message in result.stdout.str() + result.stderr.str()
+
+
+def test_e2e_benchmark_array_expands_with_marks_and_filtering(collection_tree):
+    """One selected JSON expands into independently selectable benchmark entries."""
+    import json
+
+    suite = collection_tree.path / "tests/e2e"
+    (suite / "cases").mkdir(parents=True)
+    shutil.copyfile(ROOT / "tests/e2e/conftest.py", suite / "conftest.py")
+    payload = {
+        "mark": {"hardware": "L20", "num_cards": 2, "ci": "ready"},
+        "benchmark_params": [
+            {"agent-type": "claude", "agent-profile": "single"},
+            {"agent-type": "dsh", "agent-profile": "single"},
+            {"agent-type": "zcode", "agent-profile": "plan-subagent"},
+        ],
+    }
+    (suite / "cases/matrix.json").write_text(json.dumps(payload), encoding="utf-8")
+    (suite / "test_sample.py").write_text(
+        "def test_sample(case_file, benchmark_index):\n"
+        "    assert case_file.name == 'matrix.json'\n"
+        "    assert benchmark_index in (0, 1, 2)\n",
+        encoding="utf-8",
+    )
+    result = collection_tree.runpytest_subprocess(
+        "tests/e2e", "-q", "-m", "L20 and cards_2 and ready", "-p", "no:cacheprovider"
+    )
+    result.assert_outcomes(passed=3)
+    result = collection_tree.runpytest_subprocess(
+        "tests/e2e",
+        "--test-config-file",
+        "tests/e2e/cases/matrix.json",
+        "-q",
+        "-k",
+        "zcode and plan",
+        "-p",
+        "no:cacheprovider",
+    )
+    result.assert_outcomes(passed=1, deselected=2)
+
+
+@pytest.mark.parametrize("mode", ["reuse", "startup-failure", "different-deployment"])
+def test_agentbench_session_owns_one_model_process(collection_tree, mode):
+    """Exercise the real fixture's shared lifetime and cleanup in a pytest process."""
+    import json
+
+    e2e = collection_tree.path / "tests/e2e"
+    suite = e2e / "agentbench"
+    (suite / "cases").mkdir(parents=True)
+    shutil.copyfile(ROOT / "tests/e2e/conftest.py", e2e / "conftest.py")
+    shutil.copyfile(ROOT / "tests/e2e/helpers/server.py", e2e / "helpers/server.py")
+    payload = json.loads(
+        (ROOT / "tests/e2e/function/agentbench/cases/qwen3_coder_agents_1x1.json").read_text(encoding="utf-8")
+    )
+    payload["mark"] = {"hardware": "cpu", "ci": "ready"}
+    (suite / "cases/matrix.json").write_text(json.dumps(payload), encoding="utf-8")
+    fixture_source = (ROOT / "tests/e2e/function/agentbench/conftest.py").read_text(encoding="utf-8")
+    fixture_source += (
+        "\nfrom pathlib import Path\nfrom types import SimpleNamespace\n"
+        "class FakeVllmServer:\n"
+        "    def __init__(self, *, config):\n"
+        "        self.config = config\n"
+        "        self.proc = None\n"
+        "    def start(self):\n"
+        "        with Path('server-events.txt').open('a') as f: f.write('start\\n')\n"
+        f"        if {mode == 'startup-failure'!r}: raise RuntimeError('model startup failed')\n"
+        "        Path('server-port.txt').write_text(str(self.config.port))\n"
+        "        self.proc = SimpleNamespace(poll=lambda: None)\n"
+        "    def stop(self):\n"
+        "        with Path('server-events.txt').open('a') as f: f.write('stop\\n')\n"
+        "VllmServer = FakeVllmServer\n"
+    )
+    (suite / "conftest.py").write_text(fixture_source, encoding="utf-8")
+    (suite / "test_shared.py").write_text(
+        "from pathlib import Path\nfrom dataclasses import replace\n"
+        "from tests.e2e.helpers.case_loader import load_pytest_case\n"
+        "def test_shared(pytestconfig, case_file, benchmark_index, agentbench_server):\n"
+        "    config = load_pytest_case(pytestconfig, case_file, benchmark_index=benchmark_index)\n"
+        f"    if {mode == 'different-deployment'!r} and benchmark_index == 1:\n"
+        "        config = replace(config, host='localhost')\n"
+        "    bound = agentbench_server(config)\n"
+        "    assert bound.port == int(Path('server-port.txt').read_text())\n"
+        "    assert bound.case.benchmark_params == config.case.benchmark_params\n",
+        encoding="utf-8",
+    )
+    args = ["tests/e2e/agentbench", "-q", "-p", "no:cacheprovider"]
+    if mode == "startup-failure":
+        args.extend(["-k", "claude and single"])
+    result = collection_tree.runpytest_subprocess(*args)
+    if mode == "reuse":
+        result.assert_outcomes(passed=7)
+    elif mode == "startup-failure":
+        result.assert_outcomes(failed=1, deselected=6)
+        assert "model startup failed" in result.stdout.str()
+    else:
+        result.assert_outcomes(passed=6, failed=1)
+        assert "must share the same deployment" in result.stdout.str()
+    assert (collection_tree.path / "server-events.txt").read_text().splitlines() == ["start", "stop"]
 
 
 @pytest.mark.parametrize("seconds", [180, 0.5])
