@@ -25,6 +25,8 @@ mirror_hardwares:
           skip-pull: true
           require-prebuild: true
           environment:
+            # Pass the job secret by name so its value stays out of the command.
+            - HF_TOKEN
             - HOME=/tmp/ci-home
             # Keep pytest cache out of the checkout (root-owned cache breaks agent cleanup).
             - PYTEST_ADDOPTS=-o cache_dir=/tmp/pytest-cache
@@ -40,6 +42,7 @@ mirror_hardwares:
           skip-pull: true
           require-prebuild: true
           environment:
+            - HF_TOKEN
             - HOME=/tmp/ci-home
             - PYTEST_ADDOPTS=-o cache_dir=/tmp/pytest-cache
 

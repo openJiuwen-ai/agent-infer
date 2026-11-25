@@ -92,6 +92,14 @@ The ready CI pipeline runs all profiles in one functional job and one pytest
 invocation. It uses the existing l20_2 preset and the shared CI runtime image.
 Performance and replay suites retain their previous service lifecycle.
 
+The GPU serve smoke and functional CI jobs load `HF_TOKEN` from Buildkite Secrets
+and pass it into the container by environment variable name. Before running them,
+create a secret named `HF_TOKEN` under Buildkite **Agents > the jobs' cluster >
+Secrets > New Secret**, containing a Hugging Face token with read access, and allow
+the `agent-infer-gate` pipeline in its access policy. GitHub Actions secrets are
+not automatically available to Buildkite. The token is supplied at runtime;
+it is not a Docker build argument and is not saved in the image or repository.
+
 ## Validation and evidence
 
 The run must finalize, complete its one task, have no failed tasks, and record
