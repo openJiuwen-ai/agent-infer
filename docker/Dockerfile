@@ -62,6 +62,14 @@ RUN sed -i '1{/^#!/d;}' /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
  && ln -s /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs /usr/local/bin/zcode \
  && test "$(zcode --version)" = "0.17.1"
 
+# Jiuwen's sandbox mounts /usr but not /etc/alternatives. Keep the base image's
+# Python interpreter reachable inside the sandbox before creating the venv.
+RUN python3_target="$(readlink -f /usr/bin/python3)" \
+ && test -x "$python3_target" \
+ && if [ "$python3_target" != /usr/bin/python3 ]; then \
+      ln -sfn "$python3_target" /usr/bin/python3; \
+    fi
+
 # JiuwenSwarm uses its own Python environment so its dependencies cannot replace vLLM's.
 ARG JIUWENSWARM_VERSION=0.2.4b3
 RUN python3 -m venv --system-site-packages /opt/jiuwenswarm \

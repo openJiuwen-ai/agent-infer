@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -14,7 +16,7 @@ import pytest
 from agentinfer.agentbench.agents.preflight import check_agent_preflight
 from agentinfer.agentbench.benchkit.config import AgentBenchConfig, load_config
 from tests.e2e.function.agentbench.artifact_validation import validate_agent_artifacts
-from tests.e2e.function.agentbench.create_smoke_task import create_smoke_task
+from tests.e2e.function.agentbench.create_smoke_task import TASK_ID, create_smoke_task
 from tests.e2e.helpers.benchmark import run_benchmark, validate_completed_run
 from tests.e2e.helpers.case_loader import E2EConfig, load_pytest_case, validate_benchmark_user
 
@@ -32,13 +34,41 @@ def resolve_agent_type(config: E2EConfig) -> str:
     return AgentBenchConfig.model_validate(bench).agent.type
 
 
+def validate_smoke_task(run_dir: Path) -> None:
+    """Execute the task's assertions independently of the agent's final response."""
+    workspace = run_dir / "workspaces" / TASK_ID
+    log_path = run_dir / "tasks" / TASK_ID / "smoke-check.log"
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-B", "addition.py"],
+            cwd=workspace,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = exc.stdout or b""
+        output_text = output.decode("utf-8", errors="replace") if isinstance(output, bytes) else output
+        log_path.write_text(output_text, encoding="utf-8")
+        raise RuntimeError(f"smoke task verification timed out after 30 seconds; see {log_path}") from exc
+    log_path.write_text(completed.stdout, encoding="utf-8")
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"smoke task verification failed (exit_code={completed.returncode}); see {log_path}\n{completed.stdout}"
+        )
+
+
 def test_agent_smoke(
     pytestconfig: pytest.Config,
     case_file: Path,
     benchmark_index: int,
     agentbench_server: Callable[[E2EConfig], E2EConfig],
 ) -> None:
-    """Require task completion, at least one model request, and common artifacts."""
+    """Require a verified task fix, runtime completion, model requests, and artifacts."""
     config = load_pytest_case(
         pytestconfig,
         case_file,
@@ -64,3 +94,4 @@ def test_agent_smoke(
     assert summary["tasks"]["completed"] == config.task_num, summary["tasks"]
     assert summary["tasks"]["failed"] == 0, summary["tasks"]
     validate_agent_artifacts(run_dir)
+    validate_smoke_task(run_dir)

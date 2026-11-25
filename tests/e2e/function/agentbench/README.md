@@ -102,9 +102,11 @@ summary.json, task_index.json, proxy.stdout.log, and proxy.stderr.log. The
 evidence, tasks, and workspaces directories must exist. Extra files/directories
 and empty files are allowed. Agent-specific artifact contents are not graded.
 
-A task's completed status is the runtime outcome, not an independent grading of
-the patch. The smoke prompt asks the agent to run the supplied checks. A
-plan-subagent profile exercises that runtime policy but does not independently
+After the runtime completes, pytest independently runs `python -B addition.py`
+in the task workspace. Its assertions must pass within 30 seconds. The combined
+stdout and stderr are saved as `tasks/agentinfer-smoke-add/smoke-check.log`.
+This check applies to every agent/profile and verifies the actual task fix.
+A plan-subagent profile exercises that runtime policy but does not independently
 assert child delegation here.
 
 The model server log is retained under the first case's vllm-logs directory;

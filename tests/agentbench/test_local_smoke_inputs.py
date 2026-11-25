@@ -16,7 +16,7 @@ from agentinfer.agentbench.benchkit.config import load_config
 from agentinfer.agentbench.benchkit.dataset import load_tasks
 from agentinfer.agentbench.benchkit.workspace import ensure_repo_cache, prepare_workspace
 from tests.e2e.function.agentbench import test_smoke_task as smoke_suite
-from tests.e2e.function.agentbench.create_smoke_task import create_smoke_task
+from tests.e2e.function.agentbench.create_smoke_task import TASK_ID, create_smoke_task
 from tests.e2e.helpers.case_loader import (
     E2EConfig,
     build_benchmark_argv,
@@ -188,3 +188,35 @@ def test_runtime_preflight_fails_before_fixture_or_model_start(monkeypatch) -> N
     options = SimpleNamespace(getoption=lambda name: None)
     with pytest.raises(RuntimeError, match="socat is unavailable"):
         smoke_suite.test_agent_smoke(options, SMOKE_CASE, 0, fail_if_started)
+
+
+@pytest.mark.parametrize("fixed", [False, True], ids=["broken", "fixed"])
+def test_completed_runtime_requires_a_working_task_fix(monkeypatch, tmp_path: Path, fixed: bool) -> None:
+    """A completed runtime cannot hide a broken task, such as an unusable sandbox."""
+    run_dir = tmp_path / "run"
+    workspace = run_dir / "workspaces" / TASK_ID
+    workspace.mkdir(parents=True)
+    task_dir = run_dir / "tasks" / TASK_ID
+    task_dir.mkdir(parents=True)
+    source = (SMOKE_CASE.parent.parent / "smoke_task" / "addition.py").read_text(encoding="utf-8")
+    if fixed:
+        source = source.replace("return a - b", "return a + b")
+    (workspace / "addition.py").write_text(source, encoding="utf-8")
+
+    async def preflight(agent_type: str, executable: Path) -> None:
+        pass
+
+    monkeypatch.setattr(smoke_suite, "check_agent_preflight", preflight)
+    monkeypatch.setattr(E2EConfig, "validate_prerequisites", lambda self: [])
+    monkeypatch.setattr(smoke_suite.shutil, "which", lambda name: "/usr/bin/git")
+    monkeypatch.setattr(smoke_suite, "create_smoke_task", lambda config: config)
+    monkeypatch.setattr(smoke_suite, "run_benchmark", lambda config, **kwargs: run_dir)
+    monkeypatch.setattr(smoke_suite, "validate_completed_run", lambda path: {"tasks": {"completed": 1, "failed": 0}})
+    monkeypatch.setattr(smoke_suite, "validate_agent_artifacts", lambda path: None)
+    options = SimpleNamespace(getoption=lambda name: None)
+    if fixed:
+        smoke_suite.test_agent_smoke(options, SMOKE_CASE, 0, lambda config: config)
+    else:
+        with pytest.raises(RuntimeError, match="smoke task verification failed"):
+            smoke_suite.test_agent_smoke(options, SMOKE_CASE, 0, lambda config: config)
+        assert "AssertionError" in (task_dir / "smoke-check.log").read_text(encoding="utf-8")
