@@ -75,6 +75,9 @@ def test_agent_smoke(
         benchmark_index=benchmark_index,
         benchmark_user_from_cli_only=True,
     )
+    skip_reason = config.case.benchmark_params.get("skip_reason")
+    if skip_reason:
+        pytest.skip(str(skip_reason))
     validate_benchmark_user(config)
     agent_type = resolve_agent_type(config)
     if config.task_num <= 0 or config.max_concurrency <= 0:

@@ -35,6 +35,11 @@ model deployment, hardware marks, and result root once. Its benchmark_params
 array contains seven agent/profile entries. Pytest collects each entry as an
 independent item, with IDs ending in agent/profile, such as claude/single.
 
+DSH single is temporarily skipped pending [issue #102](https://github.com/openJiuwen-ai/agent-infer/issues/102)
+because repeated `exit_plan_mode` calls can prevent task completion. The other six entries remain enabled.
+An entry's optional `skip_reason` field in `benchmark_params` makes pytest skip it
+before runtime checks or model startup. Remove the field to enable the entry again.
+
 Run on Linux with GPU access, vLLM, Git, and the selected agent installed.
 Claude needs tmux, bubblewrap, and socat. DSH and ZCode need Node.js.
 JiuwenSwarm needs its companion commands, jiuwenbox-server, bubblewrap, and

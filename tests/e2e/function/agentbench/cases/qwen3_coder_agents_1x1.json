@@ -60,6 +60,7 @@
       "agent-type": "dsh",
       "agent-executable": "/usr/local/bin/dsh",
       "agent-profile": "single",
+      "skip_reason": "DSH single exit_plan_mode loop: https://github.com/openJiuwen-ai/agent-infer/issues/102",
       "endpoint": "/v1/chat/completions",
       "task-num": 1,
       "max-concurrency": 1,
