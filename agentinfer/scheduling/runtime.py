@@ -14,6 +14,7 @@ import logging
 import math
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Generic
 
@@ -38,6 +39,7 @@ from agentinfer.scheduling.snapshot import SchedulingSnapshot
 from agentinfer.scheduling.strategy import SchedulingStrategy
 from agentinfer.scheduling.transitions import (
     TRANSITION_EVENT_KINDS,
+    ProgramPlacement,
     TransitionController,
     TransitionKind,
     TransitionRequest,
@@ -76,10 +78,12 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
         backend_pool_info: BackendPoolInfo,
         schedule_interval_seconds: float = 1.0,
         observability: SchedulerObservabilityConfig | None = None,
+        on_transition: Callable[[TransitionRequest], None] | None = None,
     ) -> None:
         backend, dp_rank = self._embedded_backend_rank(backend_pool_info)
         if not math.isfinite(schedule_interval_seconds) or schedule_interval_seconds <= 0:
             raise ValueError("schedule_interval_seconds must be finite and positive")
+        self._on_transition = on_transition
         self.strategy = strategy
         self.strategy_factors = strategy_factors
         self.backend_pool_info = backend_pool_info
@@ -129,6 +133,8 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
 
     def needs_schedule_cycle(self, now_monotonic_s: float) -> bool:
         """Return whether a host poll must enter the strategy instead of staying on its hot path."""
+        if self.strategy.host_driven_checks:
+            return False
         if not math.isfinite(now_monotonic_s) or now_monotonic_s < 0:
             raise ValueError("schedule-cycle time must be finite and non-negative")
         deadline_due = (
@@ -158,6 +164,9 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
         prompt_tokens: int,
         backend_pool_info: BackendPoolInfo,
         retained_request: RetainedRequestT,
+        *,
+        context_chars: int | None = None,
+        prefix_group: str | None = None,
     ) -> bool:
         """Bind, retain, and run immediate Program-level admission."""
         if request_id in self._request_bindings:
@@ -203,6 +212,19 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
                     program.state,
                     previous_status,
                     ProgramStatus.REASONING,
+                )
+            )
+        if context_chars is not None:
+            self._dispatch_event(
+                self._event(
+                    SchedulingEventKind.REQUEST_ARRIVED,
+                    program.ref,
+                    "api_request_arrived",
+                    program.state,
+                    program.state,
+                    previous_status,
+                    ProgramStatus.REASONING,
+                    fields=(("context_chars", context_chars), ("prefix_group", prefix_group)),
                 )
             )
         outcome = self.strategy.handle_admission(
@@ -257,6 +279,68 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
         self._next_periodic_check_at_monotonic_s = now + self._schedule_interval_seconds
         self._next_check_at_monotonic_s = self._strategy_next_check_at()
         self._next_lightweight_check_at_monotonic_s = self.strategy.next_lightweight_check_at(self.strategy_factors)
+
+    def run_host_check(self, backend_pool_info: BackendPoolInfo) -> None:
+        """Execute an explicit host deadline including when native vLLM has no requests."""
+        self._replace_backend_info(backend_pool_info)
+        self.strategy.handle_scheduled_check(
+            self._snapshot(), self.strategy_factors, TransitionController(self._apply_transition)
+        )
+
+    def on_response_progress(self, request_id: str, delta: int) -> None:
+        """Record an API response progress event for the exact live attempt."""
+        binding = self._request_bindings.get(request_id)
+        if binding is not None:
+            self._dispatch_event(
+                self._event(
+                    SchedulingEventKind.REQUEST_PROGRESS,
+                    binding.program,
+                    "api_response_progress",
+                    fields=(("delta", delta),),
+                )
+            )
+
+    def on_reported_completion(
+        self, request_id: str, total_tokens: int | None, prompt_tokens: int, cached_tokens: int
+    ) -> None:
+        """Commit the API completion boundary for strategies driven by response usage."""
+        binding = self._pop_binding(request_id)
+        if binding is None:
+            return
+        program = self.registry.get(binding.program)
+        if program is None or (
+            total_tokens is None
+            and (program.state is not ProgramState.ACTIVE or program.status is not ProgramStatus.REASONING)
+        ):
+            return
+        self._last_request_finished_at[program.ref] = time.monotonic()
+        previous_status = self.registry.record_completion(program.ref, total_tokens=total_tokens)
+        self._dispatch_event(
+            self._event(
+                SchedulingEventKind.REQUEST_FINISHED,
+                program.ref,
+                "api_response_completed",
+                program.state,
+                program.state,
+                previous_status,
+                program.status,
+                fields=(
+                    ("reported_total_tokens", total_tokens),
+                    ("prompt_tokens", prompt_tokens),
+                    ("cached_prefix_tokens", cached_tokens),
+                ),
+            )
+        )
+        self.strategy.handle_request_completion(
+            self._snapshot(), self.strategy_factors, TransitionController(self._apply_transition), program.ref
+        )
+
+    def release_program(self, ref: ProgramRef) -> bool:
+        """Cancel retained attempts and release an exact Program generation."""
+        for request_id in tuple(self._program_requests.get(ref, ())):
+            self.request_pool.cancel(request_id)
+            self._pop_binding(request_id)
+        return self._apply_transition(TransitionRequest(TransitionKind.RELEASE, ref, "api_program_release")).applied
 
     def consume_admitted_requests(
         self,
@@ -415,7 +499,11 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
                 ),
             )
         )
-        if program.marked_for_pause and current_status is ProgramStatus.ACTING:
+        if (
+            program.marked_for_pause
+            and current_status is ProgramStatus.ACTING
+            and not self.strategy.resolve_marked_pause
+        ):
             self._apply_transition(TransitionRequest(TransitionKind.PAUSE, program.ref, "marked_pause_completion"))
         else:
             self.strategy.handle_request_completion(
@@ -504,7 +592,10 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
             if program.state is not ProgramState.PAUSED:
                 return TransitionResult(request.kind, request.program, False, "queue_requires_paused")
         elif request.kind is TransitionKind.PAUSE:
-            if program.state is not ProgramState.ACTIVE or program.status is not ProgramStatus.ACTING:
+            parked_demotion = program.state is ProgramState.PAUSED and request.placement is ProgramPlacement.INACTIVE
+            if not parked_demotion and (
+                program.state is not ProgramState.ACTIVE or program.status is not ProgramStatus.ACTING
+            ):
                 return TransitionResult(request.kind, request.program, False, "pause_requires_active_acting")
             program.state = ProgramState.PAUSED
             program.backend_id = None
@@ -516,6 +607,10 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
             if program.marked_for_pause:
                 return TransitionResult(request.kind, request.program, False, "already_marked")
             program.marked_for_pause = True
+        elif request.kind is TransitionKind.CLEAR_PAUSE_MARK:
+            if not program.marked_for_pause:
+                return TransitionResult(request.kind, request.program, False, "not_marked")
+            program.marked_for_pause = False
         elif request.kind is TransitionKind.RELEASE:
             if self._program_requests.get(program.ref):
                 return TransitionResult(request.kind, request.program, False, "release_requires_idle")
@@ -533,8 +628,11 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
             current_state,
             previous_status,
             program.status,
-            fields=(("backend_id", request.backend_id), ("marked_for_pause", program.marked_for_pause)),
+            fields=(("backend_id", request.backend_id), ("marked_for_pause", program.marked_for_pause))
+            + ((("placement", request.placement.value),) if request.placement is not None else ()),
         )
+        if self._on_transition is not None:
+            self._on_transition(request)
         self._dispatch_event(event)
         return TransitionResult(request.kind, request.program, True, request.reason, event)
 
@@ -596,6 +694,8 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
             native_used_kv_tokens=dp_rank.used_hbm_kv_tokens,
             native_waiting_kv_tokens=dp_rank.waiting_hbm_kv_tokens,
             request_pool_waiting_requests=len(self.request_pool.waiting_request_ids),
+            backend_healthy=backend.healthy and dp_rank.healthy,
+            total_dram_kv_tokens=dp_rank.total_dram_kv_tokens,
         )
 
     def _shared_prefix_observation_due(self, program: RuntimeProgram, now_monotonic_s: float) -> bool:
@@ -708,10 +808,10 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
         kind: SchedulingEventKind,
         program: ProgramRef,
         reason: str,
-        previous_state: ProgramState | None,
-        current_state: ProgramState | None,
-        previous_status: ProgramStatus | None,
-        current_status: ProgramStatus | None,
+        previous_state: ProgramState | None = None,
+        current_state: ProgramState | None = None,
+        previous_status: ProgramStatus | None = None,
+        current_status: ProgramStatus | None = None,
         *,
         fields: tuple[tuple[str, str | int | float | bool | None], ...] = (),
     ) -> SchedulingEvent:

@@ -31,7 +31,12 @@ from agentinfer.scheduling.transitions import TransitionController
 class SchedulingStrategy(Generic[StrategyGlobalFactorsT, StrategyProgramFactorsT], ABC):
     """Policy that consumes runtime facts and maintained factors under the caller's scheduling lock."""
 
+    host_driven_checks = False
+    resolve_marked_pause = False
+
     _EVENT_CALLBACKS: ClassVar[dict[SchedulingEventKind, str]] = {
+        SchedulingEventKind.REQUEST_ARRIVED: "on_request_arrived",
+        SchedulingEventKind.REQUEST_PROGRESS: "on_request_progress",
         SchedulingEventKind.REQUEST_PENDING: "on_request_pending",
         SchedulingEventKind.REQUEST_ADMITTED: "on_program_admitted",
         SchedulingEventKind.REQUEST_FINISHED: "on_request_finished",
@@ -222,6 +227,12 @@ class SchedulingStrategy(Generic[StrategyGlobalFactorsT, StrategyProgramFactorsT
         callback_name = self._EVENT_CALLBACKS.get(event.kind)
         if callback_name is not None:
             getattr(self, callback_name)(strategy_factors, event)
+
+    def on_request_arrived(self, strategy_factors, event: SchedulingEvent) -> None:
+        """Apply pre-admission request facts supplied by the API adapter."""
+
+    def on_request_progress(self, strategy_factors, event: SchedulingEvent) -> None:
+        """Apply observed response progress supplied by the API adapter."""
 
     def on_request_pending(
         self,

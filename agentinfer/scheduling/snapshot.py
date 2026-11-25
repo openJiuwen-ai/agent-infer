@@ -42,6 +42,8 @@ class SchedulingSnapshot:
     native_used_kv_tokens: int | None = None
     native_waiting_kv_tokens: int | None = None
     request_pool_waiting_requests: int = 0
+    backend_healthy: bool = True
+    total_dram_kv_tokens: int | None = None
     _programs_by_ref: Mapping[ProgramRef, ProgramView] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
