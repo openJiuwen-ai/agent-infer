@@ -10,6 +10,9 @@ from agentinfer.agentcache.core.program_scheduling import BackendObservation, Pr
 from agentinfer.agentcache.core.scheduling_ipc import chat_facts
 from agentinfer.scheduling import runtime
 from agentinfer.scheduling.mori import MoriConfig
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu")
 
 
 class RecordingHost:
