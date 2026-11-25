@@ -11,6 +11,7 @@ import math
 from functools import partial
 from uuid import uuid4
 
+from pydantic_core import to_json
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -139,6 +140,13 @@ class MoriSchedulingMiddleware:
             disconnected.cancel()
             await asyncio.gather(disconnected, return_exceptions=True)
 
+    async def _forward_chat(self, request: Request, payload: dict, receive, send) -> None:
+        """Deliver admitted Chat JSON to the native server as UTF-8 bytes."""
+        body = to_json(payload)
+        message = {"type": "http.request", "body": body, "more_body": False}
+        scope = _scope_with_content_length(request.scope, len(body))
+        await self.app(scope, _replay_receive([message], receive), send)
+
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] != "http" or scope["method"] != "POST":
             await self.app(scope, receive, send)
@@ -148,8 +156,9 @@ class MoriSchedulingMiddleware:
             await self.app(scope, receive, send)
             return
 
+        request = Request(scope, receive)
         try:
-            payload = await Request(scope, receive).json()
+            payload = await request.json()
         except ValueError:
             payload = None
         if not isinstance(payload, dict):
@@ -188,10 +197,7 @@ class MoriSchedulingMiddleware:
                     payload["stream_options"] = {"include_usage": True}
                 elif isinstance(options, dict):
                     options.setdefault("include_usage", True)
-            body = json.dumps(payload, ensure_ascii=False).encode()
-            message = {"type": "http.request", "body": body, "more_body": False}
-            scope = _scope_with_content_length(scope, len(body))
-            await self.app(scope, _replay_receive([message], receive), observer)
+            await self._forward_chat(request, payload, receive, observer)
         finally:
             if observer.started:
                 observer.finish()

@@ -277,6 +277,7 @@ def test_api_preserves_begin_progress_end_and_release_order():
         attempt = payload["vllm_xargs"][ATTEMPT_ARG]
         assert bridge.attach(attempt)
         assert payload["stream_options"]["include_usage"]
+        assert payload["messages"] == [{"role": "system", "content": "你好"}]
 
         async def frames():
             yield b'data: {"choices": []}\n\n' * 19
@@ -301,7 +302,7 @@ def test_api_preserves_begin_progress_end_and_release_order():
                 "/v1/chat/completions",
                 json={
                     "program_id": "A",
-                    "messages": [{"role": "system", "content": "hi"}],
+                    "messages": [{"role": "system", "content": "你好"}],
                     "stream": True,
                 },
             )
