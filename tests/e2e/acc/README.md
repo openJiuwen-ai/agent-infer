@@ -35,10 +35,11 @@ reuses the same server across them. The server stops before switching files; run
 pytest process starts serve twice. A failed agent test does not prevent later tests from running, unless pytest's
 `-x` or `--maxfail` option stops the session. Agent selection with `-k` is preserved.
 
-The common `mark.ci` is `nightly`. JiuwenSwarm overrides only its CI lane with
-`"mark": {"ci": "ready"}` inside its `benchmark_params` entry. Expanded cases inherit the common hardware/card
+The common `mark.ci` is `nightly`. JiuwenSwarm's AgentInfer entry overrides only its CI lane with
+`"mark": {"ci": "ready"}` inside `benchmark_params`; its baseline entry inherits `nightly`.
+Expanded cases inherit the common hardware/card
 markers. Per-benchmark mark overrides may contain only `ci`; they are consumed by E2E collection and are not
-passed to BenchKit. Ready selects Jiuwen's two cases; nightly selects the other three agents' six cases.
+passed to BenchKit. Ready selects only Jiuwen's AgentInfer case; nightly selects the other seven cases.
 
 Claude and DSH reuse `swebench_vllm.yaml` and `swebench_vllm_dsh.yaml`, respectively.
 ZCode and JiuwenSwarm use `swebench_vllm_zcode.yaml` and `swebench_vllm_jiuwenswarm.yaml`, respectively.
@@ -60,7 +61,7 @@ The proxy's `request_proxy.listen_url: http://127.0.0.1:0` already requests an O
 | Claude Code | `-k claude` | `nightly` | `plan-subagent` | `claude` |
 | DSH | `-k dsh` | `nightly` | `plan-subagent` | `dsh` |
 | ZCode | `-k zcode` | `nightly` | `plan-subagent` | `zcode-launcher` |
-| JiuwenSwarm | `-k jiuwenswarm` | `ready` | `code.normal` | `jiuwenswarm` |
+| JiuwenSwarm | `-k jiuwenswarm` | `ready` (AgentInfer), `nightly` (baseline) | `code.normal` | `jiuwenswarm` |
 
 The three additional agents use `/v1/chat/completions`; Claude uses `/v1/messages`.
 Install DSH `0.2.1-rc.2` with a supported Node runtime. ZCode requires the documented Node-based CLI `0.17.1`
@@ -81,7 +82,7 @@ Compare baseline and AgentInfer results from the same agent and profile.
 
 ## Ready CI
 
-The `ready` pipeline runs only JiuwenSwarm accuracy, covering baseline and AgentInfer with two tasks each.
+The `ready` pipeline runs only JiuwenSwarm's AgentInfer accuracy case with two tasks.
 Its `agentinfer-accuracy-jiuwen` Compose service builds the `accuracy-jiuwen` target, which adds the scorer
 and Jiuwen SDK to the common CI dependencies. Claude and ZCode CLIs are installed only in the full nightly image.
 Pytest and Jiuwen run as root; the `code.normal` profile does not require `--benchmark-run-as-user`.
@@ -94,8 +95,8 @@ pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k jiuwen
 ```
 
 The pipeline puts shared invocation logs under `tests/run/acc/jiuwenswarm-<timestamp>/`, complete benchmark
-artifacts under `tests/run/acc/jiuwenswarm-<scenario>-<timestamp>/`, and exported score summaries under
-`tests/result/acc/jiuwenswarm-<scenario>-<timestamp>/`. It uploads both the run and result directories.
+artifacts under `tests/run/acc/jiuwenswarm-agentinfer-<timestamp>/`, and exported score summaries under
+`tests/result/acc/jiuwenswarm-agentinfer-<timestamp>/`. It uploads both the run and result directories.
 Known sandbox failures fail the job; this configuration does not fix the tracked Jiuwen sandbox issue.
 
 Jiuwen runs `jiuwenbox-server` as a local process in the benchmark environment. The CI preflight checks
@@ -157,9 +158,9 @@ Use the schedule's **Run now** action to check the trigger before its next sched
 ### Accuracy jobs
 
 The nightly pipeline uses the `agentinfer-accuracy` Compose service and invokes pytest directly.
-Its two jobs run Claude, DSH, and ZCode for baseline and AgentInfer respectively,
-each with one serve startup. Nightly covers six cases, with two tasks in each case;
-JiuwenSwarm runs only in ready CI. Nightly does not select the entire SWE-bench Verified dataset.
+Its baseline job runs Claude, DSH, ZCode, and JiuwenSwarm; its AgentInfer job runs Claude, DSH, and ZCode.
+Each job starts serve once. Nightly covers seven cases, with two tasks in each case;
+JiuwenSwarm's AgentInfer case runs only in ready CI. Nightly does not select the entire SWE-bench Verified dataset.
 Inside that container, run one group with:
 
 ```bash
@@ -221,6 +222,7 @@ Manual and CI runs use the same layout. The JSON's `result_root` sets the raw ru
 cases in one invocation must share it. Score exports use `tests/result/acc/`.
 `--collect-only` does not create artifact directories. Existing functional/performance suites retain their
 current output paths.
+Generated `tests/run/` and `tests/result/` directories are ignored by Git and excluded from pytest collection.
 Explicit `--log-file` and `--junitxml` paths take precedence over the automatic layout.
 When running BenchKit directly, use `--result-dir` to select the run directory explicitly.
 

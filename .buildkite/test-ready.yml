@@ -80,7 +80,7 @@ steps:
           - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose --profile accuracy -f docker/docker-compose.yml build agentinfer-accuracy-jiuwen
           - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-accuracy-jiuwen-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-ready-accuracy-gpu"
 
-      - label: "accuracy: JiuwenSwarm"
+      - label: "accuracy: JiuwenSwarm AgentInfer"
         key: ready-accuracy-jiuwenswarm
         depends_on: ready-accuracy-image
         mirror_hardwares: l20_2

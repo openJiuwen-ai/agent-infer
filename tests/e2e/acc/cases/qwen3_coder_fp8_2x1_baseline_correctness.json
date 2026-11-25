@@ -81,9 +81,6 @@
       "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
       "agent-executable": "jiuwenswarm",
       "agent-profile": "code.normal",
-      "mark": {
-        "ci": "ready"
-      },
       "task-num": 2,
       "max-concurrency": 1,
       "timeout": 3600,

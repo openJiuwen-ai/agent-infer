@@ -367,6 +367,16 @@ def test_real_pytest_keeps_repeated_invocation_logs_separate(pytester, report_co
         assert (directory / "case-artifact.txt").read_text() == "completed"
 
 
+def test_generated_artifacts_are_not_collected_as_tests(pytester):
+    pytester.makeconftest("from tests.conftest import collect_ignore")
+    for name in ("run", "result"):
+        directory = pytester.path / name / "acc" / "example"
+        directory.mkdir(parents=True)
+        (directory / "test_generated.py").write_text("raise AssertionError('generated artifact was collected')")
+    pytester.makepyfile("def test_real(): pass")
+    pytester.runpytest_inprocess("-q").assert_outcomes(passed=1)
+
+
 @pytest.mark.parametrize("pipeline", ["test-ready.yml", "test-nightly.yml"])
 def test_ci_uploads_every_accuracy_artifact(report_config, pipeline):
     import shlex
@@ -392,14 +402,15 @@ def test_ci_uploads_every_accuracy_artifact(report_config, pipeline):
         argv = shlex.split(next(command for command in commands if "tests/e2e/acc/" in command))
         config = report_config(keyword=argv[argv.index("-k") + 1])
         artifacts = accuracy_fixtures._artifact_root(config)
-        scenario = "agentinfer" if config.getoption("keyword") == "agentinfer" else "baseline"
-        case_name = accuracy_output.output_dir_name(f"jiuwenswarm-{scenario}")
+        scenario = "baseline" if config.getoption("keyword") == "baseline" else "agentinfer"
+        agent = "jiuwenswarm" if config.getoption("keyword") == "jiuwenswarm" else "claude"
+        case_name = accuracy_output.output_dir_name(f"{agent}-{scenario}")
         checkout = artifacts.parents[3]
         run_dir = artifacts.parent / case_name
         result_dir = checkout / "tests/result/acc" / case_name
         paths = [
             artifacts / "pytest.log",
-            artifacts / "jiuwenswarm/bench-requirements.txt",
+            artifacts / agent / "bench-requirements.txt",
             artifacts / scenario / "vllm-logs/worker.log",
             run_dir / "manifest.json",
             run_dir / "evaluations/eval-example/task_results.jsonl",
@@ -606,9 +617,9 @@ def test_group_loader_rejects_duplicate_agents_or_different_servers(tmp_path, fi
         ("baseline", None, 4, 1),
         ("agentinfer", None, 4, 0),
         ("jiuwenswarm", None, 2, 0),
-        (None, "ready", 2, 0),
-        (None, "nightly", 6, 1),
-        ("baseline", "nightly", 3, 1),
+        (None, "ready", 1, 0),
+        (None, "nightly", 7, 1),
+        ("baseline", "nightly", 4, 1),
         ("agentinfer", "nightly", 3, 0),
     ],
 )
@@ -650,7 +661,8 @@ def test_grouped_pytest_reuses_server_and_continues_after_agent_failure(
             config = correctness_server(E2EConfig.from_case(benchmark_case))
             _record_test_request(config)
             agent = benchmark_case.benchmark_params['agent-type']
-            assert benchmark_case.mark['ci'] == ('ready' if agent == 'jiuwenswarm' else 'nightly')
+            ready = agent == 'jiuwenswarm' and config.scenario.value == 'agentinfer'
+            assert benchmark_case.mark['ci'] == ('ready' if ready else 'nightly')
             assert 'mark' not in benchmark_case.benchmark_params
             assert not (agent == 'dsh' and config.scenario.value == 'baseline'), 'simulated agent failure'
     """)
@@ -661,7 +673,11 @@ def test_grouped_pytest_reuses_server_and_continues_after_agent_failure(
     result.assert_outcomes(passed=total - failures, failed=failures, deselected=8 - total)
     starts = [event for event in events if event[0] == "start"]
     stops = [event for event in events if event[0] == "stop"]
-    assert len(starts) == len(stops) == (1 if keyword in {"baseline", "agentinfer"} else 2)
+    expected_scenarios = {keyword} if keyword in {"baseline", "agentinfer"} else {"baseline", "agentinfer"}
+    if lane == "ready":
+        expected_scenarios = {"agentinfer"}
+    assert {event[1] for event in starts} == expected_scenarios
+    assert len(starts) == len(stops) == len(expected_scenarios)
     assert len([event for event in events if event[0] == "request"]) == total
     for _, scenario, lifecycle_socket, port in starts:
         requests = [event for event in events if event[:2] == ("request", scenario)]
