@@ -13,6 +13,10 @@ x-ci-base: &ci-base
   build:
     context: ..
     dockerfile: docker/Dockerfile
+    # Share host source settings with explicit and plugin-triggered builds.
+    args:
+      - PIP_INDEX_URL
+      - ZCODE_REPOSITORY
   # Runs as root, then ci-entrypoint.sh switches to the UID that owns the
   # checkout (the working directory). Do not set `user:` here.
   entrypoint: ["/usr/local/bin/ci-entrypoint.sh"]

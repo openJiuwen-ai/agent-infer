@@ -97,6 +97,12 @@ The ready CI pipeline runs all profiles in one functional job and one pytest
 invocation. It uses the existing l20_2 preset and the shared CI runtime image.
 Performance and replay suites retain their previous service lifecycle.
 
+Initial CI image builds and builds triggered by retried test jobs share the
+Compose `build.args` for `PIP_INDEX_URL` and `ZCODE_REPOSITORY`. The repository's
+`.buildkite/hooks/pre-command` resolves the ZCode URL using the host's Git URL
+rewrites before commands or the Compose plugin run. The PyPI URL is inherited
+from the host environment. Unset arguments retain their Dockerfile defaults.
+
 The GPU serve smoke and functional CI jobs load `HF_TOKEN` from Buildkite Secrets
 and pass it into the container by environment variable name. Before running them,
 create a secret named `HF_TOKEN` under Buildkite **Agents > the jobs' cluster >
