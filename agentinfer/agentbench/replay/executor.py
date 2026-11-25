@@ -196,6 +196,29 @@ class ReplayExecutor:
             asyncio.create_task(self._execute_node(task, node, started, root_prompts, completions, results, inflight))
             for node in task.requests
         ]
+        release_errors: list[str] = []
+        if self.config.replay.program_release_path is not None:
+            programs: dict[str, list[str]] = {}
+            for node in task.requests:
+                if node.node_type == "request":
+                    programs.setdefault(node.actor_id, []).append(node.source_key)
+
+            async def release_when_finished(actor_id: str, request_keys: list[str]) -> None:
+                # An actor's last planned request may finish before another request of that actor.
+                # Observe all outcomes without changing the graph's send or context dependencies.
+                outcomes = await asyncio.gather(*(completions[key] for key in request_keys))
+                if outcomes[-1].status != "success":
+                    return
+                try:
+                    await self.transport.release_program(task, actor_id)
+                except RuntimeError as exc:
+                    logger.warning("%s", exc)
+                    release_errors.append(str(exc))
+
+            running.extend(
+                asyncio.create_task(release_when_finished(actor_id, request_keys))
+                for actor_id, request_keys in programs.items()
+            )
         try:
             await asyncio.gather(*running)
         finally:
@@ -203,6 +226,8 @@ class ReplayExecutor:
                 if not execution.done():
                     execution.cancel()
             await asyncio.gather(*running, return_exceptions=True)
+        if release_errors:
+            raise RuntimeError(" | ".join(sorted(release_errors)))
 
     async def _execute_node(
         self,

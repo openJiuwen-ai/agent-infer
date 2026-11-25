@@ -181,6 +181,7 @@ def _sha256_json(value: object) -> str:
 def _workload_config(config: ReplayBenchConfig, planner_version: str) -> dict[str, object]:
     replay = config.replay.model_dump(mode="json")
     replay.pop("trace_path", None)
+    replay.pop("program_release_path", None)
     if config.replay.trace_type != "agentX":
         replay.pop("max_inflight_requests", None)
     return {

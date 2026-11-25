@@ -111,6 +111,11 @@ class ReplayConfig(ReplayStrictModel):
     interval_lognormal: ReplayIntervalLognormalConfig | None = None
     sample_seed: int = Field(0, json_schema_extra={"cli": True})
     max_inflight_requests: int = Field(8, ge=1, description="Per-session AgentX request limit.")
+    program_release_path: str | None = Field(
+        None,
+        pattern=r"^/[^/?#\s\\][^?#\s\\]*$",
+        description="Opt-in backend path for HTTP Program release after Replay completes a Program.",
+    )
     prompt_transport: Literal["auto", "chat_text", "completion_token_ids"] = Field(
         "auto", json_schema_extra={"cli": True}
     )
@@ -210,6 +215,8 @@ class ReplayBenchConfig(ReplayStrictModel):
 
         if self.experiment.task_num is None:
             raise ValueError("experiment.task_num is required for Replay")
+        if self.replay.program_release_path is not None and self.backend.endpoint == "/v1/messages":
+            raise ValueError("program_release_path requires an OpenAI-compatible backend.endpoint")
         if (
             self.replay.uses_token_ids
             and self.replay.trace_type != "agentX"

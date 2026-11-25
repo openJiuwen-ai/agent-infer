@@ -81,6 +81,23 @@ def test_backend_accepts_chat_template_kwargs() -> None:
     }
 
 
+@pytest.mark.parametrize("path", ["", "release", "//remote/release", "https://remote/release", "/release?x=1"])
+def test_program_release_path_requires_a_backend_relative_path(path: str) -> None:
+    with pytest.raises(ValidationError, match="program_release_path"):
+        ReplayBenchConfig.model_validate({"experiment": {"task_num": 1}, "replay": {"program_release_path": path}})
+
+
+def test_program_release_requires_an_openai_endpoint() -> None:
+    with pytest.raises(ValidationError, match="program_release_path requires an OpenAI-compatible"):
+        ReplayBenchConfig.model_validate(
+            {
+                "experiment": {"task_num": 1},
+                "backend": {"endpoint": "/v1/messages"},
+                "replay": {"program_release_path": "/programs/release"},
+            }
+        )
+
+
 def test_replay_sample_yaml_loads() -> None:
     config = load_replay_config(
         Path("agentinfer/agentbench/configs/replay_agentinfer.yaml"),
