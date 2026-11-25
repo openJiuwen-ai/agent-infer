@@ -17,7 +17,10 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import pytest
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
@@ -261,6 +264,53 @@ class E2EConfig:
         return blockers
 
 
+def load_pytest_case(
+    pytestconfig: pytest.Config,
+    case_file: Path,
+    *,
+    benchmark_index: int | None = None,
+    benchmark_user_from_cli_only: bool = False,
+) -> E2EConfig:
+    """Load one E2E case and apply pytest load/user overrides.
+
+    Omitted options preserve the case values. The smoke suite can require the
+    benchmark OS user to come from --benchmark-run-as-user.
+    """
+    config = E2EConfig.from_case(load_case_file(case_file, benchmark_index=benchmark_index)).with_benchmark_load(
+        task_num=pytestconfig.getoption("--task-num"),
+        max_concurrency=pytestconfig.getoption("--max-concurrency"),
+    )
+    raw_user = pytestconfig.getoption("--benchmark-run-as-user")
+    benchmark_user = str(raw_user).strip() if raw_user is not None else None
+    return config.with_runtime_overrides(
+        benchmark_run_as_user=benchmark_user or None,
+        benchmark_run_as_user_set=benchmark_user_from_cli_only or raw_user is not None,
+    )
+
+
+def validate_benchmark_user(config: E2EConfig, *, effective_uid: int | None = None) -> None:
+    """Require an explicit non-root bench user for root-launched plan-subagent smoke runs.
+
+    Other profiles and pytest already running as an ordinary user keep the
+    invoking user.
+    """
+    if effective_uid is None:
+        effective_uid = os.geteuid() if os.name != "nt" else None
+    if effective_uid != 0 or config.agent_profile != PLAN_SUBAGENT_PROFILE:
+        return
+    user = config.benchmark_run_as_user
+    if not user:
+        raise ValueError("plan-subagent started as root requires --benchmark-run-as-user <ordinary-user>")
+    import pwd
+
+    try:
+        entry = pwd.getpwnam(user)
+    except KeyError as exc:
+        raise ValueError(f"benchmark user does not exist: {user}") from exc
+    if entry.pw_uid == 0:
+        raise ValueError("--benchmark-run-as-user must name an ordinary user for plan-subagent, not root")
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
@@ -303,8 +353,12 @@ def _infer_scenario(payload: dict[str, Any], case_path: Path) -> PerfScenario:
     raise ValueError(f'cannot infer scenario for {case_path}; set "scenario": "baseline" or "agentinfer" in the JSON')
 
 
-def load_case_file(case_file: Path) -> BenchmarkCase:
-    """Load one ``.json`` case file."""
+def load_case_file(case_file: Path, *, benchmark_index: int | None = None) -> BenchmarkCase:
+    """Load a JSON case, selecting an explicit index for benchmark parameter arrays.
+
+    Object-shaped benchmark_params keep the existing single-case behavior.
+    An array shares the top-level deployment and requires benchmark_index.
+    """
 
     path = case_file.expanduser()
     if not path.is_file() or path.suffix != ".json":
@@ -312,8 +366,26 @@ def load_case_file(case_file: Path) -> BenchmarkCase:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"case JSON root must be an object: {case_file}")
+    variants = benchmark_param_variants(payload)
+    if benchmark_index is None:
+        if isinstance(payload.get("benchmark_params"), list):
+            raise ValueError("benchmark_index is required when benchmark_params is an array")
+        benchmark_index = 0
+    if type(benchmark_index) is not int or not 0 <= benchmark_index < len(variants):
+        raise ValueError(f"benchmark_index must be an integer between 0 and {len(variants) - 1}")
+    payload = {**payload, "benchmark_params": variants[benchmark_index]}
     scenario = _infer_scenario(payload, path)
     return _parse_case(payload, scenario=scenario)
+
+
+def benchmark_param_variants(payload: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    """Return validated benchmark entries from an object or non-empty array."""
+    params = payload.get("benchmark_params")
+    if isinstance(params, dict):
+        return (params,)
+    if not isinstance(params, list) or not params or any(not isinstance(entry, dict) for entry in params):
+        raise ValueError("benchmark_params must be an object or a non-empty array of objects")
+    return tuple(params)
 
 
 def _parse_case(payload: dict[str, Any], *, scenario: PerfScenario) -> BenchmarkCase:

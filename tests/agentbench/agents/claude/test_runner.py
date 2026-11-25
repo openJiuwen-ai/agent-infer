@@ -4,6 +4,7 @@
 """Verify Claude runtime outcomes and owned-resource cleanup."""
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -181,26 +182,48 @@ def test_early_agent_exit_is_startup_failure(tmp_path: Path, monkeypatch: pytest
     assert (tmp_path / "artifacts" / "terminal-final.log").read_text(encoding="utf-8") == "agent startup error"
 
 
-def test_cancellation_cleans_server_and_propagates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    cleanup: list[str] = []
-    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "unique-secret")
-    monkeypatch.setattr(
-        runner, "bootstrap_claude_state", lambda config_dir: (config_dir / ".claude.json").write_text("{}")
+def test_cancelled_task_cleans_its_server_and_keeps_state_separate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cleanup = _patch_runtime(
+        monkeypatch,
+        transcript=[{"type": "assistant", "message": {"stop_reason": "end_turn", "content": []}}],
     )
-    monkeypatch.setattr(runner, "start_session", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(runner, "remove_global_environment", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(runner, "set_history_limit", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(runner, "kill_server", lambda target: cleanup.append(target.socket_name))
+    launches: dict[Path, tuple[str, Path]] = {}
+
+    def launch(target, *, cwd, launch_env, **_kwargs):
+        state_dir = Path(launch_env["CLAUDE_CONFIG_DIR"])
+        marker = state_dir / "task-marker"
+        assert not marker.exists()
+        marker.write_text(cwd.parent.name, encoding="utf-8")
+        launches[cwd] = (target.socket_name, state_dir)
+
+    monkeypatch.setattr(runner, "start_session", launch)
+    first_root = tmp_path / "task-a"
+    second_root = tmp_path / "task-b"
+    first_root.mkdir()
+    second_root.mkdir()
+    first = _request(first_root)
+    second = replace(_request(second_root), session_id="abcdefab-cdef-1234-1234-123456789abc")
 
     async def cancel_during_startup(*_args: object) -> bool:
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(runner, "_sleep_with_deadline", cancel_during_startup)
+    with monkeypatch.context() as cancelled_run:
+        cancelled_run.setattr(runner, "_sleep_with_deadline", cancel_during_startup)
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(runner.run_claude(first))
 
-    with pytest.raises(asyncio.CancelledError):
-        asyncio.run(runner.run_claude(_request(tmp_path)))
-
-    assert len(cleanup) == 1
+    first_socket, first_state = launches[first.workspace]
+    assert cleanup == [first_socket]
+    result = asyncio.run(runner.run_claude(second))
+    assert result.outcome is AgentRunOutcome.COMPLETED
+    second_socket, second_state = launches[second.workspace]
+    assert first_socket != second_socket
+    assert cleanup == [first_socket, second_socket]
+    for request, state in ((first, first_state), (second, second_state)):
+        assert state.is_relative_to(request.artifact_dir)
+        assert (state / "task-marker").read_text(encoding="utf-8") == request.workspace.parent.name
 
 
 def test_cancellation_during_launch_waits_then_cleans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
