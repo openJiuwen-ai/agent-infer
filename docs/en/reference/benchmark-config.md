@@ -124,3 +124,16 @@ For Router runs, set `backend.base_url` to the Router URL and optional `backend.
 registration control protocol are no longer accepted.
 
 Replay uses separate `experiment`, `backend`, and `replay` sections; see [Trace Replay](../how-to/run-trace-replay.md).
+
+### Explicit Replay Program release
+
+Set `replay.program_release_path: /programs/release` to enable release on an OpenAI-compatible Program-aware backend.
+The path is appended to `backend.base_url`. The default is `null`, which uses the existing Replay request and lifecycle
+behavior. A backend that implements this contract accepts a top-level `program_id` on generation requests and
+`POST {"program_id": "..."}` at its release path. The release request uses the configured Bearer authentication.
+
+Each actor in a Replay session has its own Program ID. Replay posts once after the actor's last planned generation
+succeeds and all its other generation requests have settled. A failed, skipped, or cancelled terminal request does not
+trigger release. A release that times out, receives a non-2xx status, or returns a JSON receipt with `released: false`
+marks the task failed. Generation measurements are recorded separately. The setting is recorded in the run configuration
+and preserves the workload fingerprint.

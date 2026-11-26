@@ -62,6 +62,30 @@ class ReplayTransport:
         await self.client.aclose()
 
     @staticmethod
+    def _program_id(task: ReplayTaskPlan, actor_id: str) -> str:
+        return f"{task.runtime_session_id}:{actor_id}"
+
+    async def release_program(self, task: ReplayTaskPlan, actor_id: str) -> None:
+        """Send one release to the configured Backend or raise a task-level error."""
+        path = self.config.replay.program_release_path
+        assert path is not None
+        program_id = self._program_id(task, actor_id)
+        try:
+            response = await self.client.post(
+                f"{self.upstream}{path}",
+                json={"program_id": program_id},
+                headers=self._auth_headers(),
+                timeout=10,
+            )
+            response.raise_for_status()
+            if response.content and response.headers.get("content-type", "").split(";")[0] == "application/json":
+                receipt = response.json()
+                if isinstance(receipt, dict) and receipt.get("released") is False:
+                    raise ValueError("Backend returned released=false")
+        except (httpx.HTTPError, ValueError) as exc:
+            raise RuntimeError(f"Program release failed for {program_id}: {exc}") from exc
+
+    @staticmethod
     def _effective_output_tokens(node: ReplayPlanNode) -> int:
         """Send the planned output length without applying transport-side coercion."""
 
@@ -317,15 +341,19 @@ class ReplayTransport:
     ) -> dict[str, object]:
         output_tokens = self._effective_output_tokens(node)
         identity = AgentIdentity(
-            program_id=f"{task.runtime_session_id}:{node.actor_id}",
+            program_id=self._program_id(task, node.actor_id),
             task_id=task.runtime_session_id,
             session_id=task.runtime_session_id,
             agent_id=node.actor_id,
-            parent_program_id=(f"{task.runtime_session_id}:{node.parent_actor_id}" if node.parent_actor_id else None),
+            parent_program_id=(self._program_id(task, node.parent_actor_id) if node.parent_actor_id else None),
             blocks_parent=node.actor_role == "subagent" and self.config.replay.trace_type != "agentX",
             agent_role=node.actor_role,
             request_id=node.runtime_request_id,
         )
+        encoded_identity = encode_agent_identity(identity)
+        openai_identity: dict[str, object] = {"vllm_xargs": {"agentic_context": encoded_identity}}
+        if self.config.replay.program_release_path is not None:
+            openai_identity["program_id"] = identity.program_id
         if prompt.token_ids is not None:
             if len(prompt.token_ids) != node.planned_input_tokens:
                 raise ValueError("completion requires exact planned token IDs")
@@ -339,7 +367,7 @@ class ReplayTransport:
                 "seed": node.backend_sampling_seed,
                 "stream": True,
                 "stream_options": {"include_usage": True},
-                "vllm_xargs": {"agentic_context": encode_agent_identity(identity)},
+                **openai_identity,
             }
             if self.config.replay.trace_type != "agentX":
                 body["return_token_ids"] = True
@@ -355,7 +383,7 @@ class ReplayTransport:
                 "seed": node.backend_sampling_seed,
                 "stream": True,
                 "stream_options": {"include_usage": True},
-                "vllm_xargs": {"agentic_context": encode_agent_identity(identity)},
+                **openai_identity,
             }
             if prompt.tools:
                 body["tools"] = list(prompt.tools)
@@ -367,7 +395,7 @@ class ReplayTransport:
             "max_tokens": output_tokens,
             "stream": True,
             "metadata": {
-                "_agentinfer_agentic_context": encode_agent_identity(identity),
+                "_agentinfer_agentic_context": encoded_identity,
                 "_agentinfer_replay_sampling": {
                     "seed": node.backend_sampling_seed,
                     "min_tokens": output_tokens,

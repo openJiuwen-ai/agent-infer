@@ -3,6 +3,7 @@
 
 import asyncio
 import gc
+import json
 import time
 import weakref
 from types import SimpleNamespace
@@ -13,7 +14,8 @@ import pytest
 from agentinfer.agentbench.replay.config import ReplayBenchConfig
 from agentinfer.agentbench.replay.executor import ReplayExecutor
 from agentinfer.agentbench.replay.prompt import PromptBuilder, SyntheticPrompt, TokenizerClient
-from agentinfer.agentbench.replay.transport import TransportResult
+from agentinfer.agentbench.replay.transport import ReplayTransport, TransportResult
+from agentinfer.agentbench.request_proxy.request_trace import RequestTraceWriter
 from tests.helpers.marks import test_marks
 
 pytestmark = test_marks(hardware="cpu", ci="ready")
@@ -143,12 +145,16 @@ def test_interrupted_task_releases_private_preparation_before_releasing_its_slot
 
 
 @pytest.mark.parametrize("cancel", [False, True])
-def test_failed_context_then_interruption_leaves_no_dependency_tasks(cancel) -> None:
+@pytest.mark.parametrize("release_path", [None, "/programs/release"])
+def test_failed_context_then_interruption_leaves_no_dependency_tasks(cancel, release_path) -> None:
     """A failed context must not leave a waiter on a different, interrupted predecessor."""
 
     async def exercise():
         config = ReplayBenchConfig.model_validate(
-            {"experiment": {"task_num": 1, "task_timeout_seconds": 1}, "replay": {}}
+            {
+                "experiment": {"task_num": 1, "task_timeout_seconds": 1},
+                "replay": {"program_release_path": release_path},
+            }
         )
         task = SimpleNamespace(
             task_id="task",
@@ -170,6 +176,9 @@ def test_failed_context_then_interruption_leaves_no_dependency_tasks(cancel) -> 
                 released.append(task.runtime_session_id)
 
         class Transport:
+            async def release_program(self, task, actor_id):
+                pytest.fail("an interrupted Program must not be released")
+
             async def send(self, task, node, prompt):
                 sent.append(node.source_key)
                 if node.source_key == "slow":
@@ -256,16 +265,148 @@ def _node(
     send_after: str | None = None,
     context_after: str | None = None,
     effective_interval: float = 0,
+    actor_id: str = "lead",
 ) -> object:
     return SimpleNamespace(
         source_key=key,
         runtime_request_id=f"runtime-{key}",
         node_type="request",
         prompt_kind=prompt_kind,
+        actor_id=actor_id,
         send_after=send_after,
         context_after=context_after,
         effective_interval_seconds=effective_interval,
     )
+
+
+@pytest.mark.parametrize("release_status", [None, 204, 404, 200])
+@pytest.mark.parametrize("endpoint", ["/v1/chat/completions", "/v1/completions"])
+def test_program_release_follows_actor_completion(tmp_path, monkeypatch, release_status, endpoint) -> None:
+    async def exercise():
+        monkeypatch.setenv("REPLAY_TEST_KEY", "test-token")
+        token_ids = endpoint == "/v1/completions"
+        config = ReplayBenchConfig.model_validate(
+            {
+                "experiment": {"task_num": 1},
+                "backend": {"base_url": "http://backend", "endpoint": endpoint, "api_key_env": "REPLAY_TEST_KEY"},
+                "replay": {
+                    "trace_type": "agentX" if token_ids else "agentinfer",
+                    "program_release_path": "/control/release" if release_status else None,
+                },
+            }
+        )
+        child_first = _node("child-first", "subagent_first", actor_id="child")
+        child_last = _node("child-last", "continuation", actor_id="child")
+        lead = _node("lead-tail", "continuation", send_after="child-last")
+        task = SimpleNamespace(task_id="task", runtime_session_id="session", requests=(child_first, child_last, lead))
+        for node in task.requests:
+            child = node.actor_id == "child"
+            node.__dict__.update(
+                actor_role="subagent" if child else "lead",
+                parent_actor_id="lead" if child else None,
+                planned_input_tokens=1,
+                planned_output_tokens=1,
+                backend_sampling_seed=7,
+            )
+
+        class Prompts:
+            async def build(self, task, node, context):
+                if token_ids:
+                    return SyntheticPrompt("", (), (), token_ids=(task.requests.index(node),))
+                return SyntheticPrompt("", (), ({"role": "user", "content": node.source_key},))
+
+        allow_child_first_to_finish = asyncio.Event()
+        child_first_finished = asyncio.Event()
+        child_released = asyncio.Event()
+        releases = []
+
+        async def handle(request):
+            body = json.loads(request.content)
+            assert request.headers["authorization"] == "Bearer test-token"
+            if request.url.path == "/control/release":
+                assert request.method == "POST"
+                assert set(body) == {"program_id"}
+                releases.append(body["program_id"])
+                if body["program_id"] == "session:child":
+                    assert child_first_finished.is_set()
+                    child_released.set()
+                    if release_status == 200:
+                        return httpx.Response(200, json={"released": False})
+                    return httpx.Response(release_status)
+                return httpx.Response(204)
+
+            assert request.url.path == endpoint
+            key = task.requests[body["prompt"][0]].source_key if token_ids else body["messages"][0]["content"]
+            actor_id = "child" if key.startswith("child-") else "lead"
+            identity = json.loads(body["vllm_xargs"]["agentic_context"])
+            assert identity["program_id"] == f"session:{actor_id}"
+            if release_status:
+                assert body["program_id"] == identity["program_id"]
+            else:
+                assert "program_id" not in body
+            if key == "child-first":
+                await allow_child_first_to_finish.wait()
+                child_first_finished.set()
+            if key == "lead-tail":
+                assert not child_released.is_set()
+                allow_child_first_to_finish.set()
+                if release_status:
+                    await child_released.wait()
+            return httpx.Response(
+                200,
+                content='data: {"usage":{"prompt_tokens":1,"completion_tokens":1}}\n\ndata: [DONE]\n\n',
+            )
+
+        writer = RequestTraceWriter(tmp_path / "requests.jsonl")
+        await writer.start()
+        transport = ReplayTransport(config, "run", writer)
+        await transport.close()
+        transport.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+        try:
+            (result,) = await ReplayExecutor(config, SimpleNamespace(tasks=(task,)), Prompts(), transport).execute()
+        finally:
+            await transport.close()
+            await writer.close()
+
+        assert releases == (["session:child", "session:lead"] if release_status else [])
+        assert len(result.nodes) == 3
+        assert all(node.status == "success" for node in result.nodes)
+        if release_status in {404, 200}:
+            assert result.status == "failed"
+            assert "Program release failed for session:child" in result.error
+        else:
+            assert result.status == "completed"
+            assert result.error is None
+
+    asyncio.run(asyncio.wait_for(exercise(), 5))
+
+
+def test_failed_terminal_request_does_not_release_program() -> None:
+    async def exercise():
+        config = ReplayBenchConfig.model_validate(
+            {"experiment": {"task_num": 1}, "replay": {"program_release_path": "/programs/release"}}
+        )
+        first = _node("first", "lead_main")
+        last = _node("last", "continuation", send_after="first")
+        task = SimpleNamespace(task_id="task", runtime_session_id="session", requests=(first, last))
+
+        class Prompts:
+            async def build(self, task, node, context):
+                return SyntheticPrompt("", (), ())
+
+        class Transport:
+            async def send(self, task, node, prompt):
+                success = node is first
+                return TransportResult(success, "", time.monotonic(), 200 if success else 500, None)
+
+            async def release_program(self, task, actor_id):
+                pytest.fail("a failed terminal request must not trigger Program release")
+
+        (result,) = await ReplayExecutor(config, SimpleNamespace(tasks=(task,)), Prompts(), Transport()).execute()
+        assert result.status == "failed"
+        assert [node.status for node in result.nodes] == ["success", "failed"]
+
+    asyncio.run(exercise())
 
 
 def test_parallel_lead_roots_start_together_and_only_main_supplies_context() -> None:

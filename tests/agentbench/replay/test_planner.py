@@ -221,6 +221,9 @@ def test_plan_is_stable_isolated_and_endpoint_independent(
         _config(source, tmp_path / "other"),
         analysis,
     )
+    program_release_config = _config(source, tmp_path / "release")
+    program_release_config.replay.program_release_path = "/programs/release"
+    with_program_release = build_replay_plan(program_release_config, analysis)
     different_concurrency_config = _config(
         source,
         tmp_path / "concurrency",
@@ -244,6 +247,7 @@ def test_plan_is_stable_isolated_and_endpoint_independent(
     assert all(isinstance(task, ReplayTaskPlan) for task in chat.tasks)
     assert all(isinstance(request, ReplayPlanNode) for task in chat.tasks for request in task.requests)
     assert chat == repeated
+    assert chat == with_program_release
     assert chat.workload_fingerprint == messages.workload_fingerprint
     assert chat.workload_fingerprint != different_concurrency.workload_fingerprint
     assert chat.workload_fingerprint != different_same_agent_gap.workload_fingerprint

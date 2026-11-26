@@ -119,3 +119,14 @@ YAML 中的 `result_dir`、数据集路径和包含目录的 `agent.executable` 
 `base_url` 后追加 `/metrics`。不再接受旧 `router` 章节或会话注册控制协议。
 
 Replay 使用独立的 `experiment`、`backend`、`replay` 配置，见[回放指南](../how-to/run-trace-replay.md)。
+
+### 显式释放 Replay Program
+
+设置 `replay.program_release_path: /programs/release`，可在兼容 OpenAI 接口且支持 Program 的后端开启释放。
+该路径追加到 `backend.base_url`。默认值为 `null`，沿用既有的 Replay 请求和生命周期行为。
+支持此协议的后端在生成请求中接收顶层 `program_id` 字段，并在释放路径接收携带
+`{"program_id": "..."}` 的 POST。释放请求使用已配置的 Bearer 认证。
+
+同一 Replay Session 的每个 actor 有独立的 Program ID。该 actor 最后一笔计划生成请求成功且其他生成请求均结束后，
+Replay 发送一次释放请求。终止请求失败、跳过或取消时不触发释放。释放超时、HTTP 状态非 2xx，或 JSON 回执为
+`released: false` 时，任务标记为失败。生成请求指标单独记录。此选项记录在运行配置中，工作负载指纹保持一致。
