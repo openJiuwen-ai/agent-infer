@@ -85,6 +85,8 @@ Compare baseline and AgentInfer results from the same agent and profile.
 The `ready` pipeline runs only JiuwenSwarm's AgentInfer accuracy case with two tasks.
 Its `agentinfer-accuracy-jiuwen` Compose service builds the `accuracy-jiuwen` target, which adds the scorer
 and Jiuwen SDK to the common CI dependencies. Claude and ZCode CLIs are installed only in the full nightly image.
+Both accuracy targets use `workswarm==0.2.8` (`openjiuwen==0.1.20`), matching the upstream adapter.
+The preflight initializes a temporary Jiuwen home and verifies the model client and execution hooks before serving.
 All Python installs use the `PIP_INDEX_URL` build argument, defaulting to Huawei Cloud's PyPI mirror.
 Ready and nightly builds forward the agent's `PIP_INDEX_URL` environment variable when it is set.
 Pytest and Jiuwen run as root; the `code.normal` profile does not require `--benchmark-run-as-user`.

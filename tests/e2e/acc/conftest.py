@@ -175,13 +175,30 @@ def _prepare_correctness_ci_environment(pytestconfig: pytest.Config):
                 python = _jiuwen_python(case.benchmark_params["agent-executable"])
                 client_probe_script = textwrap.dedent("""\
                     import os
+                    import subprocess
+                    import sys
                     import tempfile
                     from importlib.metadata import version
+                    from pathlib import Path
+                    assert version("workswarm") == "0.2.8"
+                    assert version("openjiuwen") == "0.1.20"
                     with tempfile.TemporaryDirectory(prefix="jw-probe-") as home:
                         os.chdir(home)
-                        os.environ.update(HOME=home, JIUWENSWARM_HOME=home, JIUWENSWARM_DATA_DIR=home + "/data")
+                        os.environ.update(
+                            HOME=home,
+                            JIUWENSWARM_HOME=home,
+                            JIUWENSWARM_DATA_DIR=home + "/data",
+                            AGENTBENCH_ROOT_SESSION_ID="preflight",
+                            AGENTBENCH_MAX_SUBAGENTS="1",
+                            AGENTBENCH_MAX_CONCURRENT_SUBAGENTS="1",
+                            AGENTBENCH_LIMITS_LOG=home + "/limits.jsonl",
+                        )
+                        os.environ.pop("AGENTBENCH_JIUWEN_RUNTIME_DIR", None)
+                        subprocess.run(
+                            [str(Path(sys.executable).with_name("jiuwenswarm-init"))],
+                            stdin=subprocess.DEVNULL, check=True, timeout=120,
+                        )
                         from agentinfer.agentbench.agents.jiuwenswarm.extension import AgentBenchAffinityModelClient
-                        assert version("jiuwenswarm") == "0.2.4b3"
                         print(AgentBenchAffinityModelClient.__client_name__)
                     """)
                 subprocess.run(

@@ -98,6 +98,43 @@ def test_zcode_subagent_limit_cli_overrides():
     assert config.agent.max_concurrent_subagents == 2
 
 
+@pytest.mark.parametrize("profile", ["agent.code.normal", "team.code.normal"])
+def test_shared_swebench_config_selects_jiuwenswarm_with_cli_overrides(profile: str) -> None:
+    args = _parser().parse_args(
+        [
+            "run",
+            "--config",
+            "agentinfer/agentbench/configs/swebench_vllm.yaml",
+            "--agent-type",
+            "jiuwenswarm",
+            "--agent-profile",
+            profile,
+            "--agent-executable",
+            "jiuwenswarm",
+            "--endpoint",
+            "/v1/chat/completions",
+            "--max-subagents",
+            "8",
+            "--max-concurrent-subagents",
+            "4",
+        ]
+    )
+    default = load_config(args.config)
+    assert (default.agent.type, default.agent.profile, default.backend.endpoint) == (
+        "claude",
+        "plan-subagent",
+        "/v1/messages",
+    )
+
+    config = _apply_cli_overrides(args, default)
+
+    assert config.agent.type == "jiuwenswarm"
+    assert config.agent.profile == profile
+    assert config.agent.executable == Path("jiuwenswarm")
+    assert config.backend.endpoint == "/v1/chat/completions"
+    assert (config.agent.max_subagents, config.agent.max_concurrent_subagents) == (8, 4)
+
+
 @pytest.mark.parametrize(
     ("trace_type", "shape"),
     [

@@ -4,6 +4,7 @@
 import asyncio
 import json
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -45,6 +46,32 @@ def test_control_chat_final_is_not_terminal() -> None:
     assert _classify_jsonl(stdout, 0) is TerminationReason.INTERRUPTED
 
 
+def test_team_waits_for_round_end_after_leader_and_member_replies():
+    tracker = _JsonlStatusTracker(is_team=True)
+    tracker.feed(_event("chat.final", {"event_type": "chat.final", "content": "leader reply"}))
+    tracker.feed(_event("chat.final", {"event_type": "team.runtime_ready"}))
+    assert tracker.classify(0) is TerminationReason.INTERRUPTED
+    tracker.feed(_event("chat.final", {"event_type": "chat.final", "content": "member reply"}))
+    assert tracker.classify(0) is TerminationReason.INTERRUPTED
+    tracker.feed(_event("chat.processing_status", {"is_processing": False, "is_complete": True}))
+    assert tracker.classify(0) is None
+
+
+@pytest.mark.parametrize(
+    "event,payload,reason",
+    [
+        ("chat.final", {"event_type": "team.error"}, TerminationReason.INTERRUPTED),
+        ("chat.error", {"error": "failure"}, TerminationReason.INTERRUPTED),
+        ("plan.approval_required", {}, TerminationReason.CONFIRMATION_HANG),
+    ],
+)
+def test_team_errors_are_not_overridden_by_round_end(event, payload, reason):
+    tracker = _JsonlStatusTracker(is_team=True)
+    tracker.feed(_event(event, payload))
+    tracker.feed(_event("chat.processing_status", {"is_processing": False}))
+    assert tracker.classify(0) is reason
+
+
 def test_interactive_and_malformed_jsonl_fail_closed() -> None:
     assert (
         _classify_jsonl(_event("chat.ask_user_question", {"questions": []}), 0) is TerminationReason.CONFIRMATION_HANG
@@ -73,11 +100,47 @@ def _request(tmp_path: Path) -> AgentRunRequest:
     )
 
 
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_startup_reason_survives_worker_cleanup_error(tmp_path, monkeypatch, caplog, cancelled):
+    from agentinfer.agentbench.agents.jiuwenswarm import runner
+
+    started = asyncio.Event()
+
+    async def fail_initialize(self):
+        started.set()
+        if cancelled:
+            await asyncio.Event().wait()
+        raise asyncio.TimeoutError
+
+    async def fail_cleanup(self):
+        raise RuntimeError("worker cleanup failed")
+
+    monkeypatch.setattr(runner.JiuwenInstance, "_initialize", fail_initialize)
+    monkeypatch.setattr(runner.JiuwenInstance, "_stop_runtime_worker", fail_cleanup)
+    monkeypatch.setattr(runner, "export_patch", lambda _: "")
+
+    async def scenario():
+        run = asyncio.create_task(runner.run_jiuwenswarm(_request(tmp_path)))
+        await started.wait()
+        if cancelled:
+            run.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await run
+        else:
+            result = await run
+            assert result.termination_reason is TerminationReason.AGENT_STARTUP_TIMEOUT
+
+    asyncio.run(scenario())
+    assert "Failed to clean up a JiuwenSwarm startup" in caplog.text
+
+
 @pytest.mark.parametrize("patch_error", [False, True])
+@pytest.mark.parametrize("profile_name", ["agent.code.normal", "team.code.normal"])
 def test_runner_passes_prompt_on_stdin_and_exports_patch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     patch_error: bool,
+    profile_name: str,
 ) -> None:
     from agentinfer.agentbench.agents.jiuwenswarm import runner
 
@@ -112,7 +175,8 @@ def test_runner_passes_prompt_on_stdin_and_exports_patch(
         state["process_kwargs"] = kwargs
         return Process()
 
-    async def communicate(_process, prompt: bytes, _deadline: float, _prompt_timeout: float):
+    async def communicate(_process, prompt: bytes, _deadline: float, _prompt_timeout: float, **kwargs):
+        assert kwargs["is_team"] is (profile_name == "team.code.normal")
         state["prompt"] = prompt
         return (
             _event("chat.final", {"event_type": "chat.final", "content": "done"}),
@@ -137,7 +201,11 @@ def test_runner_passes_prompt_on_stdin_and_exports_patch(
 
     monkeypatch.setattr(runner, "export_patch", export_clean_patch)
 
-    result = runner.asyncio.run(runner.run_jiuwenswarm(_request(tmp_path)))
+    request = replace(_request(tmp_path), profile_name=profile_name, max_subagents=8, max_concurrent_subagents=4)
+    result = runner.asyncio.run(runner.run_jiuwenswarm(request))
+    assert state["command"][state["command"].index("--mode") + 1] == profile_name
+    assert state["instance_kwargs"]["max_subagents"] == 8
+    assert state["instance_kwargs"]["max_concurrent_subagents"] == 4
 
     if patch_error:
         assert result.outcome is AgentRunOutcome.FAILED
@@ -191,7 +259,7 @@ def test_runner_timeout_interrupts_before_instance_stop(
     async def create_process(*_args, **_kwargs):
         return Process()
 
-    async def communicate(_process, _prompt: bytes, _deadline: float, _prompt_timeout: float):
+    async def communicate(_process, _prompt: bytes, _deadline: float, _prompt_timeout: float, **kwargs):
         calls.append("kill")
         return stdout, stderr, True, None
 
@@ -247,7 +315,7 @@ def test_runner_cancellation_preserves_runtime_workspace_before_reraising(
     async def create_process(*_args, **_kwargs):
         return Process()
 
-    async def communicate(_process, _prompt: bytes, _deadline: float, _prompt_timeout: float):
+    async def communicate(_process, _prompt: bytes, _deadline: float, _prompt_timeout: float, **kwargs):
         raise asyncio.CancelledError
 
     monkeypatch.setattr(runner, "JiuwenInstance", Instance)

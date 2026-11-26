@@ -98,10 +98,10 @@ RUN sed -i '1{/^#!/d;}' /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
  && ln -s /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs /usr/local/bin/zcode \
  && test "$(zcode --version)" = "0.17.1"
 
-# JiuwenSwarm uses its own Python environment so its dependencies cannot replace vLLM's.
-ARG JIUWENSWARM_VERSION=0.2.4b3
+# WorkSwarm provides the JiuwenSwarm commands in an isolated Python environment.
+ARG JIUWENSWARM_VERSION=0.2.8
 RUN python3 -m venv --system-site-packages /opt/jiuwenswarm \
- && /opt/jiuwenswarm/bin/pip install --no-cache-dir "jiuwenswarm==${JIUWENSWARM_VERSION}" \
+ && /opt/jiuwenswarm/bin/pip install --no-cache-dir "workswarm==${JIUWENSWARM_VERSION}" \
  && for command in jiuwenswarm jiuwenswarm-init jiuwenswarm-start jiuwenbox-server; do \
       test -x "/opt/jiuwenswarm/bin/$command" \
       && ln -s "/opt/jiuwenswarm/bin/$command" "/usr/local/bin/$command" || exit 1; \
@@ -125,12 +125,13 @@ RUN python3 -m venv /opt/agentbench/swebench-venv \
 
 # Read dependency metadata separately so Jiuwen also caches AgentInfer dependencies.
 COPY pyproject.toml /opt/agentbench/agentinfer-pyproject.toml
+ARG JIUWENSWARM_VERSION=0.2.8
 RUN python3 -m venv /opt/agentbench/jiuwenswarm-venv \
  && python3 -c 'import tomllib, sys; p = tomllib.load(sys.stdin.buffer); print(*p["build-system"]["requires"], *p["project"]["dependencies"], sep="\n")' \
       </opt/agentbench/agentinfer-pyproject.toml >/opt/agentbench/agentinfer-requirements.txt \
  && /opt/agentbench/jiuwenswarm-venv/bin/python -m pip install \
       -r /opt/agentbench/agentinfer-requirements.txt \
-      'jiuwenswarm==0.2.4b3' 'openjiuwen[claude,codex]==0.1.16.post2' 'openai-codex==0.144.4' \
+      "workswarm==${JIUWENSWARM_VERSION}" \
  && /opt/agentbench/jiuwenswarm-venv/bin/python -m pip check \
  && for name in jiuwenswarm jiuwenswarm-init jiuwenswarm-start jiuwenbox-server; do \
       ln -s /opt/agentbench/jiuwenswarm-venv/bin/$name /usr/local/bin/$name; \

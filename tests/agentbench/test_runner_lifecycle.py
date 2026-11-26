@@ -100,12 +100,14 @@ def _patch_successful_run(monkeypatch: pytest.MonkeyPatch) -> None:
     async def vllm(_url):
         return EvidenceCapture("vllm", None, False, "unavailable", {})
 
-    monkeypatch.setattr("agentinfer.agentbench.benchkit.runner.check_preflight", lambda _config: asyncio.sleep(0))
+    monkeypatch.setattr(
+        "agentinfer.agentbench.benchkit.runner.check_preflight", lambda _config, **_kwargs: asyncio.sleep(0)
+    )
     monkeypatch.setattr("agentinfer.agentbench.benchkit.runner.load_tasks", lambda *_args: [])
     monkeypatch.setattr("agentinfer.agentbench.benchkit.runner.capture_vllm_metrics", vllm)
     monkeypatch.setattr(
         "agentinfer.agentbench.benchkit.runner.create_request_proxy_lifecycle",
-        lambda *_args: SimpleNamespace(
+        lambda *_args, **_kwargs: SimpleNamespace(
             start=lambda: asyncio.sleep(0, result=SimpleNamespace(base_url="http://proxy")),
             wait_ready=lambda _timeout: asyncio.sleep(0),
             close=lambda: asyncio.sleep(0, result=None),
@@ -343,6 +345,67 @@ def test_jiuwenswarm_preflight_does_not_require_tmux(
     assert urls == ["http://router:8400/v1/models"]
 
 
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        (None, "is unset or empty"),
+        ("  ", "is unset or empty"),
+        ("fixture\ninvalid", "contains invalid header characters"),
+    ],
+)
+def test_backend_preflight_reports_invalid_key_without_exposing_it(tmp_path, monkeypatch, value, message):
+    config = _run_config(tmp_path)
+    env_name = "AGENTBENCH_TEST_BACKEND_KEY"
+    config.backend.api_key_env = env_name
+    if value is None:
+        monkeypatch.delenv(env_name, raising=False)
+    else:
+        monkeypatch.setenv(env_name, value)
+
+    with pytest.raises(RuntimeError, match=f"{env_name!r} {message}") as caught:
+        asyncio.run(check_preflight(config))
+    assert "fixture" not in str(caught.value)
+
+
+def test_run_uses_configured_key_for_preflight_and_proxy(tmp_path, monkeypatch):
+    from agentinfer.agentbench.benchkit import runner
+
+    _patch_successful_run(monkeypatch)
+    config = _run_config(tmp_path)
+    env_name = "AGENTBENCH_TEST_BACKEND_KEY"
+    api_key = "configured-upstream-key"
+    config.backend.api_key_env = env_name
+    monkeypatch.setenv(env_name, api_key)
+    monkeypatch.setattr(runner, "check_preflight", check_preflight)
+    monkeypatch.setattr(runner, "check_agent_preflight", lambda *_args: asyncio.sleep(0))
+    seen = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/models"
+        seen.append(request.headers.get("authorization"))
+        return httpx.Response(200)
+
+    client_class = httpx.AsyncClient
+    monkeypatch.setattr(
+        runner.httpx,
+        "AsyncClient",
+        lambda **kwargs: client_class(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    create_proxy = runner.create_request_proxy_lifecycle
+
+    def proxy(*args, upstream_api_key):
+        seen.append(upstream_api_key)
+        return create_proxy(*args)
+
+    monkeypatch.setattr(runner, "create_request_proxy_lifecycle", proxy)
+
+    output = asyncio.run(runner.run_benchmark(config))
+
+    assert seen == [f"Bearer {api_key}", api_key]
+    for name in ("manifest.json", "summary.json", "requests.jsonl"):
+        assert api_key not in (output / name).read_text()
+
+
 @pytest.mark.parametrize("failure", ["timeout", "connection", "status"])
 def test_backend_preflight_preserves_failure_details(tmp_path, monkeypatch, failure):
     from agentinfer.agentbench.benchkit import runner
@@ -381,7 +444,7 @@ def test_backend_preflight_preserves_failure_details(tmp_path, monkeypatch, fail
 def test_preflight_failure_skips_remote_finalizers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from agentinfer.agentbench.benchkit import runner
 
-    async def fail(_config):
+    async def fail(_config, **_kwargs):
         raise RuntimeError("preflight failed")
 
     async def forbidden(_url):
@@ -404,7 +467,7 @@ def test_run_timeout_covers_setup_and_still_finalizes(tmp_path: Path, monkeypatc
 
     _patch_successful_run(monkeypatch)
 
-    async def blocked_preflight(_config):
+    async def blocked_preflight(_config, **_kwargs):
         await asyncio.Event().wait()
 
     monkeypatch.setattr("agentinfer.agentbench.benchkit.runner.check_preflight", blocked_preflight)
@@ -530,7 +593,7 @@ def test_run_artifacts_index_raw_evidence_without_embedding_payloads(
     monkeypatch.setattr(
         runner,
         "create_request_proxy_lifecycle",
-        lambda *args: (
+        lambda *args, **_kwargs: (
             proxy_args.append(args)
             or SimpleNamespace(
                 start=lambda: asyncio.sleep(0, result=SimpleNamespace(base_url="http://proxy")),
@@ -569,7 +632,11 @@ def test_run_artifacts_index_raw_evidence_without_embedding_payloads(
     assert all(row["metadata"] == {} for row in manifest["evidence"])
     assert all(row["metadata"] == {} for rows in summary["source_health"]["sources"].values() for row in rows)
     assert summary["cli"] == {"entrypoint": "test"}
-    assert summary["router"] == {"applicable": False, "events": {}}
+    assert summary["router"] == {
+        "applicable": False,
+        "events": {},
+        "prediction": {},
+    }
     assert metrics_urls == ["http://vllm:8000/metrics", "http://vllm:8000/metrics"]
     assert proxy_args[0][1] == "http://router:8400"
 
@@ -578,7 +645,7 @@ def test_non_graceful_proxy_close_fails_run(tmp_path: Path, monkeypatch: pytest.
     _patch_successful_run(monkeypatch)
     monkeypatch.setattr(
         "agentinfer.agentbench.benchkit.runner.create_request_proxy_lifecycle",
-        lambda *_args: SimpleNamespace(
+        lambda *_args, **_kwargs: SimpleNamespace(
             start=lambda: asyncio.sleep(0, result=SimpleNamespace(base_url="http://proxy")),
             wait_ready=lambda _timeout: asyncio.sleep(0),
             close=lambda: asyncio.sleep(

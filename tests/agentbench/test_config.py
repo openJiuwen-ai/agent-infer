@@ -33,7 +33,8 @@ def test_zcode_subagent_limits():
         ("claude", "plan-subagent", False),
         ("dsh", "single", False),
         ("dsh", "plan-subagent", False),
-        ("jiuwenswarm", "code.normal", False),
+        ("jiuwenswarm", "code.normal", True),
+        ("jiuwenswarm", "team.code.normal", True),
         ("zcode", "single", False),
         ("zcode", "plan-subagent", True),
     ],
@@ -128,8 +129,23 @@ def test_jiuwenswarm_profile_and_openai_endpoint() -> None:
     )
 
     assert config.agent.type == "jiuwenswarm"
-    assert config.agent.profile == "code.normal"
+    assert config.agent.profile == "agent.code.normal"
     assert config.backend.endpoint == "/v1/chat/completions"
+
+
+@pytest.mark.parametrize(
+    ("name", "canonical"),
+    [
+        ("code.normal", "agent.code.normal"),
+        ("code.team", "team.code.normal"),
+        ("agent.code.normal", "agent.code.normal"),
+        ("team.code.normal", "team.code.normal"),
+    ],
+)
+def test_jiuwen_modes_normalize_config_and_accept_shared_limits(name, canonical):
+    config = AgentConfig(type="jiuwenswarm", profile=name, max_subagents=8, max_concurrent_subagents=4)
+    assert config.profile == canonical
+    assert config.model_dump()["profile"] == canonical
 
 
 def test_dsh_profile_and_openai_endpoint() -> None:
@@ -173,7 +189,7 @@ def test_cleanup_budget_must_be_positive_and_finite(budget: float) -> None:
     [
         ("claude", "code.normal"),
         ("jiuwenswarm", "single"),
-        ("jiuwenswarm", "code.team"),
+        ("jiuwenswarm", "code.plan"),
         ("dsh", "code.normal"),
         ("claude", "autonomous"),
     ],

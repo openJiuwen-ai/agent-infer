@@ -13,6 +13,8 @@ Replay 从请求 trace 恢复会话、Agent、请求依赖、间隔和 token 目
 `agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware`，以传递身份和采样参数。
 具体服务参数见[接入 vLLM](integrate-vllm.md)。
 
+如需在 Replay 期间采集 Router 工作流预测指标，请参阅 [Router 工作流预测](../reference/benchmark-config.md#router-工作流预测)。
+
 Inferact 转换会从 `/v1/models` 和可选的 `/tokenizer_info` 发现后端 tokenizer。若同机存在对应
 tokenizer 文件，并且本地与后端的原始文本和聊天模板 token ID 探针完全一致，转换和回放校准会使用
 本地 tokenizer；仅在加性探测通过且消息数为已探测的 1、3、5、9 时采用增量计数，其他长度及

@@ -74,14 +74,14 @@ successful completion still requires validated session evidence.
 | Field | Default | Constraint and meaning |
 | --- | --- | --- |
 | `type` | `claude` | `claude`, `jiuwenswarm`, `dsh`, or `zcode`. |
-| `profile` | `single` | Claude/DSH/ZCode: `single` or `plan-subagent`; JiuwenSwarm: `code.normal`. |
+| `profile` | `single` | Claude/DSH/ZCode: `single` or `plan-subagent`; JiuwenSwarm: `agent.code.normal` or `team.code.normal` (aliases: `code.normal`, `code.team`). |
 | `executable` | `claude` | Agent CLI command name or path. |
 | `tmux_startup_seconds` | `2.0` | tmux session startup wait; must be `>= 0`. |
 | `terminal_capture_interval_seconds` | `30` | Terminal evidence capture interval; must be `>= 1`. |
 | `context_window` | `262144` | DSH/ZCode model context capacity; match the actual backend. YAML only. |
 | `max_tokens` | `8192` | DSH/ZCode output capacity; match the actual backend. YAML only. |
-| `max_subagents` | `1` | ZCode plan-subagent: total accepted child launches per task, including failed launches. |
-| `max_concurrent_subagents` | `1` | ZCode plan-subagent: concurrent child limit; must not exceed `max_subagents`. |
+| `max_subagents` | `1` | ZCode plan-subagent counts accepted child launches, including failed launches. JiuwenSwarm counts successful child launches per task, including teammates and descendants. |
+| `max_concurrent_subagents` | `1` | Concurrent child limit for ZCode plan-subagent and JiuwenSwarm. JiuwenSwarm counts children executing model or tool work. Must not exceed `max_subagents`. |
 
 The Claude `plan-subagent` profile uses `bypassPermissions`. Enable it only as a non-root user
 or with an approved Claude Code permission setup.
@@ -96,8 +96,10 @@ or with an approved Claude Code permission setup.
 | `endpoint` | `/v1/messages` | Claude uses `/v1/messages`; JiuwenSwarm/DSH/ZCode use `/v1/chat/completions`. |
 | `api_key_env` | `null` | Optional API-key environment variable name; never put the secret value in YAML. |
 
-Backend authentication is validated against the selected runtime capability: DSH and ZCode reject `backend.api_key_env`;
-Claude Code and JiuwenSwarm continue to support it.
+When `backend.api_key_env` is set for Claude Code or JiuwenSwarm, BenchKit reads the named environment variable.
+The model availability check and the Request Proxy use that value as a Bearer token. The proxy uses the configured
+credential for upstream requests in place of the client's authentication headers. A missing or empty variable fails
+the run before any task starts. The field is unsupported for DSH and ZCode.
 
 ## `request_proxy`
 
@@ -122,3 +124,26 @@ For Router runs, set `backend.base_url` to the Router URL and optional `backend.
 registration control protocol are no longer accepted.
 
 Replay uses separate `experiment`, `backend`, and `replay` sections; see [Trace Replay](../how-to/run-trace-replay.md).
+
+### Router workflow prediction
+
+These optional Replay settings are configured in YAML.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `backend.router_metrics_url` | unset | Full Router metrics URL, separate from the vLLM metrics endpoint. |
+| `replay.workflow_profile_id` | unset | Workflow profile ID forwarded in the request's agentic context. |
+| `replay.profile_version` | unset | Workflow profile version forwarded in the request's agentic context. |
+| `replay.profile_role_source` | `none` | Role source for profile matching. Use `request_purpose` for the original trace request purpose, `actor_id` for the actor ID, or `agent_role` for the actor role. |
+
+With `backend.router_metrics_url` configured, Replay attempts to capture `router_metrics_start.prom` and
+`router_metrics_end.prom` around the measurement window. In the run summary, `router.applicable: true`
+indicates that Router metrics collection was configured. Check `router.prediction.available` for the
+aggregation result and `router.prediction.reason` when it is unavailable.
+
+Prediction metrics use the aggregate Router series labeled `target="all"`. The Router-wide `profile_keys`
+gauge is reported separately. Read reservation error under
+`router.prediction.output_length.reservation_error[quantile][direction]`, with quantile `p95` or `p99`.
+
+Replay records the original trace request purpose in `request_purpose` when present and falls back to
+`prompt_kind` otherwise. This applies even when Router prediction settings are unset.

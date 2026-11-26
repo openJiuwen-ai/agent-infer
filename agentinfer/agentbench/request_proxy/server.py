@@ -10,7 +10,7 @@ import time
 import uuid
 import zlib
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
@@ -75,6 +75,7 @@ class RequestProxyLaunchConfig:
     stdout_path: Path
     stderr_path: Path
     endpoint: str
+    upstream_api_key: str | None = field(default=None, repr=False)
 
 
 class RequestProxyServer:
@@ -90,6 +91,8 @@ class RequestProxyServer:
         endpoint: str,
         shutdown_timeout_seconds: float = 30,
         shutdown_callback: Callable[[], None] | None = None,
+        *,
+        upstream_api_key: str | None = None,
     ) -> None:
         self.upstream_url = upstream_url.rstrip("/")
         if endpoint not in _build_usage_observers():
@@ -100,6 +103,7 @@ class RequestProxyServer:
         self.shutdown_token = shutdown_token
         self.shutdown_timeout_seconds = shutdown_timeout_seconds
         self.shutdown_callback = shutdown_callback
+        self._upstream_api_key = upstream_api_key
         self.client = httpx.AsyncClient(
             timeout=request_timeout_seconds,
             limits=httpx.Limits(max_connections=100, max_keepalive_connections=0),
@@ -145,7 +149,7 @@ class RequestProxyServer:
                     "POST",
                     f"{self.upstream_url}{self.endpoint}",
                     content=body,
-                    headers=_upstream_headers(request.headers),
+                    headers=_upstream_headers(request.headers, self._upstream_api_key),
                 )
                 response = await self.client.send(upstream_request, stream=True)
             except asyncio.CancelledError:
@@ -348,6 +352,7 @@ async def _serve_request_proxy(config: RequestProxyLaunchConfig) -> None:
         shutdown_timeout_seconds=config.shutdown_timeout_seconds,
         shutdown_callback=lambda: setattr(uvicorn_server, "should_exit", True),
         endpoint=config.endpoint,
+        upstream_api_key=config.upstream_api_key,
     )
     uvicorn_server = uvicorn.Server(
         uvicorn.Config(proxy.app, host=config.host, port=config.port, log_level="warning", access_log=False)
@@ -476,9 +481,14 @@ def _request_fact_identity(headers: Mapping[str, str], body: bytes) -> AgentRequ
     )
 
 
-def _upstream_headers(headers: Mapping[str, str]) -> dict[str, str]:
+def _upstream_headers(headers: Mapping[str, str], api_key: str | None = None) -> dict[str, str]:
     forwarded = {key: value for key, value in headers.items() if key.lower() in _PROTOCOL_REQUEST_HEADERS}
     forwarded.update(select_router_headers(headers))
+    if api_key is not None:
+        forwarded = {
+            key: value for key, value in forwarded.items() if key.lower() not in {"authorization", "x-api-key"}
+        }
+        forwarded["authorization"] = f"Bearer {api_key}"
     return forwarded
 
 
