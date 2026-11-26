@@ -9,9 +9,10 @@ steps:
     key: ci-image
     mirror_hardwares: l20_1
     host_only: true
+    timeout_in_minutes: 30
     commands:
       - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu" || true
-      - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose -f docker/docker-compose.yml build --pull agentinfer-ci
+      - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose -f docker/docker-compose.yml build --pull --build-arg PIP_INDEX_URL agentinfer-ci
       - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-ci-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu"
 
   # GPU smoke for the AgentInfer serve flag. Not the tests/e2e suite.
@@ -19,7 +20,7 @@ steps:
     depends_on: ci-image
     commands:
       - AGENTINFER_E2E_MODEL=Qwen/Qwen3-0.6B pytest -sv -m "L20 and cards_1 and ready" tests/agentcache/entrypoints/test_serve_flag_e2e.py
-    timeout_in_minutes: 25
+    timeout_in_minutes: 15
     mirror_hardwares: l20_1
 
   # Functional E2E. l20_1 and l20_2 share one Docker daemon, so reuse ci-image.
@@ -36,7 +37,7 @@ steps:
         mirror_hardwares: l20_2
         env:
           AGENTINFER_CI_AS_ROOT: "1"
-        timeout_in_minutes: 90
+        timeout_in_minutes: 30
         commands:
           # pipeline upload expands $NAME. $$ is the literal $ the container shell needs.
           - |
@@ -74,17 +75,17 @@ steps:
         key: ready-accuracy-image
         mirror_hardwares: l20_2
         host_only: true
-        timeout_in_minutes: 90
+        timeout_in_minutes: 30
         commands:
           - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-ready-accuracy-gpu" || true
-          - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose --profile accuracy -f docker/docker-compose.yml build agentinfer-accuracy-jiuwen
+          - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose --profile accuracy -f docker/docker-compose.yml build --build-arg PIP_INDEX_URL agentinfer-accuracy-jiuwen
           - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-accuracy-jiuwen-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-ready-accuracy-gpu"
 
       - label: "accuracy: JiuwenSwarm AgentInfer"
         key: ready-accuracy-jiuwenswarm
         depends_on: ready-accuracy-image
         mirror_hardwares: l20_2
-        timeout_in_minutes: 180
+        timeout_in_minutes: 30
         concurrency: 1
         concurrency_group: agentinfer/nightly-accuracy-l20
         env:
@@ -112,9 +113,10 @@ steps:
     key: ci-image-cpu
     mirror_hardwares: cpu_small
     host_only: true
+    timeout_in_minutes: 30
     commands:
       - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-cpu" || true
-      - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose -f docker/docker-compose.yml build --pull agentinfer-cpu
+      - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose -f docker/docker-compose.yml build --pull --build-arg PIP_INDEX_URL agentinfer-cpu
       - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-cpu-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-cpu"
 
   - group: ":card_index_dividers: ut"
@@ -123,7 +125,7 @@ steps:
       - label: "ut"
         commands:
           - pytest tests -sv -m "cpu and ready"
-        timeout_in_minutes: 20
+        timeout_in_minutes: 10
         mirror_hardwares: cpu_small
 
   # A plain wait skips every later step when an earlier step failed, which
@@ -135,6 +137,7 @@ steps:
     mirror_hardwares: l20_1
     # Host docker prune. Do not wrap this step in the CI container.
     host_only: true
+    timeout_in_minutes: 5
     commands:
       - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu" || true
       - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-ready-accuracy-gpu" || true
@@ -142,6 +145,7 @@ steps:
   - label: ":broom: Cleanup CPU agent"
     mirror_hardwares: cpu_small
     host_only: true
+    timeout_in_minutes: 5
     commands:
       - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-cpu" || true
       - docker image prune -f

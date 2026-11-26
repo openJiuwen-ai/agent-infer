@@ -13,12 +13,12 @@ steps:
         key: nightly-accuracy-image
         mirror_hardwares: l20_2
         host_only: true
-        timeout_in_minutes: 90
+        timeout_in_minutes: 30
         commands:
           # Accuracy extends the cached CI dependency stage; do not pull/rebuild
           # the ready image a second time when both labels run in this build.
           - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-nightly-gpu" || true
-          - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose --profile accuracy -f docker/docker-compose.yml build agentinfer-accuracy
+          - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose --profile accuracy -f docker/docker-compose.yml build --build-arg PIP_INDEX_URL agentinfer-accuracy
           - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-accuracy-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-nightly-gpu"
 
       - label: "accuracy: baseline"
@@ -42,7 +42,7 @@ steps:
                 - PYTEST_ADDOPTS
         concurrency: 1
         concurrency_group: agentinfer/nightly-accuracy-l20
-        timeout_in_minutes: 360
+        timeout_in_minutes: 90
         artifact_paths:
           - "tests/run/acc/baseline-*/**/*"
           - "tests/run/acc/*-baseline-*/**/*"
@@ -71,7 +71,7 @@ steps:
                 - PYTEST_ADDOPTS
         concurrency: 1
         concurrency_group: agentinfer/nightly-accuracy-l20
-        timeout_in_minutes: 360
+        timeout_in_minutes: 90
         artifact_paths:
           - "tests/run/acc/agentinfer-*/**/*"
           - "tests/run/acc/*-agentinfer-*/**/*"
@@ -84,5 +84,6 @@ steps:
       - label: ":broom: Cleanup nightly image"
         mirror_hardwares: l20_2
         host_only: true
+        timeout_in_minutes: 5
         commands:
           - docker image rm "agentinfer-ci:$$BUILDKITE_BUILD_ID-nightly-gpu" || true

@@ -25,17 +25,16 @@ RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-l
  && node --version \
  && dsh --version
 
+# Accept the CI agent's Python index without invalidating the Node layers.
+ARG PIP_INDEX_URL=https://mirrors.huaweicloud.com/repository/pypi/simple/
+
 # Install deps before COPY so unchanged deps hit layer cache across PRs (vllm-omni deps-cache pattern).
 RUN pip install --no-cache-dir \
-      -i https://mirrors.aliyun.com/pypi/simple/ \
-      --trusted-host mirrors.aliyun.com \
       'huggingface-hub>=1.5.0,<2.0' \
       datasets matplotlib zstandard \
       pytest pytest-timeout pytest-html pytest-xdist \
       'setuptools>=68,<85' wheel \
  && pip install --no-cache-dir \
-      -i https://mirrors.aliyun.com/pypi/simple/ \
-      --trusted-host mirrors.aliyun.com \
       'huggingface-hub>=1.5.0,<2.0' --force-reinstall
 
 ENV HF_ENDPOINT=https://hf-mirror.com \
@@ -55,6 +54,14 @@ CMD ["/bin/bash"]
 # Shared scoring and Jiuwen dependencies for ready and nightly accuracy.
 FROM ci-deps AS jiuwen-accuracy-deps
 
+# Jiuwen's sandbox mounts /usr but not /etc/alternatives.
+# Resolve the interpreter before creating the scoring and agent venvs.
+RUN python3_target="$(readlink -f /usr/bin/python3)" \
+ && test -x "$python3_target" \
+ && if [ "$python3_target" != /usr/bin/python3 ]; then \
+      ln -sfn "$python3_target" /usr/bin/python3; \
+    fi
+
 RUN apt-get update \
  && apt-get install -y --no-install-recommends bubblewrap docker.io \
  && rm -rf /var/lib/apt/lists/*
@@ -62,7 +69,6 @@ RUN apt-get update \
 # Keep scoring and Jiuwen dependencies separate from vLLM.
 RUN python3 -m venv /opt/agentbench/swebench-venv \
  && /opt/agentbench/swebench-venv/bin/python -m pip install \
-      -i https://mirrors.huaweicloud.com/repository/pypi/simple/ \
       'swebench==4.1.0' 'numpy>=2' \
  && /opt/agentbench/swebench-venv/bin/python -m pip check \
  && printf '%s\n' \
@@ -75,7 +81,6 @@ RUN python3 -m venv /opt/agentbench/jiuwenswarm-venv \
  && python3 -c 'import tomllib, sys; p = tomllib.load(sys.stdin.buffer); print(*p["build-system"]["requires"], *p["project"]["dependencies"], sep="\n")' \
       </opt/agentbench/agentinfer-pyproject.toml >/opt/agentbench/agentinfer-requirements.txt \
  && /opt/agentbench/jiuwenswarm-venv/bin/python -m pip install \
-      -i https://mirrors.huaweicloud.com/repository/pypi/simple/ \
       -r /opt/agentbench/agentinfer-requirements.txt \
       'jiuwenswarm==0.2.4b3' 'openjiuwen[claude,codex]==0.1.16.post2' 'openai-codex==0.144.4' \
  && /opt/agentbench/jiuwenswarm-venv/bin/python -m pip check \
@@ -89,7 +94,6 @@ FROM jiuwen-accuracy-deps AS accuracy-jiuwen
 WORKDIR /app
 COPY . .
 RUN pip install --no-cache-dir \
-      -i https://mirrors.huaweicloud.com/repository/pypi/simple/ \
       -e . --no-deps --no-build-isolation \
  && /opt/agentbench/jiuwenswarm-venv/bin/python -m pip install \
       -e . --no-deps --no-build-isolation \
@@ -133,7 +137,6 @@ RUN export PATH="/opt/agentbench/node-v24.14.0-linux-x64/bin:$PATH" \
 WORKDIR /app
 COPY . .
 RUN pip install --no-cache-dir \
-      -i https://mirrors.huaweicloud.com/repository/pypi/simple/ \
       -e . --no-deps --no-build-isolation \
  && /opt/agentbench/jiuwenswarm-venv/bin/python -m pip install \
       -e . --no-deps --no-build-isolation \
@@ -145,6 +148,4 @@ FROM ci-deps AS ci
 WORKDIR /app
 COPY . .
 RUN pip install --no-cache-dir \
-      -i https://mirrors.aliyun.com/pypi/simple/ \
-      --trusted-host mirrors.aliyun.com \
       -e . --no-deps

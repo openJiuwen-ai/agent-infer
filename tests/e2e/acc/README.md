@@ -85,7 +85,16 @@ Compare baseline and AgentInfer results from the same agent and profile.
 The `ready` pipeline runs only JiuwenSwarm's AgentInfer accuracy case with two tasks.
 Its `agentinfer-accuracy-jiuwen` Compose service builds the `accuracy-jiuwen` target, which adds the scorer
 and Jiuwen SDK to the common CI dependencies. Claude and ZCode CLIs are installed only in the full nightly image.
+All Python installs use the `PIP_INDEX_URL` build argument, defaulting to Huawei Cloud's PyPI mirror.
+Ready and nightly builds forward the agent's `PIP_INDEX_URL` environment variable when it is set.
 Pytest and Jiuwen run as root; the `code.normal` profile does not require `--benchmark-run-as-user`.
+Accuracy services use `runc` with direct GPU device mappings and read-only driver-library mounts to avoid
+NVIDIA runtime `/proc` submounts. `AGENTINFER_CI_NVIDIA_LIB_DIR` selects the host library directory and defaults
+to `/usr/lib/x86_64-linux-gnu`; the entrypoint adds the mounted libraries to the CUDA driver search paths.
+The accuracy image resolves the Python interpreter symlink so it remains accessible in Jiuwen's sandbox.
+Accuracy services set `systempaths=unconfined` so bubblewrap can mount a separate `/proc`.
+This relaxes Docker's protection of system paths, including kernel interfaces; use these services on trusted CI agents.
+See Docker's [security options](https://docs.docker.com/reference/cli/docker/container/run/#security-opt).
 Inside that container, the job runs:
 
 ```bash
@@ -97,7 +106,7 @@ pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k jiuwen
 The pipeline puts shared invocation logs under `tests/run/acc/jiuwenswarm-<timestamp>/`, complete benchmark
 artifacts under `tests/run/acc/jiuwenswarm-agentinfer-<timestamp>/`, and exported score summaries under
 `tests/result/acc/jiuwenswarm-agentinfer-<timestamp>/`. It uploads both the run and result directories.
-Known sandbox failures fail the job; this configuration does not fix the tracked Jiuwen sandbox issue.
+Known sandbox failures fail the job; the namespace preflight checks the container settings before model startup.
 
 Jiuwen runs `jiuwenbox-server` as a local process in the benchmark environment. The CI preflight checks
 that its execution account can create the required bubblewrap PID/user namespaces before its benchmark starts.
