@@ -101,7 +101,6 @@ steps:
     key: ci-image-cpu
     mirror_hardwares: cpu_small
     host_only: true
-    timeout_in_minutes: 60
     commands:
       - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-cpu" || true
       - |
