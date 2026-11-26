@@ -38,6 +38,8 @@ class AgentIdentity:
         expected_resume: Whether another request is expected after this round.
         agent_role: Optional explicit or inferred lead/subagent role.
         spawn_reason: Optional open-ended agent type or spawn reason.
+        workflow_profile_id: Optional stable workflow profile selector.
+        profile_version: Optional version of the selected workflow profile.
         request_id: Optional upstream correlation id; not part of Program identity.
     """
 
@@ -50,6 +52,8 @@ class AgentIdentity:
     expected_resume: bool = True
     agent_role: str | None = None
     spawn_reason: str | None = None
+    workflow_profile_id: str | None = None
+    profile_version: str | None = None
     request_id: str | None = None
 
     def __post_init__(self) -> None:
@@ -60,6 +64,8 @@ class AgentIdentity:
             "session_id": self.session_id,
             "agent_id": self.agent_id,
             "parent_program_id": self.parent_program_id,
+            "workflow_profile_id": self.workflow_profile_id,
+            "profile_version": self.profile_version,
             "request_id": self.request_id,
         }
         for name, value in identifiers.items():
@@ -82,6 +88,8 @@ class AgentIdentity:
             "expected_resume": self.expected_resume,
             "agent_role": self.agent_role,
             "spawn_reason": self.spawn_reason,
+            "workflow_profile_id": self.workflow_profile_id,
+            "profile_version": self.profile_version,
             "request_id": self.request_id,
         }
         return {key: value for key, value in values.items() if value is not None}
@@ -170,6 +178,8 @@ def parse_agent_identity(
         expected_resume=expected_resume,
         agent_role=agent_role,
         spawn_reason=_context_string(context, "spawn_reason", "subagent_type", "agent_type"),
+        workflow_profile_id=_context_string(context, "workflow_profile_id", "workflow_type"),
+        profile_version=_context_string(context, "profile_version"),
         request_id=_context_string(context, "request_id"),
     )
 

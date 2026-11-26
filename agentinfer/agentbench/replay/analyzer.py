@@ -511,6 +511,7 @@ def _build_session(
                     else None
                 ),
                 parallel_with=parallel_keys[row.key],
+                source_request_purpose=row.request_purpose,
             )
         )
         heapq.heappush(pending_by_finish, (row.finished_at, row.key, row))
