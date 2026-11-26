@@ -9,16 +9,23 @@ shutdown for one benchmark task.
 """
 
 import asyncio
+import errno
 import json
+import logging
 import os
 import shutil
 import signal
 import socket
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
-from typing import cast
+from tempfile import TemporaryDirectory
+from typing import BinaryIO, cast
 
+import psutil
 import yaml
+
+logger = logging.getLogger(__name__)
 
 _STARTUP_TIMEOUT_SECONDS = 120.0
 _STOP_TIMEOUT_SECONDS = 10.0
@@ -37,6 +44,9 @@ class JiuwenInstance:
         api_base_url: str,
         model: str,
         completion_timeout_seconds: int,
+        profile_name: str = "agent.code.normal",
+        max_subagents: int = 1,
+        max_concurrent_subagents: int = 1,
     ) -> None:
         self.executable = executable
         self.artifact_dir = artifact_dir
@@ -45,6 +55,9 @@ class JiuwenInstance:
         self.api_base_url = api_base_url.rstrip("/")
         self.model = model
         self.completion_timeout_seconds = completion_timeout_seconds
+        self.profile_name = profile_name
+        self.max_subagents = max_subagents
+        self.max_concurrent_subagents = max_concurrent_subagents
         self.root = artifact_dir / "jiuwenswarm-instance"
         self.home_dir = self.root / "home"
         self.data_dir = self.root / "data"
@@ -61,17 +74,28 @@ class JiuwenInstance:
         self.environment = self._environment()
         self._init_process: asyncio.subprocess.Process | None = None
         self._process: asyncio.subprocess.Process | None = None
+        self._gateway_claim: socket.socket | None = None
         self._jiuwenbox_process: asyncio.subprocess.Process | None = None
-        self._stdout = None
-        self._stderr = None
-        self._jiuwenbox_stdout = None
-        self._jiuwenbox_stderr = None
+        self._stdout: BinaryIO | None = None
+        self._stderr: BinaryIO | None = None
+        self._jiuwenbox_stdout: BinaryIO | None = None
+        self._jiuwenbox_stderr: BinaryIO | None = None
         self._port_env_signatures: dict[Path, tuple[int, int] | None] = {}
+        self._runtime_dir: TemporaryDirectory | None = None
+        self._runtime_worker: tuple[psutil.Process, str] | None = None
 
     async def start(self) -> None:
         """Initialize, configure, start, and wait for the task-local Jiuwen services."""
 
         try:
+            # WorkSwarm's worker IPC requires a Unix socket path shorter than 100 bytes.
+            self._runtime_dir = TemporaryDirectory(prefix="ab-jw-", dir="/tmp")
+            self.environment["AGENTBENCH_JIUWEN_RUNTIME_DIR"] = self._runtime_dir.name
+            worker_dir = self.artifact_dir / "jiuwenswarm-worker"
+            worker_dir.mkdir()
+            short_dir = Path(self._runtime_dir.name) / "run"
+            short_dir.symlink_to(worker_dir, target_is_directory=True)
+            self.environment["JIUWENSWARM_RUNTIME_SOCKET"] = str(short_dir / "worker.sock")
             self.home_dir.mkdir(parents=True, exist_ok=False)
             self.sandbox_tmp_dir.mkdir()
             self.sandbox_tmp_dir.chmod(0o1777)
@@ -110,8 +134,12 @@ class JiuwenInstance:
                 start_new_session=os.name != "nt",
             )
             await self._wait_ready()
+            await self._wait_worker_extension()
         except BaseException:
-            await self.stop()
+            try:
+                await self.stop()
+            except Exception:
+                logger.warning("Failed to clean up a JiuwenSwarm startup for %s", self.session_id, exc_info=True)
             raise
 
     async def _initialize(self) -> None:
@@ -154,6 +182,8 @@ class JiuwenInstance:
     async def interrupt(self, timeout_seconds: float = 10.0) -> bool:
         """Send a bounded explicit cancellation request for this task session."""
 
+        if self._gateway_claim is None:
+            return False
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         for _ in range(3):
             remaining = deadline - asyncio.get_running_loop().time()
@@ -189,7 +219,7 @@ class JiuwenInstance:
                             "params": {
                                 "session_id": self.session_id,
                                 "intent": "cancel",
-                                "mode": "code.normal",
+                                "mode": self.profile_name,
                             },
                         }
                     )
@@ -209,6 +239,14 @@ class JiuwenInstance:
     async def stop(self) -> None:
         """Terminate owned Jiuwen processes and close their log streams."""
 
+        try:
+            await self._stop_services()
+        finally:
+            if self._gateway_claim is not None:
+                self._gateway_claim.close()
+                self._gateway_claim = None
+
+    async def _stop_services(self) -> None:
         init_process = self._init_process
         self._init_process = None
         if init_process is not None:
@@ -217,15 +255,74 @@ class JiuwenInstance:
         self._process = None
         if process is not None:
             await _terminate_process(process)
-        jiuwenbox_process = self._jiuwenbox_process
-        self._jiuwenbox_process = None
-        if jiuwenbox_process is not None:
-            await _terminate_process(jiuwenbox_process)
-        for handle_name in ("_stdout", "_stderr", "_jiuwenbox_stdout", "_jiuwenbox_stderr"):
-            handle = getattr(self, handle_name)
-            if handle is not None:
-                handle.close()
-                setattr(self, handle_name, None)
+        try:
+            if self._runtime_dir is not None:
+                await self._stop_runtime_worker()
+        finally:
+            jiuwenbox_process = self._jiuwenbox_process
+            self._jiuwenbox_process = None
+            if jiuwenbox_process is not None:
+                await _terminate_process(jiuwenbox_process)
+            for handle_name in ("_stdout", "_stderr", "_jiuwenbox_stdout", "_jiuwenbox_stderr"):
+                handle = getattr(self, handle_name)
+                if handle is not None:
+                    handle.close()
+                    setattr(self, handle_name, None)
+            if self._runtime_dir is not None:
+                self._runtime_dir.cleanup()
+                self._runtime_dir = None
+
+    async def _stop_runtime_worker(self) -> None:
+        """The 0.2.8 worker outlives Front; stop it through the upstream IPC helper."""
+        endpoint = self.environment.get("JIUWENSWARM_RUNTIME_SOCKET")
+        if endpoint is None:
+            return
+        worker = self._runtime_worker
+        self._runtime_worker = None
+        if worker is None or not await asyncio.to_thread(_worker_alive, worker[0]):
+            worker = await asyncio.to_thread(_find_runtime_worker, psutil.process_iter(), endpoint)
+        if worker is None:
+            Path(endpoint).unlink(missing_ok=True)
+            return
+
+        owned_process, interpreter = worker
+        try:
+            with (self.artifact_dir / "jiuwenswarm-worker-stop.log").open("wb") as log:
+                try:
+                    await self._request_worker_shutdown(interpreter, log)
+                except (OSError, RuntimeError) as exc:
+                    log.write(f"Worker shutdown helper failed: {exc}\n".encode())
+        except OSError:
+            logger.warning("Cannot write the JiuwenSwarm worker shutdown log", exc_info=True)
+        if await asyncio.to_thread(_worker_alive, owned_process):
+            logger.warning("Stopping the owned WorkSwarm worker (PID %s) directly", owned_process.pid)
+            await asyncio.to_thread(_stop_owned_worker, owned_process)
+        # A force-stopped worker can leave its socket inode after the process exits.
+        Path(endpoint).unlink(missing_ok=True)
+
+    async def _request_worker_shutdown(self, interpreter: str, log: BinaryIO) -> None:
+        process = await asyncio.create_subprocess_exec(
+            interpreter,
+            "-I",
+            "-c",
+            "from jiuwenswarm.debug_launcher import _stop_resident_worker; "
+            "raise SystemExit(0 if _stop_resident_worker(timeout=5) else 1)",
+            cwd=self.artifact_dir,
+            env=self.environment,
+            stdout=log,
+            stderr=asyncio.subprocess.STDOUT,
+            start_new_session=os.name != "nt",
+        )
+        try:
+            await asyncio.wait_for(process.wait(), _STOP_TIMEOUT_SECONDS + 5)
+        except asyncio.TimeoutError as exc:
+            await _terminate_process(process)
+            raise RuntimeError("Worker shutdown helper timed out") from exc
+        except asyncio.CancelledError:
+            await _terminate_process(process)
+            raise
+        if process.returncode:
+            raise RuntimeError(f"Worker shutdown helper exited with code {process.returncode}")
 
     async def _start_jiuwenbox_server(self) -> None:
         """Launch a task-local jiuwenbox-server bound to the allocated port."""
@@ -275,10 +372,31 @@ class JiuwenInstance:
             ports_ready = await asyncio.gather(
                 *(asyncio.to_thread(_port_open, port) for port in (self.gateway_port, self.agent_server_port))
             )
-            if all(ports_ready):
-                return
+            if all(ports_ready) and await asyncio.to_thread(
+                _owns_runtime_ports, self._process.pid, self.gateway_port, self.agent_server_port
+            ):
+                self._gateway_claim = _claim_gateway(self.gateway_port)
+                if self._gateway_claim is not None:
+                    return
             await asyncio.sleep(0.2)
         raise TimeoutError("Jiuwen Gateway/AgentServer startup timed out")
+
+    async def _wait_worker_extension(self) -> None:
+        """Require an extension readiness marker from the worker serving this task."""
+        assert self._process is not None and self._runtime_dir is not None
+        deadline = asyncio.get_running_loop().time() + _STARTUP_TIMEOUT_SECONDS
+        directory = Path(self._runtime_dir.name)
+        endpoint = self.environment["JIUWENSWARM_RUNTIME_SOCKET"]
+        while asyncio.get_running_loop().time() < deadline:
+            if self._process.returncode is not None:
+                raise RuntimeError("jiuwenswarm-start exited before the AgentBench worker extension was ready")
+            children = await asyncio.to_thread(_service_children, self._process.pid)
+            worker = await asyncio.to_thread(_find_runtime_worker, children, endpoint)
+            if worker is not None and (directory / f"extension-{worker[0].pid}.ready").is_file():
+                self._runtime_worker = worker
+                return
+            await asyncio.sleep(0.2)
+        raise RuntimeError("AgentBench extension did not initialize in the task's WorkSwarm worker")
 
     def _refresh_runtime_ports(self) -> None:
         """Follow Jiuwen's published fallback ports if startup resolved a conflict."""
@@ -325,6 +443,10 @@ class JiuwenInstance:
             "JIUWENSWARM_HOME": str(self.home_dir),
             "JIUWENSWARM_DATA_DIR": str(self.data_dir),
             "AGENTBENCH_ROOT_SESSION_ID": self.session_id,
+            "AGENTBENCH_PROFILE": self.profile_name,
+            "AGENTBENCH_MAX_SUBAGENTS": str(self.max_subagents),
+            "AGENTBENCH_MAX_CONCURRENT_SUBAGENTS": str(self.max_concurrent_subagents),
+            "AGENTBENCH_LIMITS_LOG": str(self.artifact_dir / "jiuwenswarm-agent-limits.jsonl"),
             "WEB_PORT": str(self.web_port),
             "AGENT_SERVER_PORT": str(self.agent_server_port),
             "GATEWAY_PORT": str(self.gateway_port),
@@ -367,7 +489,7 @@ class JiuwenInstance:
         )
         model_config.update(
             {
-                "api_base": self.api_base_url,
+                "api_base": f"{self.api_base_url}/v1",
                 "api_key": "agentbench",
                 "model_name": self.model,
                 "client_provider": "AgentBenchAffinity",
@@ -380,13 +502,11 @@ class JiuwenInstance:
         react = _require_mapping(data.get("react"), "react")
         react["model_name"] = self.model
         react["completion_timeout"] = self.completion_timeout_seconds
-        react["kv_cache_affinity_config"] = {
-            # JiuwenSwarm only enables affinity for provider AscendAffinity.
-            # AgentBenchAffinity is its identity-injecting subclass/provider,
-            # so enablement would otherwise be normalized back to false.
+        react["enable_read_image_multimodal"] = False
+        data["kv_cache_affinity_config"] = {
             "enable_kv_cache_affinity": False,
-            "enable_kv_cache_release": False,
         }
+        react["subagent_runtime"] = {"enabled": True}
         extensions = _require_mapping(data.setdefault("extensions", {}), "extensions")
         # Jiuwen scans immediate child dirs of extension_dirs for extension.py.
         # Keep in sync with test_extension_py_is_reserved_for_jiuwenswarm.
@@ -404,6 +524,53 @@ class JiuwenInstance:
         subagents = _require_mapping(react.get("subagents"), "react.subagents")
         browser_agent = _require_mapping(subagents.get("browser_agent"), "react.subagents.browser_agent")
         browser_agent["enabled"] = False
+        subagents["cua_agent"] = {"enabled": False}
+        subagents["statusline-setup"] = {"enabled": False}
+        data["rsi"] = {"enabled": False}
+        _require_mapping(react.setdefault("evolution", {}), "react.evolution")["skill_evolution"] = False
+        _require_mapping(data.setdefault("experimental", {}), "experimental")["team_organization_ui_enabled"] = False
+        team_modes = _require_mapping(modes.get("team", {}), "modes.team")
+        if self.profile_name == "team.code.normal" and not team_modes:
+            raise RuntimeError("Jiuwen config modes.team must contain a team for team.code.normal")
+        for name, value in team_modes.items():
+            team = _require_mapping(value, f"modes.team.{name}")
+            team.update(
+                spawn_mode="inprocess",
+                teammate_mode="build_mode",
+                dispatch_mode="autonomous",
+                enable_swarmflow=False,
+                enable_task_verification=False,
+                evolution_enabled=False,
+                enable_hitt=False,
+                external_cli_agents=[],
+                external_transport=None,
+                worktree={"enabled": False},
+                memory={"enabled": False},
+            )
+            team["agents"] = {
+                role: {
+                    "model": {
+                        "model_client_config": dict(model_config),
+                        "model_request_config": {"model": self.model},
+                    },
+                    "enable_subagent_runtime": True,
+                    "completion_timeout": self.completion_timeout_seconds,
+                    "sys_operation": {
+                        "id": f"agentbench-{self.session_id}",
+                        "mode": "sandbox",
+                        "gateway_config": {
+                            "isolation": {"container_scope": "custom", "custom_id": self.session_id},
+                            "launcher_config": {
+                                "launcher_type": "pre_deploy",
+                                "base_url": self.jiuwenbox_url,
+                                "sandbox_type": "jiuwenbox",
+                                "extra_params": {"fallback_on_failure": False},
+                            },
+                        },
+                    },
+                }
+                for role in ("leader", "teammate")
+            }
         _require_mapping(data.get("hooks"), "hooks")["disable_all_hooks"] = True
         # SysOperation SANDBOX mode: route bash/write_file/edit_file/... IO
         # through jiuwenbox (bubblewrap + Landlock + seccomp). The top-level
@@ -461,6 +628,80 @@ def _port_open(port: int) -> bool:
             return True
     except OSError:
         return False
+
+
+def _service_children(launcher_pid: int) -> list[psutil.Process]:
+    try:
+        return psutil.Process(launcher_pid).children(recursive=True)
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return []
+
+
+def _find_runtime_worker(processes: Iterable[psutil.Process], endpoint: str) -> tuple[psutil.Process, str] | None:
+    for child in processes:
+        try:
+            command = child.cmdline()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        if command[1:5] == ["-m", "jiuwenswarm.server.worker.main", "--socket", endpoint]:
+            return child, command[0]
+    return None
+
+
+def _worker_alive(process: psutil.Process) -> bool:
+    try:
+        return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return False
+
+
+def _stop_owned_worker(process: psutil.Process) -> None:
+    try:
+        process.kill()
+        process.wait(timeout=_STOP_TIMEOUT_SECONDS)
+    except psutil.NoSuchProcess:
+        pass
+    except psutil.TimeoutExpired:
+        # An orphaned worker can be dead while its parent has not reaped it.
+        if _worker_alive(process):
+            raise
+
+
+def _owns_runtime_ports(launcher_pid: int, gateway_port: int, agent_server_port: int) -> bool:
+    """Match the two loopback listeners to this launcher's WorkSwarm service children."""
+    expected = {
+        "jiuwenswarm.gateway.app_gateway": gateway_port,
+        "jiuwenswarm.server.app_agentserver": agent_server_port,
+    }
+    for child in _service_children(launcher_pid):
+        try:
+            for arg in child.cmdline():
+                if arg in expected and any(
+                    conn.status == psutil.CONN_LISTEN
+                    and conn.laddr.ip in ("127.0.0.1", "0.0.0.0")
+                    and conn.laddr.port == expected[arg]
+                    for conn in child.net_connections(kind="tcp4")
+                ):
+                    del expected[arg]
+            if not expected:
+                return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return False
+
+
+def _claim_gateway(port: int) -> socket.socket | None:
+    # A Linux abstract socket reserves the final port number across benchmark processes.
+    # The kernel releases the name on close or process exit; no lock file needs cleanup.
+    claim = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    try:
+        claim.bind(f"\0agentinfer.jiuwenswarm.gateway.{port}")
+    except OSError as exc:
+        claim.close()
+        if exc.errno == errno.EADDRINUSE:
+            return None
+        raise
+    return claim
 
 
 def _file_signature(path: Path) -> tuple[int, int] | None:

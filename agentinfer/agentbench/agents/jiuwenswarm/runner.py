@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import signal
 import time
@@ -16,6 +17,8 @@ from ...benchkit.workspace import export_patch
 from ..contracts import AgentRunOutcome, AgentRunRequest, AgentRunResult, TerminationReason
 from .instance import JiuwenInstance
 from .profiles import get_profile
+
+logger = logging.getLogger(__name__)
 
 
 async def run_jiuwenswarm(request: AgentRunRequest) -> AgentRunResult:
@@ -42,6 +45,9 @@ async def run_jiuwenswarm(request: AgentRunRequest) -> AgentRunResult:
         api_base_url=request.api_base_url,
         model=request.model,
         completion_timeout_seconds=request.timeout_seconds,
+        profile_name=profile.name,
+        max_subagents=request.max_subagents,
+        max_concurrent_subagents=request.max_concurrent_subagents,
     )
     process: asyncio.subprocess.Process | None = None
     cancellation: asyncio.CancelledError | None = None
@@ -83,6 +89,7 @@ async def run_jiuwenswarm(request: AgentRunRequest) -> AgentRunResult:
             prompt.encode("utf-8"),
             deadline,
             request.prompt_delivery_timeout_seconds,
+            is_team=profile.is_team,
         )
         await _write_outputs(request.artifact_dir, stdout, stderr)
         result.transcript = str(request.artifact_dir / "jiuwenswarm.jsonl")
@@ -116,7 +123,8 @@ async def run_jiuwenswarm(request: AgentRunRequest) -> AgentRunResult:
         try:
             await asyncio.shield(instance.stop())
         except Exception:
-            if cancellation is None:
+            logger.warning("JiuwenSwarm cleanup failed for %s", request.session_id, exc_info=True)
+            if result.outcome is AgentRunOutcome.COMPLETED:
                 result.outcome = AgentRunOutcome.FAILED
                 result.termination_reason = TerminationReason.HARNESS_ERROR
 
@@ -159,10 +167,11 @@ async def _write_outputs(artifact_dir: Path, stdout: bytes, stderr: bytes) -> No
 class _JsonlStatusTracker:
     """Track CLI status from every JSONL line without retaining the full stream."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, is_team: bool = False) -> None:
         self._pending = bytearray()
         self._terminal = False
         self._reason: TerminationReason | None = None
+        self._is_team = is_team
 
     def feed(self, chunk: bytes) -> None:
         self._pending.extend(chunk)
@@ -212,7 +221,7 @@ class _JsonlStatusTracker:
             if inner == "team.error":
                 self._reason = TerminationReason.INTERRUPTED
                 return
-            if not inner or inner == "chat.final":
+            if not self._is_team and (not inner or inner == "chat.final"):
                 self._terminal = True
         elif event == "chat.processing_status" and not payload.get("is_processing", True):
             self._terminal = True
@@ -244,6 +253,8 @@ async def _communicate_with_timeout(
     prompt: bytes,
     deadline: float,
     prompt_delivery_timeout_seconds: float,
+    *,
+    is_team: bool = False,
 ) -> tuple[bytes, bytes, bool, TerminationReason | None]:
     """Deliver prompt to CLI stdin and collect stdout/stderr with timeout enforcement.
 
@@ -252,7 +263,7 @@ async def _communicate_with_timeout(
     assert process.stdin is not None
     assert process.stdout is not None
     assert process.stderr is not None
-    stdout_task = asyncio.create_task(_read_jsonl_and_track_status(process.stdout))
+    stdout_task = asyncio.create_task(_read_jsonl_and_track_status(process.stdout, is_team=is_team))
     stderr_task = asyncio.create_task(_read_all(process.stderr))
     timed_out = False
     try:
@@ -296,9 +307,11 @@ async def _deliver_prompt(stdin: asyncio.StreamWriter, prompt: bytes) -> None:
 
 async def _read_jsonl_and_track_status(
     stream: asyncio.StreamReader,
+    *,
+    is_team: bool = False,
 ) -> tuple[bytes, _JsonlStatusTracker]:
     """Read JSONL stream to completion while tracking status from events."""
-    tracker = _JsonlStatusTracker()
+    tracker = _JsonlStatusTracker(is_team=is_team)
     captured = bytearray()
     while chunk := await stream.read(64 * 1024):
         captured.extend(chunk)

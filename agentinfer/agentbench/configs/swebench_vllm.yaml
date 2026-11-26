@@ -1,11 +1,12 @@
 # SWE-bench Verified directly on vLLM through the transparent Request Proxy.
 #
-# This config works for Claude Code, JiuwenSwarm, and DeepSeek Harness. Adjust the agent section
-# and pass --agent-executable / --agent-profile on the command line, or edit below.
+# This config defaults to Claude Code. To switch runtimes, override --agent-type,
+# --agent-profile, --agent-executable and --endpoint together, or edit the matching fields below.
 
 # === Experiment: per-run execution limits ===
 experiment:
   task_num: null                       # first N tasks; null = full selection_path list
+  # Set result_dir to ../result_vllm_jiuwenswarm for a separate WorkSwarm output directory.
   result_dir: ../result_vllm           # result output directory
   max_concurrency: 1                   # number of concurrent agent workers
   task_timeout_seconds: 3600           # per-task wall-clock cap in seconds
@@ -27,11 +28,13 @@ agent:
   profile: plan-subagent               # single | plan-subagent
   executable: claude                   # PATH lookup when bare; relative paths resolve from this YAML
 
-  # For JiuwenSwarm (uncomment, comment out the Claude lines above,
-  # and set backend.endpoint to /v1/chat/completions):
+  # For WorkSwarm 0.2.8, replace the active Claude fields with this block
+  # and set backend.endpoint to /v1/chat/completions.
   # type: jiuwenswarm
-  # profile: code.normal
+  # profile: team.code.normal          # agent.code.normal | team.code.normal
   # executable: jiuwenswarm
+  # max_subagents: 8                    # cumulative child launches per task, including team members
+  # max_concurrent_subagents: 4         # children concurrently executing model or tool work
 
   # For DeepSeek Harness (uncomment, comment out the Claude lines above,
   # and set backend.endpoint to /v1/chat/completions):

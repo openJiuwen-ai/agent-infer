@@ -72,14 +72,14 @@ DSH 将清理预算耗尽记录为 `cleanup_timeout`，保留已有的任务超�
 | 字段 | 默认值 | 约束和含义 |
 | --- | --- | --- |
 | `type` | `claude` | `claude`、`jiuwenswarm`、`dsh` 或 `zcode`。 |
-| `profile` | `single` | Claude/DSH/ZCode：`single` 或 `plan-subagent`；JiuwenSwarm：`code.normal`。 |
+| `profile` | `single` | Claude/DSH/ZCode：`single` 或 `plan-subagent`；JiuwenSwarm：`agent.code.normal` 或 `team.code.normal`（兼容 `code.normal`、`code.team`）。 |
 | `executable` | `claude` | Agent CLI 命令名或路径。 |
 | `tmux_startup_seconds` | `2.0` | tmux 会话启动等待时间，必须 `>= 0`。 |
 | `terminal_capture_interval_seconds` | `30` | 终端证据采集间隔，必须 `>= 1`。 |
 | `context_window` | `262144` | DSH/ZCode 模型上下文容量；须与实际后端一致，仅支持 YAML 配置。 |
 | `max_tokens` | `8192` | DSH/ZCode 输出容量；须与实际后端一致，仅支持 YAML 配置。 |
-| `max_subagents` | `1` | ZCode plan-subagent 每任务累计接受的子 Agent 启动次数，失败也计入。 |
-| `max_concurrent_subagents` | `1` | ZCode plan-subagent 每任务子 Agent 并发上限，不得超过 `max_subagents`。 |
+| `max_subagents` | `1` | ZCode plan-subagent 统计每任务接受的子 Agent 启动次数，失败也计入。JiuwenSwarm 统计每任务成功启动的子 Agent 次数，包含队员和后代。 |
+| `max_concurrent_subagents` | `1` | ZCode plan-subagent 和 JiuwenSwarm 每任务子 Agent 并发上限。JiuwenSwarm 只统计正在执行模型或工具工作的子 Agent。不得超过 `max_subagents`。 |
 
 Claude 的 `plan-subagent` 使用 `bypassPermissions`。仅应在非 root 用户或经过批准的 Claude Code 权限环境中启用。
 
@@ -93,7 +93,9 @@ Claude 的 `plan-subagent` 使用 `bypassPermissions`。仅应在非 root 用户
 | `endpoint` | `/v1/messages` | Claude 使用 `/v1/messages`；JiuwenSwarm/DSH/ZCode 使用 `/v1/chat/completions`。 |
 | `api_key_env` | `null` | 可选的 API Key 环境变量名；配置中不得写入密钥值。 |
 
-后端认证配置根据所选运行时声明的能力校验：DSH 和 ZCode 不接受 `backend.api_key_env`，Claude Code 和 JiuwenSwarm 保持支持。
+Claude Code 或 JiuwenSwarm 配置了 `backend.api_key_env` 时，BenchKit 读取指定的环境变量。
+模型可用性检查与 Request Proxy 都将该值作为 Bearer 密钥使用，代理向后端发送请求时以此替换客户端的认证请求头。
+环境变量缺失或为空时，运行在启动任务前报错。DSH 和 ZCode 不支持此字段。
 
 ## `request_proxy`
 

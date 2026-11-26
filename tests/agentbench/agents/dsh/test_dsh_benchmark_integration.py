@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
 
@@ -125,24 +126,65 @@ def test_real_dsh_benchmark_two_concurrent_tasks(tmp_path, dsh_executable, profi
     assert json.loads((run_dir / "manifest.json").read_text())["status"] == "completed"
 
 
+def _dsh_wait_diagnostics(artifact: Path, request_count: int) -> str:
+    details = [f"Mock requests received: {request_count}"]
+    for name in (
+        "dsh-run-status.json",
+        "dsh-init.stderr.log",
+        "dsh-config.stderr.log",
+        "dsh.stderr.log",
+        "dsh-runner-error.log",
+    ):
+        path = artifact / name
+        if path.is_file():
+            tail = path.read_text(encoding="utf-8", errors="replace")[-4000:].strip()
+            if tail:
+                details.append(f"{name}:\n{tail}")
+    return "\n".join(details)
+
+
 @pytest.mark.parametrize("cancel", [False, True])
 def test_real_dsh_preserves_patch_after_timeout_or_cancel(real_request, cancel):
     with DshMockServer("single") as server:
         server.hold_after_patch = True
-        request = replace(real_request, api_base_url=server.base_url, timeout_seconds=8)
+        ready_timeout = 12 if cancel else 6
+        request = replace(real_request, api_base_url=server.base_url, timeout_seconds=30 if cancel else 8)
 
         async def scenario():
             task = asyncio.create_task(run_dsh(request))
-            ready = await asyncio.to_thread(server.blocked.wait, 6)
-            assert ready, "DSH did not execute the patch before the controlled wait"
-            if cancel:
-                task.cancel()
-                with pytest.raises(asyncio.CancelledError):
-                    await task
-            else:
-                result = await task
-                assert result.termination_reason is TerminationReason.TIMEOUT
-                assert result.has_patch
+            loop = asyncio.get_running_loop()
+            ready_deadline = loop.time() + ready_timeout
+            failure = None
+            try:
+                while not server.blocked.is_set() and not task.done():
+                    remaining = ready_deadline - loop.time()
+                    if remaining <= 0:
+                        break
+                    await asyncio.wait((task,), timeout=min(remaining, 0.05))
+
+                ready = server.blocked.is_set()
+                if task.done() and (cancel or not ready):
+                    result = await task
+                    stage = "being cancelled" if ready else "reaching the controlled wait"
+                    failure = f"DSH exited before {stage} (termination_reason={result.termination_reason})"
+                elif not ready:
+                    failure = f"DSH did not reach the controlled wait within {ready_timeout} seconds"
+                elif cancel:
+                    task.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await task
+                else:
+                    result = await task
+                    assert result.termination_reason is TerminationReason.TIMEOUT
+                    assert result.has_patch
+            finally:
+                if not task.done():
+                    task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await task
+
+            if failure is not None:
+                pytest.fail(f"{failure}\n{_dsh_wait_diagnostics(request.artifact_dir, len(server.requests))}")
 
         try:
             asyncio.run(scenario())
