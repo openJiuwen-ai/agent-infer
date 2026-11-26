@@ -11,62 +11,71 @@ steps:
     host_only: true
     commands:
       - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu" || true
-      - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose -f docker/docker-compose.yml build --pull agentinfer-ci
+      - |
+        COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 \
+          docker compose -f docker/docker-compose.yml build --pull agentinfer-ci
       - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-ci-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu"
 
   # GPU smoke for the AgentInfer serve flag. Not the tests/e2e suite.
   - label: "smoke: agentinfer serve"
     depends_on: ci-image
+    secrets:
+      - HF_TOKEN
     commands:
-      - AGENTINFER_E2E_MODEL=Qwen/Qwen3-0.6B pytest -sv -m gpu_test tests/agentcache/entrypoints/test_serve_flag_e2e.py
+      - AGENTINFER_E2E_MODEL=Qwen/Qwen3-0.6B pytest -sv -m "L20 and cards_1 and ready" tests/agentcache/entrypoints/test_serve_flag_e2e.py
     timeout_in_minutes: 25
     mirror_hardwares: l20_1
 
-  # Functional E2E. l20_1 and l20_2 share one Docker daemon, so reuse ci-image.
-  # DSH still runs on the l20_2 queue to reserve both GPUs.
+  # Functional E2E reuses ci-image and reserves two L20s per job.
   # e2e accuracy has no ready step yet, so that group is omitted.
   - group: ":card_index_dividers: e2e function"
     depends_on: ci-image
     steps:
-      # One step on the 2-GPU queue: test-user, then both 2x1 profiles.
-      # The case uses the Hugging Face repo id; vLLM downloads into HF_HOME
-      # (/home/models). Skip useradd when test-user exists. The step stays
-      # root so plan-subagent can sudo -u test-user. single stays root.
-      # DSH is /usr/local/bin/dsh.
-      - label: "dsh swebench"
+      # One pytest process shares vLLM across all agent/profile cases.
+      - label: "agentbench local smoke"
+        key: function-agentbench
         mirror_hardwares: l20_2
+        secrets:
+          - HF_TOKEN
         env:
           AGENTINFER_CI_AS_ROOT: "1"
         timeout_in_minutes: 90
+        # Keep existing diagnostics from every profile, including failed runs.
+        # Narrow paths exclude repo caches, full workspaces, and agent installs.
+        artifact_paths:
+          - "test-results/function/agentbench/vllm-logs/*.log"
+          - "test-results/function/agentbench/run-*/*.{json,jsonl,csv,log}"
+          - "test-results/function/agentbench/run-*/evidence/*.json"
+          - "test-results/function/agentbench/run-*/tasks/*/*.{json,jsonl,log,txt,yaml,patch}"
+          - "test-results/function/agentbench/run-*/tasks/*/claude_state/projects/**/*.jsonl"
+          - "test-results/function/agentbench/run-*/tasks/*/dsh-{sessions,home/sessions}/**/*.{json,jsonl,zstd}"
+          - "test-results/function/agentbench/run-*/tasks/*/jiuwenswarm-instance/**/worker-logs/*.log"
+          - "test-results/function/agentbench/run-*/tasks/*/jiuwenbox-audit/**/*.log"
+          - "test-results/function/agentbench/run-*/tasks/*/zcode-home/logs/**/*.jsonl"
+          - "test-results/function/agentbench/run-*/workspaces/*/addition.py"
         commands:
-          # pipeline upload expands $NAME. $$ is the literal $ the container shell needs.
           - |
+            set -eu
             checkout_uid=$$(stat -c %u .)
             checkout_gid=$$(stat -c %g .)
             restore_checkout_owner() {
               status=$$?
               trap - EXIT
-              if [ "$$checkout_uid" != 0 ]; then
-                if ! chown -R "$$checkout_uid:$$checkout_gid" .; then
-                  echo "ERROR: failed to restore checkout ownership" >&2
-                  if [ "$$status" = 0 ]; then status=1; fi
-                fi
+              if ! chown -R "$$checkout_uid:$$checkout_gid" .; then
+                echo "ERROR: failed to restore checkout ownership" >&2
+                status=1
               fi
               exit "$$status"
             }
             trap restore_checkout_owner EXIT
-            if id test-user >/dev/null 2>&1; then
-              echo "test-user exists, skip useradd"
-            else
-              useradd -m -s /bin/bash test-user
-            fi
+            id test-user >/dev/null 2>&1 || useradd -m -s /bin/bash test-user
             for extra in video render; do
               if getent group "$$extra" >/dev/null 2>&1; then
                 usermod -aG "$$extra" test-user
               fi
             done
-            pytest -s -v tests/e2e/function/agentbench/dsh/test_dsh_swebench.py::test_dsh_swebench --test-config-file tests/e2e/function/agentbench/dsh/cases/qwen3_coder_dsh_2x1.json
-            pytest -s -v tests/e2e/function/agentbench/dsh/test_dsh_swebench.py::test_dsh_swebench --test-config-file tests/e2e/function/agentbench/dsh/cases/qwen3_coder_dsh_2x1_plan_subagent.json
+          - bwrap --unshare-user --unshare-pid --ro-bind / / --proc /proc -- /bin/true
+          - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_smoke_task.py --benchmark-run-as-user test-user
 
   # cpu_small is another machine, so it builds the same Dockerfile itself.
   - label: ":docker: Build CI image (cpu)"
@@ -75,7 +84,9 @@ steps:
     host_only: true
     commands:
       - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-cpu" || true
-      - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose -f docker/docker-compose.yml build --pull agentinfer-cpu
+      - |
+        COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 \
+          docker compose -f docker/docker-compose.yml build --pull agentinfer-cpu
       - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-cpu-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-cpu"
 
   - group: ":card_index_dividers: ut"
@@ -83,7 +94,7 @@ steps:
     steps:
       - label: "ut"
         commands:
-          - pytest tests -sv --ignore=tests/e2e --ignore=tests/agentcache/core -m "not gpu_test and not e2e_perf"
+          - pytest tests -sv -m "cpu and ready"
         timeout_in_minutes: 20
         mirror_hardwares: cpu_small
 

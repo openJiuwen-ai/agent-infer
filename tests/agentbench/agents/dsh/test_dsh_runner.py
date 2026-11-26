@@ -16,9 +16,11 @@ import pytest
 
 from agentinfer.agentbench.agents.contracts import AgentRunOutcome, AgentRunRequest, TerminationReason
 from agentinfer.agentbench.agents.dsh.runner import _classify, run_dsh
+from agentinfer.agentbench.agents.dsh.transcript import is_turn_complete, load_session_log
 from agentinfer.agentbench.benchkit.dataset import Task
+from tests.helpers.marks import test_marks
 
-pytestmark = pytest.mark.timeout(20)
+pytestmark = test_marks(hardware="cpu", ci="ready", timeout=20)
 
 
 def _request(tmp_path: Path) -> AgentRunRequest:
@@ -75,8 +77,8 @@ mode = os.environ.get('TEST_AGENT_SCENARIO', 'complete')
 if '--dump-config' in sys.argv:
     if mode == 'startup-timeout': time.sleep(60)
     if mode == 'config-timeout' and (home / 'cordis.patch.yml').exists(): time.sleep(60)
-    if mode == 'startup-error':
-        sys.stderr.write('broken profile')
+    if mode == 'hmr-startup-error':
+        sys.stderr.write('--expose-internals is required for HMR service\n')
         sys.exit(2)
     config = home / 'cordis.patch.yml'
     print(config.read_text() if config.exists() else '[]')
@@ -125,7 +127,12 @@ def test_runner_completes_and_exports_patch(request_factory):
     assert result.has_patch
     assert result.patch_bytes == len((request.artifact_dir / "model.patch").read_bytes())
     assert (request.artifact_dir / "dsh-sessions" / "raw" / "index.json").is_file()
-    assert (request.artifact_dir / "transcript.jsonl").is_file()
+    assert result.transcript is not None
+    transcript = Path(result.transcript)
+    assert transcript.parent == request.artifact_dir
+    events = load_session_log(transcript)
+    assert events and events[0]["id"] == "root"
+    assert is_turn_complete(events)
     assert result.session_id == "root-session"
     subprocess.run(
         ["git", "apply", "--check", "--reverse", str(request.artifact_dir / "model.patch")],
@@ -202,7 +209,6 @@ def test_stdin_preserves_long_utf8_prompt_and_drains_both_outputs(request_factor
     "mode,expected",
     [
         ("startup-timeout", TerminationReason.AGENT_STARTUP_TIMEOUT),
-        ("startup-error", TerminationReason.AGENT_STARTUP_FAILED),
         ("config-timeout", TerminationReason.TIMEOUT),
         ("input-block", TerminationReason.TIMEOUT),
         ("wait", TerminationReason.TIMEOUT),
@@ -221,6 +227,18 @@ def test_failures_do_not_become_completed(request_factory, mode, expected):
     if mode in {"wait", "child-pipe"}:
         assert result.has_patch
     assert (request.artifact_dir / "dsh-run-status.json").is_file()
+
+
+def test_hmr_startup_failure_preserves_diagnostics(request_factory) -> None:
+    """A headless HMR startup failure remains visible in the task diagnostics."""
+    request = request_factory("hmr-startup-error")
+    result = asyncio.run(run_dsh(request))
+
+    assert result.outcome is AgentRunOutcome.FAILED
+    assert result.termination_reason is TerminationReason.AGENT_STARTUP_FAILED
+    message = "--expose-internals is required for HMR service"
+    assert message in (request.artifact_dir / "dsh-init.stderr.log").read_text(encoding="utf-8")
+    assert message in (request.artifact_dir / "dsh-runner-error.log").read_text(encoding="utf-8")
 
 
 def test_cancellation_collects_patch_before_reraising(request_factory):
@@ -246,7 +264,6 @@ def test_cancellation_collects_patch_before_reraising(request_factory):
 
 def test_transcript_selects_current_generation_and_keeps_raw_history(tmp_path):
     from agentinfer.agentbench.agents.dsh.runner import _copy_transcript
-    from agentinfer.agentbench.agents.dsh.transcript import load_session_log
 
     root_id = "root"
     events = [

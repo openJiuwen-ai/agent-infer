@@ -1,6 +1,10 @@
 {
   "test_name": "glm52_8x4_tracelab_replay",
   "scenario": "baseline",
+  "mark": {
+    "hardware": "A3",
+    "num_cards": 16
+  },
   "description": "GLM-5.2 TraceLab normalized JSONL replay, 8 sessions x 4 concurrency",
   "serve_env": {
     "HCCL_OP_EXPANSION_MODE": "AIV",

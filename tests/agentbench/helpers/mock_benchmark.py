@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 
-"""Test-only fixtures for hermetic AgentBench contract runs."""
+"""Mock agents and model servers for AgentBench contract tests."""
 
 from __future__ import annotations
 
@@ -152,6 +152,7 @@ class FakeAgentRuntime:
         self.failed_tasks = frozenset(failed_tasks or ())
         self.requests: list[AgentRunRequest] = []
         self.completion_order: list[str] = []
+        self.workspace_contents_before_edit: dict[str, str] = {}
 
     def get_profile(self, name: str) -> FakeProfile:
         if name != "code.normal":
@@ -190,6 +191,7 @@ class FakeAgentRuntime:
             response.raise_for_status()
 
         changed = request.workspace / "tracked.txt"
+        self.workspace_contents_before_edit[request.task.instance_id] = changed.read_text(encoding="utf-8")
         changed.write_text(f"changed by {request.task.instance_id}\n", encoding="utf-8")
         patch = await asyncio.to_thread(export_patch, request.workspace)
         request.artifact_dir.mkdir(parents=True, exist_ok=True)

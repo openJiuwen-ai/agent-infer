@@ -13,6 +13,9 @@ import pytest
 import yaml
 
 from agentinfer.agentbench.agents.dsh.instance import DshInstance
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 @pytest.fixture

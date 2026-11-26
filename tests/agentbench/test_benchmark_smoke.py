@@ -20,10 +20,11 @@ from agentinfer.agentbench.benchkit.cli import main
 from agentinfer.agentbench.benchkit.config import AgentBenchConfig
 from agentinfer.agentbench.benchkit.runner import run_benchmark
 from agentinfer.agentbench.request_proxy import RequestProxyLifecycle, RequestTraceWriter
+from tests.helpers.marks import test_marks
 
-from .helpers.benchmark_smoke import FakeAgentRuntime, FakeModelServer, ThreadBarrier, ThreadRequestProxyProcess
+from .helpers.mock_benchmark import FakeAgentRuntime, FakeModelServer, ThreadBarrier, ThreadRequestProxyProcess
 
-pytestmark = [pytest.mark.cpu_test, pytest.mark.benchmark_smoke]
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 @pytest.fixture(autouse=True)
@@ -245,6 +246,12 @@ def test_two_tasks_overlap_keep_identity_and_finalize_partial_failure(
     assert summary["requests"]["requests"] == 2
     assert {row["session_id"] for row in traces} == {first["session_id"], second["session_id"]}
     assert {body["messages"][0]["content"] for body in backend.requests} == {"fix task-a", "fix task-b"}
-    assert (run_dir / "workspaces" / "task-a" / "tracked.txt").read_text() == "changed by task-a\n"
-    assert (run_dir / "workspaces" / "task-b" / "tracked.txt").read_text() == "changed by task-b\n"
+    assert runtime.workspace_contents_before_edit == {"task-a": "base\n", "task-b": "base\n"}
+    for task_id in ("task-a", "task-b"):
+        workspace_file = run_dir / "workspaces" / task_id / "tracked.txt"
+        patch_file = run_dir / "tasks" / task_id / "model.patch"
+        assert workspace_file.read_text(encoding="utf-8") == f"changed by {task_id}\n"
+        patch_lines = patch_file.read_text(encoding="utf-8").splitlines()
+        additions = [line for line in patch_lines if line.startswith("+") and not line.startswith("+++")]
+        assert additions == [f"+changed by {task_id}"]
     assert manifest["status"] == "completed"

@@ -19,8 +19,9 @@ from agentinfer.agentbench.agents.zcode.runner import run_zcode
 from agentinfer.agentbench.benchkit.dataset import Task
 from tests.agentbench.agents.zcode.test_zcode_integration import ZCodeMockServer
 from tests.agentbench.helpers.dsh_mock_server import _Handler, seed_tasks, write_chat_completion_stream
+from tests.helpers.marks import test_marks
 
-pytestmark = pytest.mark.timeout(180)
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 @pytest.fixture
