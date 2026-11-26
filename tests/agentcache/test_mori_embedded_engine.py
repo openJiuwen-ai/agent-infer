@@ -124,7 +124,7 @@ def test_old_dispatch_after_release_and_retry_cannot_claim_reused_pages(schedule
 
 
 def test_unmanaged_native_add_and_expired_dispatch_do_not_change_ownership(scheduler):
-    bridge = scheduler._agentcache.program_scheduling
+    bridge = scheduler._agentcache.program_admission
     unsigned = native("unsigned", {PROGRAM_ARG: "victim", "generation": 8})
     scheduler.add_request(unsigned)
     publish(scheduler, unsigned, b"unsigned")
@@ -155,7 +155,7 @@ def test_periodic_placement_and_abort_all_use_real_pool_capacity(scheduler, monk
     monkeypatch.setattr(runtime, "time", SimpleNamespace(monotonic=lambda: clock.now))
     config = EngineCore.agentinfer_mori_diagnostics(core, "metrics")["backends"]["vllm-local"]["cache_config"]
     assert config == {"total_tokens_capacity": 300, "cpu_total_tokens_capacity": 160}
-    bridge = scheduler._agentcache.program_scheduling
+    bridge = scheduler._agentcache.program_admission
     assert bridge.begin("first", "A", 500, "_empty_").result()
     clock.now = 2.0
     bridge.finish("first", 160, 100, 0)
@@ -177,7 +177,7 @@ def test_periodic_placement_and_abort_all_use_real_pool_capacity(scheduler, monk
 def test_partial_placement_retry_on_real_tree_and_release_after_cold_demotion(scheduler, monkeypatch):
     clock = SimpleNamespace(now=1.0)
     monkeypatch.setattr(runtime, "time", SimpleNamespace(monotonic=lambda: clock.now))
-    bridge = scheduler._agentcache.program_scheduling
+    bridge = scheduler._agentcache.program_admission
     assert bridge.begin("a", "A", 500, "_empty_").result()
     clock.now = 2.0
     bridge.finish("a", 160, 100, 0)
@@ -212,7 +212,7 @@ def test_partial_placement_retry_on_real_tree_and_release_after_cold_demotion(sc
 
 
 def test_shutdown_resolves_pending_admission_before_releasing_engine(scheduler, monkeypatch):
-    bridge = scheduler._agentcache.program_scheduling
+    bridge = scheduler._agentcache.program_admission
     assert bridge.begin("a", "A", 500, "_empty_").result()
     waiting = bridge.begin("b", "B", 10000, "_empty_")
     assert not waiting.done()

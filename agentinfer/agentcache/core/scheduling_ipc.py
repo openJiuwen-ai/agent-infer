@@ -49,17 +49,17 @@ def chat_facts(payload: dict) -> tuple[int, str]:
     return len(json.dumps(payload, ensure_ascii=False)), key
 
 
-def handle_event(bridge, name: str, args: list):
+def handle_event(admission, name: str, args: list):
     event = Event(name)
     if event is Event.BEGIN:
-        return bridge.begin(*args)
+        return admission.begin(*args)
     if event is Event.PROGRESS:
-        return bridge.progress(*args)
+        return admission.progress(*args)
     if event is Event.FINISH:
-        return bridge.finish(*args)
+        return admission.finish(*args)
     if event is Event.CANCEL:
-        return bridge.cancel(*args)
-    return bridge.release(*args)
+        return admission.cancel(*args)
+    return admission.release(*args)
 
 
 def install_core_utility() -> None:
@@ -67,23 +67,23 @@ def install_core_utility() -> None:
     from vllm.v1.engine.core import EngineCore
 
     def handle(self, name: str, args: list):
-        bridge = self.scheduler._agentcache.program_scheduling
-        if bridge is None:
+        admission = self.scheduler._agentcache.program_admission
+        if admission is None:
             raise RuntimeError("EngineCore has no Program scheduling host")
-        return handle_event(bridge, name, args)
+        return handle_event(admission, name, args)
 
     def diagnostics(self, action):
         scheduler = self.scheduler
-        bridge = scheduler._agentcache.program_scheduling
+        admission = scheduler._agentcache.program_admission
         if action == "programs":
-            return {view.ref.program_id: view.state.value for view in bridge.runtime.registry.views()}
+            return {view.ref.program_id: view.state.value for view in admission.runtime.registry.views()}
         if action == "metrics":
-            obs = bridge.observation
+            obs = admission.observation
             cache_config = {
                 "total_tokens_capacity": obs.hbm_capacity_tokens,
                 "cpu_total_tokens_capacity": obs.dram_capacity_tokens,
             }
-            return {"backends": {bridge.backend_id: {"cache_config": cache_config}}}
+            return {"backends": {admission.backend_id: {"cache_config": cache_config}}}
         if action == "cache":
             return scheduler.program_cache_adapter.snapshot()
         raise ValueError(f"Unknown MORI diagnostics request {action!r}")

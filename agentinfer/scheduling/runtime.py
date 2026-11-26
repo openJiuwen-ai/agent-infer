@@ -214,7 +214,7 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
                     ProgramStatus.REASONING,
                 )
             )
-        if context_chars is not None:
+        if context_chars is not None or self.strategy.observes_request_arrivals:
             self._dispatch_event(
                 self._event(
                     SchedulingEventKind.REQUEST_ARRIVED,
@@ -224,7 +224,11 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
                     program.state,
                     previous_status,
                     ProgramStatus.REASONING,
-                    fields=(("context_chars", context_chars), ("prefix_group", prefix_group)),
+                    fields=(
+                        ("context_chars", context_chars),
+                        ("prefix_group", prefix_group),
+                        ("prompt_tokens", prompt_tokens),
+                    ),
                 )
             )
         outcome = self.strategy.handle_admission(
@@ -314,7 +318,9 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
         ):
             return
         self._last_request_finished_at[program.ref] = time.monotonic()
-        previous_status = self.registry.record_completion(program.ref, total_tokens=total_tokens)
+        previous_status = self.registry.record_completion(
+            program.ref, total_tokens=total_tokens, has_pending_requests=bool(self._program_requests.get(program.ref))
+        )
         self._dispatch_event(
             self._event(
                 SchedulingEventKind.REQUEST_FINISHED,
@@ -442,11 +448,12 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
             return
         now = time.monotonic()
         self._last_request_finished_at[binding.program] = now
-        previous_status = self.registry.record_completion(binding.program, total_tokens=max(0, total_tokens))
-        current_status = (
-            ProgramStatus.REASONING if self._program_requests.get(binding.program) else ProgramStatus.ACTING
+        previous_status = self.registry.record_completion(
+            binding.program,
+            total_tokens=max(0, total_tokens),
+            has_pending_requests=bool(self._program_requests.get(binding.program)),
         )
-        program.status = current_status
+        current_status = program.status
         completion_tokens = max(binding.output_tokens, max(0, total_tokens - binding.prompt_tokens))
         request_latency_seconds = max(0.0, now - binding.started_at_monotonic_s)
         decode_seconds = (

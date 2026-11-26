@@ -53,3 +53,15 @@ Override the FlashInfer filter independently with `agentcache.mori.joint_flashin
 Layerwise H2D uses the connector's `mori_layerwise_loads` setting. To also select separate
 prefill and decode attention backends, explicitly pass
 `--worker-cls agentinfer.agentcache.mori.attention.MORIFlashAttentionPrefillWorker`.
+
+## Program admission and release
+
+MORI checks the server's bearer credentials for Chat and `POST /programs/release` before
+sending an event to EngineCore. Both endpoints read `program_id` from the request body, then
+from `extra_body`. Null and blank values fall through to the next source. Chat uses
+`default` when neither source supplies an ID. Release requires an explicit ID, including
+`{"program_id":"default"}` to release the default Program.
+
+Overlapping requests keep the Program in REASONING until its last request finishes.
+A release that the cache cannot acknowledge returns `released: false` and can be retried.
+Successful release cancels pending admissions. A permit already granted can finish dispatch.

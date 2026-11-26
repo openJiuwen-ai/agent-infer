@@ -62,8 +62,8 @@ class _Admission:
     native_count: int
 
 
-class ProgramSchedulingBridge:
-    """Run one ProgramScheduler on the EngineCore owner thread."""
+class MoriProgramAdmissionController:
+    """Coordinate Program admission, dispatch permits and cache placement on the Core owner."""
 
     def __init__(self, cache: ProgramCacheAdapter, config: MoriConfig, backend_id: str = "vllm-local") -> None:
         self.cache = cache
@@ -112,7 +112,14 @@ class ProgramSchedulingBridge:
     def begin(
         self, attempt: str, program_id: str, context_chars: int, prefix_group: str, native_count: int = 1
     ) -> Future[bool]:
-        if not attempt or context_chars < 0 or not prefix_group or native_count < 1:
+        if (
+            not attempt
+            or not isinstance(program_id, str)
+            or not program_id.strip()
+            or context_chars < 0
+            or not prefix_group
+            or native_count < 1
+        ):
             raise ValueError("Invalid MORI admission facts")
         if attempt in self._pending or attempt in self._ready:
             raise ValueError("Duplicate MORI attempt")
@@ -200,6 +207,9 @@ class ProgramSchedulingBridge:
                 return False
             self._inactive.discard(ref)
 
+        # All calls run on the Core owner. release_program cancels this generation's
+        # runtime bindings before it commits RELEASE, including admitted dispatches.
+        # Keep both those bindings and the generation intact until the cache ACK.
         if not self.runtime.release_program(ref):
             return False
         for attempt, admission in tuple(self._pending.items()):

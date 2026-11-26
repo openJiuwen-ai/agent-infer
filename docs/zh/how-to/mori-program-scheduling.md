@@ -1,7 +1,7 @@
 # MORI Program 调度
 
 `vllm serve MODEL --agentinfer --agentinfer-strategy mori` 选择 MORI。省略策略选项时使用 Progress-TTL。
-MORI 的 ProgramSchedulingBridge 在单个 EngineCore 内负责 Program 准入。
+MORI 的 MoriProgramAdmissionController 在单个 EngineCore 内负责 Program 准入。
 同步与异步 Bridge 分别继承 MoriScheduler 和 MoriAsyncScheduler，处理 Program 许可。引擎选择请求批次，由请求 KV manager 的 HiRadix 记录 HBM/RAM 副本。
 公开服务通过一个端口接收 Chat 和 Program 释放。
 
@@ -69,3 +69,9 @@ adapter 应允许按同一 Program 代次重放操作。
 [预算](../../../agentinfer/scheduling/mori/ledger.py)、
 [API 观察](../../../agentinfer/agentcache/core/mori_api.py) 和
 [IPC](../../../agentinfer/agentcache/core/scheduling_ipc.py) 的函数注释中。
+
+`MoriProgramAdmissionController` 管理 Program 许可。Chat 和 `POST /programs/release`
+在向 EngineCore 发送事件前校验服务配置的 Bearer 凭据。两个接口都先读顶层 `program_id`，
+再读 `extra_body.program_id`，跳过 null 和空白值。Chat 缺省使用 `default`；
+释放必须显式给出 ID，包括释放默认 Program 时的 `{"program_id":"default"}`。
+同代 Program 有并发请求时，最后一个请求完成后才转为 ACTING。

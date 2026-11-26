@@ -6,12 +6,10 @@
 from __future__ import annotations
 
 import json
-import os
 from contextlib import contextmanager
 from functools import wraps
 
 from starlette._utils import get_route_path
-from starlette.datastructures import Headers
 from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse
 
@@ -166,24 +164,6 @@ class MORIDirectMiddleware(MoriSchedulingMiddleware):
                     return "MORI vLLM supports text inputs only"
         return None
 
-    def __init__(self, app) -> None:
-        super().__init__(app)
-        self._auth_initialized = False
-        self._auth = None
-
-    def _authorized(self, scope) -> bool:
-        if not self._auth_initialized:
-            # The vLLM middleware list may place this adapter outside native auth.
-            # Check the same credentials before handling any local Core operation.
-            args = getattr(scope["app"].state, "args", None)
-            configured = getattr(args, "api_key", None) or [os.environ.get("VLLM_API_KEY")]
-            if tokens := [key for key in configured if key]:
-                from vllm.entrypoints.serve.middleware.authenticate import AuthenticationMiddleware
-
-                self._auth = AuthenticationMiddleware(self.app, tokens=tokens)
-            self._auth_initialized = True
-        return self._auth is None or self._auth.verify_token(Headers(scope=scope))
-
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
@@ -193,8 +173,7 @@ class MORIDirectMiddleware(MoriSchedulingMiddleware):
             await JSONResponse({"detail": "Not Found"}, status_code=404)(scope, receive, send)
             return
         action = _DIAGNOSTICS.get(path) if method == "GET" else None
-        core_request = method == "POST" and path in ("/v1/chat/completions", "/programs/release")
-        if (action or core_request) and not self._authorized(scope):
+        if action and not self._authorized(scope):
             await JSONResponse({"error": "Unauthorized"}, status_code=401)(scope, receive, send)
             return
         if action is not None:

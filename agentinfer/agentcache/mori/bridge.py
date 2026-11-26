@@ -16,7 +16,7 @@ class _MoriProgramAdmissionMixin:
         try:
             self.program_cache_adapter = HiRadixProgramCache(self.tree_cache)
             self._agentcache = _VllmAdmissionHooks(self, vllm_config, kv_cache_config, self.block_size)
-            self.tree_cache.placement.current_ref = self._agentcache.program_scheduling.runtime.registry.current_ref
+            self.tree_cache.placement.current_ref = self._agentcache.program_admission.runtime.registry.current_ref
         except BaseException:
             self.shutdown()
             raise
@@ -30,7 +30,7 @@ class _MoriProgramAdmissionMixin:
     def shutdown(self):
         try:
             if self._agentcache is not None:
-                self._agentcache.program_scheduling.cancel_gates()
+                self._agentcache.program_admission.cancel_gates()
         finally:
             if self.program_cache_adapter is not None:
                 self.program_cache_adapter.tree.placement.current_ref = None
