@@ -49,10 +49,13 @@ steps:
           - "test-results/function/agentbench/run-*/tasks/*/*.{json,jsonl,log,txt,yaml,patch}"
           - "test-results/function/agentbench/run-*/tasks/*/claude_state/projects/**/*.jsonl"
           - "test-results/function/agentbench/run-*/tasks/*/dsh-{sessions,home/sessions}/**/*.{json,jsonl,zstd}"
-          - "test-results/function/agentbench/run-*/tasks/*/jiuwenswarm-instance/**/worker-logs/*.log"
+          - "test-results/function/agentbench/run-*/tasks/*/jiuwenswarm-worker/**/*.log"
           - "test-results/function/agentbench/run-*/tasks/*/jiuwenbox-audit/**/*.log"
           - "test-results/function/agentbench/run-*/tasks/*/zcode-home/logs/**/*.jsonl"
           - "test-results/function/agentbench/run-*/workspaces/*/addition.py"
+          - "test-results/function/agentbench/native-runtime/**/artifacts/*.{json,jsonl,log,yaml,patch}"
+          - "test-results/function/agentbench/native-runtime/**/artifacts/jiuwenswarm-worker/**/*.log"
+          - "test-results/function/agentbench/native-runtime/**/artifacts/jiuwenbox-audit/**/*.log"
         commands:
           - |
             set -eu
@@ -75,6 +78,11 @@ steps:
               fi
             done
           - bwrap --unshare-user --unshare-pid --ro-bind / / --proc /proc -- /bin/true
+          # Reuse the upstream runtime checks with a simulated model before loading vLLM.
+          - |
+            AGENTBENCH_JIUWEN_NATIVE=1 /opt/jiuwenswarm/bin/python -m pytest -s -v -m "cpu and ready" \
+              tests/e2e/function/agentbench/jiuwenswarm/test_native_runtime.py \
+              --basetemp=test-results/function/agentbench/native-runtime --timeout=240
           - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_smoke_task.py --benchmark-run-as-user test-user
 
   # cpu_small is another machine, so it builds the same Dockerfile itself.

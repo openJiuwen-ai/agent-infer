@@ -242,6 +242,7 @@ def _model(url):
     )
 
 
+@pytest.mark.ready
 def test_sdk_sends_identity_and_streaming_usage(native, backend):
     from openjiuwen.core.foundation.llm import UserMessage
 
@@ -267,6 +268,7 @@ def test_sdk_sends_identity_and_streaming_usage(native, backend):
         assert body["agent_hint"]["session_id"] == "root"
 
 
+@pytest.mark.ready
 def test_real_subagent_creation_inherits_nested_delegation(native, backend):
     from openjiuwen.core.single_agent import AgentCard
     from openjiuwen.harness.factory import create_deep_agent
@@ -305,6 +307,7 @@ def test_real_subagent_creation_inherits_nested_delegation(native, backend):
     asyncio.run(scenario())
 
 
+@pytest.mark.ready
 def test_team_sessions_have_distinct_identities_with_one_product_session(native):
     from openjiuwen.agent_teams.harness.team_harness import TeamHarness
     from openjiuwen.agent_teams.schema.team import TeamRole
@@ -329,6 +332,7 @@ def test_team_sessions_have_distinct_identities_with_one_product_session(native)
     assert hooks._budget.launched == 2
 
 
+@pytest.mark.ready
 def test_real_command_tool_is_sealed(native):
     from jiuwenswarm.agents.harness.common.tools import command_tools
 
@@ -338,6 +342,7 @@ def test_real_command_tool_is_sealed(native):
     assert not canary.exists()
 
 
+@pytest.mark.ready
 def test_native_deep_agent_invokes_instrumented_model(native, backend):
     from openjiuwen.core.single_agent import AgentCard
     from openjiuwen.harness import create_deep_agent
@@ -365,6 +370,7 @@ def test_native_deep_agent_invokes_instrumented_model(native, backend):
     assert hooks._budget.running == 0
 
 
+@pytest.mark.ready
 def test_nested_wait_and_parallel_tool_work_share_one_slot(native):
     from agentinfer.agentbench.agents.jiuwenswarm.limits import TaskBudget
 
@@ -425,6 +431,7 @@ def test_nested_wait_and_parallel_tool_work_share_one_slot(native):
     asyncio.run(scenario())
 
 
+@pytest.mark.ready
 def test_native_subagent_runtime_executes_through_shared_budget(native, backend):
     from openjiuwen.core.session.agent import create_agent_session
     from openjiuwen.core.single_agent import AgentCard
@@ -518,6 +525,50 @@ def test_task_local_services_start_and_stop_with_real_cli(native, backend, profi
     asyncio.run(scenario())
 
 
+@pytest.mark.ready
+def test_parallel_services_follow_owned_fallback_gateways(native, backend, tmp_path, monkeypatch):
+    """Two real runtimes starting on the same ports must keep separate gateways."""
+    from agentinfer.agentbench.agents.jiuwenswarm import instance as module
+
+    allocate = module._allocate_ports
+    initial_ports = allocate(3)
+    monkeypatch.setattr(module, "_allocate_ports", lambda count: list(initial_ports) if count == 3 else allocate(count))
+    instances = []
+    for index in range(2):
+        root = tmp_path / f"task-{index}"
+        artifacts, workspace = root / "artifacts", root / "workspace"
+        artifacts.mkdir(parents=True)
+        workspace.mkdir()
+        instances.append(
+            module.JiuwenInstance(
+                executable=Path(sys.executable).with_name("jiuwenswarm"),
+                artifact_dir=artifacts,
+                workspace=workspace,
+                session_id=f"parallel-root-{index}",
+                api_base_url=backend[0].removesuffix("/v1"),
+                model="test",
+                completion_timeout_seconds=180,
+            )
+        )
+
+    async def scenario():
+        try:
+            # Keep the first runtime alive so the second must resolve a real conflict.
+            for instance in instances:
+                await asyncio.wait_for(instance.start(), 180)
+            assert len({instance.gateway_url for instance in instances}) == 2
+            for instance in instances:
+                assert instance._process.returncode is None
+                assert module._owns_runtime_ports(
+                    instance._process.pid, instance.gateway_port, instance.agent_server_port
+                )
+        finally:
+            await asyncio.gather(*(instance.stop() for instance in instances))
+        assert all(instance._process is None and instance._runtime_dir is None for instance in instances)
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("profile", ["agent.code.normal", "team.code.normal"])
 def test_real_cli_jsonl_round(native, backend, profile, tmp_path):
     from agentinfer.agentbench.agents.contracts import AgentRunOutcome, AgentRunRequest
@@ -569,6 +620,7 @@ def test_real_cli_jsonl_round(native, backend, profile, tmp_path):
     assert not (tmp_path / "symlink-escape.txt").exists()
 
 
+@pytest.mark.ready
 def test_child_session_overrides_inherited_parent_context(native):
     from openjiuwen.core.session import _current_session
     from openjiuwen.core.session.agent import create_agent_session

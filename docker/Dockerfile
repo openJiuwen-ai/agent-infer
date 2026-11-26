@@ -53,15 +53,6 @@ RUN npm install --global --prefix /usr/local \
       "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && claude --version
 
-# Keep the workspace and adjacent resources: the CLI bundles external runtime assets.
-COPY --from=zcode-build /opt/zcode /opt/zcode
-COPY --from=zcode-build /usr/local/bin/node /opt/zcode-node/bin/node
-RUN sed -i '1{/^#!/d;}' /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
- && sed -i '1i#!/opt/zcode-node/bin/node' /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
- && chmod 755 /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
- && ln -s /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs /usr/local/bin/zcode \
- && test "$(zcode --version)" = "0.17.1"
-
 # Jiuwen's sandbox mounts /usr but not /etc/alternatives. Keep the base image's
 # Python interpreter reachable inside the sandbox before creating the venv.
 RUN python3_target="$(readlink -f /usr/bin/python3)" \
@@ -87,6 +78,17 @@ RUN pip install --no-cache-dir \
       'setuptools>=68,<85' wheel \
  && pip install --no-cache-dir \
       'huggingface-hub>=1.5.0,<2.0' --force-reinstall
+
+# Copy ZCode after Python dependencies so its source changes preserve their cache.
+# Keep the complete workspace and adjacent resources used by the CLI.
+# Independent copy layers also survive changes to the earlier dependency layers.
+COPY --link --from=zcode-build /opt/zcode /opt/zcode
+COPY --link --from=zcode-build /usr/local/bin/node /opt/zcode-node/bin/node
+RUN sed -i '1{/^#!/d;}' /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
+ && sed -i '1i#!/opt/zcode-node/bin/node' /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
+ && chmod 755 /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
+ && ln -s /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs /usr/local/bin/zcode \
+ && test "$(zcode --version)" = "0.17.1"
 
 ENV HF_ENDPOINT=https://hf-mirror.com \
     HF_HOME=/home/models \
