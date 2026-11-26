@@ -6,7 +6,7 @@ MoriScheduler 和 MoriAsyncScheduler 共用请求选批逻辑，由请求 KV man
 公开服务通过一个端口接收 Chat 和 Program 释放。
 
 在运行 vLLM 的环境中用 `python -m pip install -e .` 安装此检出。已验证 vLLM 0.31.0。启动时检查实际 ABI。
-当前支持单 DP rank、一个 dense full-attention KV 组、FCFS、哈希和分配页相同、非推测解码。
+当前支持单 DP rank、一个 dense full-attention KV 组、FCFS、哈希和分配页相同、非推测解码。MORI 引擎仅支持文本输入。
 以下示例给 Host KV 分配 1 GiB，实际可按模型和可用 RAM 调整。
 
 ```bash

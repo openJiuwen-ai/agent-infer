@@ -245,3 +245,20 @@ def test_direct_disconnect_cancels_the_pending_admission_without_calling_native(
     asyncio.run(run())
     assert [(method, event) for method, event, _ in calls] == [(UTILITY_METHOD, "begin"), (UTILITY_METHOD, "cancel")]
     assert calls[1][2] == [calls[0][2][0]]
+
+
+@pytest.mark.parametrize("part", [{"type": "image_url"}, {"input_audio": {}}, {"type": "video_embeds", "uuid": "v"}])
+def test_media_chat_is_rejected_before_program_admission(monkeypatch, part):
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    app, events = _app_with_core()
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
+            response = await client.post(
+                "/v1/chat/completions", json={"messages": [{"role": "user", "content": [part]}]}
+            )
+            assert response.status_code == 400
+            assert response.json()["detail"] == "MORI vLLM supports text inputs only"
+
+    asyncio.run(run())
+    assert events == []

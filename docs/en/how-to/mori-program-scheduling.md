@@ -4,7 +4,7 @@ Use the vLLM environment that will run the API server to install this AgentInfer
 (`python -m pip install -e .`). The engine adapter has been exercised with vLLM 0.31.0.
 Startup checks the installed scheduler, KV cache and transfer interfaces. It requires one
 data-parallel rank, a single dense full-attention KV group, FCFS queues, matching hash and
-allocation page sizes, and non-speculative generation.
+allocation page sizes, and non-speculative generation. The MORI engine accepts text inputs only.
 
 ## Start the service
 

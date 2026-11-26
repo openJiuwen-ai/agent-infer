@@ -25,6 +25,20 @@ _DIAGNOSTICS = {
     "/agentinfer/mori/cache": "cache",
 }
 _LEGACY_CONTROL = frozenset(("/mark_program_type", "/release_program", "/batch_program_ops"))
+_MEDIA_PARTS = frozenset(
+    (
+        "input_image",
+        "image_url",
+        "image_pil",
+        "image_embeds",
+        "audio_url",
+        "input_audio",
+        "audio_embeds",
+        "video_url",
+        "video_embeds",
+        "vision_chunk",
+    )
+)
 
 
 @contextmanager
@@ -134,6 +148,23 @@ class MORIDirectMiddleware(MoriSchedulingMiddleware):
 
     sglang_text_chat = False
     unseeded_chat = False
+
+    def _chat_input_error(self, payload: dict) -> str | None:
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            return None
+        for message in messages:
+            content = message.get("content") if isinstance(message, dict) else None
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                kind = part.get("type")
+                inferred = kind is None or "uuid" in part
+                if (isinstance(kind, str) and kind in _MEDIA_PARTS) or (inferred and not _MEDIA_PARTS.isdisjoint(part)):
+                    return "MORI vLLM supports text inputs only"
+        return None
 
     def __init__(self, app) -> None:
         super().__init__(app)

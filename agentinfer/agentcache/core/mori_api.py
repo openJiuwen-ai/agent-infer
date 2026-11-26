@@ -155,6 +155,10 @@ class MoriSchedulingMiddleware:
         scope = _scope_with_content_length(request.scope, len(body))
         await self.app(scope, _replay_receive([message], receive), send)
 
+    def _chat_input_error(self, payload: dict) -> str | None:
+        """Let the engine reject unsupported Chat inputs before Program admission."""
+        return None
+
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] != "http" or scope["method"] != "POST":
             await self.app(scope, receive, send)
@@ -186,6 +190,9 @@ class MoriSchedulingMiddleware:
             await JSONResponse({"program_id": pid, "released": released})(scope, receive, send)
             return
 
+        if input_error := self._chat_input_error(payload):
+            await JSONResponse({"detail": input_error}, status_code=400)(scope, receive, send)
+            return
         xargs = payload.get("vllm_xargs")
         if xargs is not None and not isinstance(xargs, dict):
             await JSONResponse({"detail": "vllm_xargs must be a JSON object"}, status_code=400)(scope, receive, send)

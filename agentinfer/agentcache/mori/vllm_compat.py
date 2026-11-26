@@ -130,28 +130,32 @@ def _require_dense_kv_layout(vllm_config, kv_cache_config) -> None:
         )
 
 
-def install_mori_program_block_hasher() -> None:
-    """Install the vLLM request-hash adapter inside EngineCore's process."""
+def install_mori_request_preprocessing() -> None:
+    """Validate MORI inputs before native ADD and install the Program block hasher."""
     from vllm.v1.engine.core import EngineCore
 
     from agentinfer.agentcache.mori.prefix_hash import MORIProgramBlockHasher
+    from agentinfer.agentcache.mori.scheduler import MoriScheduler
 
     _require_members(EngineCore, "preprocess_add_request")
     _require_keywords(EngineCore.preprocess_add_request, "request")
     native = EngineCore.preprocess_add_request
-    if getattr(native, "_agentinfer_mori_program_hashes", False):
+    if getattr(native, "_agentinfer_mori_request_preprocessing", False):
         return
 
     @wraps(native)
     def preprocess(core, request):
-        hasher = core.request_block_hasher
-        if hasher is not None and not isinstance(hasher, MORIProgramBlockHasher):
-            capacity = getattr(core.scheduler, "prefix_hash_capacity", None)
-            if capacity:
-                core.request_block_hasher = MORIProgramBlockHasher(hasher, core.scheduler.hash_block_size, capacity)
+        if isinstance(core.scheduler, MoriScheduler):
+            if request.mm_features:
+                raise ValueError("MORI vLLM supports text inputs only")
+            hasher = core.request_block_hasher
+            if hasher is not None and not isinstance(hasher, MORIProgramBlockHasher):
+                core.request_block_hasher = MORIProgramBlockHasher(
+                    hasher, core.scheduler.hash_block_size, core.scheduler.prefix_hash_capacity
+                )
         return native(core, request)
 
-    vars(preprocess)["_agentinfer_mori_program_hashes"] = True
+    vars(preprocess)["_agentinfer_mori_request_preprocessing"] = True
     EngineCore.preprocess_add_request = preprocess
 
 

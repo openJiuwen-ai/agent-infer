@@ -25,7 +25,7 @@ from agentinfer.agentcache.mori.programs import request_program
 from agentinfer.agentcache.mori.schedule_batch import ScheduleBatch
 from agentinfer.agentcache.mori.vllm_compat import (
     install_mori_inline_eviction_writeback,
-    install_mori_program_block_hasher,
+    install_mori_request_preprocessing,
     mori_gpu_constructors,
 )
 
@@ -91,7 +91,7 @@ class MoriScheduler(Scheduler):
             self.prefix_hash_capacity = (
                 tree.device.pool.num_gpu_blocks + tree.host.pool.num_gpu_blocks - 2
             ) * self.block_size
-            install_mori_program_block_hasher()
+            install_mori_request_preprocessing()
             install_mori_inline_eviction_writeback()
             self._initialize_program_scheduling()
         except BaseException:
@@ -237,10 +237,17 @@ class MoriScheduler(Scheduler):
             ranked = self._order_waiting([request for request in waiting if self._ready(request)])
         holding_ranked = [request for request in holding if self._ready(request)]
         remaining_slots = self.max_num_active_reqs - len(decode) - len(chunked)
+        # These prefills can join resident requests on the next decode step.
+        lora_config = self.lora_config
+        if lora_config is not None:
+            active_loras = {req.lora_request.lora_int_id for req in self.running if req.lora_request is not None}
         for request in (*holding_ranked, *ranked):
             if remaining_slots <= 0:
                 batch.full = bool(decode or batch.tokens)
                 break
+            if lora_config is not None and request.lora_request is not None:
+                if len(active_loras) >= lora_config.max_loras and request.lora_request.lora_int_id not in active_loras:
+                    continue
             # A waiter with attached KV resumes from its existing frontier.
             # For fresh admissions, the second lookup after LPM sets recency.
             computed = request.num_computed_tokens
@@ -305,6 +312,8 @@ class MoriScheduler(Scheduler):
             remaining_slots -= 1
             budget -= allocated
             batch.add_extend(request, min(extend, allocated))
+            if lora_config is not None and request.lora_request is not None:
+                active_loras.add(request.lora_request.lora_int_id)
             input_budget -= allocated
             charge = allocated + host_hit + pinned + page
             current -= charge
