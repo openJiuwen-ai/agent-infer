@@ -19,7 +19,6 @@ RUN git init . \
  && test "$(node apps/zcode-cli/packages/cli/dist/zcode.cjs --version)" = "0.17.1"
 
 FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/vllm/vllm-openai:v0.23.0
-ARG PIP_INDEX_URL
 
 # Unit tests create throwaway repos with `git init` / `git commit`.
 # curl/xz unpack the Node tarball used by the DSH functional E2E.
@@ -33,12 +32,16 @@ RUN apt-get update \
 # so the non-root user from ci-entrypoint.sh can execute node and dsh.
 # Node 24 is inside the supported range (^22.19.0 || >=24).
 ARG NODE_VERSION=24.22.1
-# Prefer upstream nodejs.org / registry.npmjs.org over npmmirror so freshly
-# published transitive deps (e.g. @aws-sdk/*) are visible during CI image build.
-RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+# Keep the pinned Node distribution intact and verify it against upstream hashes.
+# npm stays upstream so newly published transitive dependencies remain available.
+RUN curl -fsSL "https://mirrors.huaweicloud.com/nodejs/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
       -o /tmp/node.tar.xz \
+ && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" -o /tmp/node-shasums.txt \
+ && expected_node_sha="$(awk -v name="node-v${NODE_VERSION}-linux-x64.tar.xz" '$2 == name {print $1}' /tmp/node-shasums.txt)" \
+ && test -n "$expected_node_sha" \
+ && printf '%s  /tmp/node.tar.xz\n' "$expected_node_sha" | sha256sum -c - \
  && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
- && rm /tmp/node.tar.xz \
+ && rm /tmp/node.tar.xz /tmp/node-shasums.txt \
  && npm install --global --prefix /usr/local \
       --registry https://registry.npmjs.org \
       --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs \
@@ -63,6 +66,8 @@ RUN python3_target="$(readlink -f /usr/bin/python3)" \
 
 # WorkSwarm provides the JiuwenSwarm commands in an isolated Python environment.
 ARG JIUWENSWARM_VERSION=0.2.8
+# Scope the PyPI setting to Python installs so mirror changes preserve Node/apt cache.
+ARG PIP_INDEX_URL
 RUN python3 -m venv --system-site-packages /opt/jiuwenswarm \
  && /opt/jiuwenswarm/bin/pip install --no-cache-dir "workswarm==${JIUWENSWARM_VERSION}" \
  && for command in jiuwenswarm jiuwenswarm-init jiuwenswarm-start jiuwenbox-server; do \

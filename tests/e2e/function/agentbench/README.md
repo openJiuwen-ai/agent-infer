@@ -141,6 +141,11 @@ Compose `build.args` for `PIP_INDEX_URL` and `ZCODE_REPOSITORY`. The repository'
 rewrites before commands or the Compose plugin run. The PyPI URL is inherited
 from the host environment. Unset arguments retain their Dockerfile defaults.
 
+The pinned Node archive comes from the Huawei mirror and is checked against the
+upstream `nodejs.org` SHA256 list. npm continues to use its upstream registry.
+The PyPI build argument is declared after the Node installation so changing a
+Python package index does not invalidate apt, Node, or Claude installation layers.
+
 The GPU serve smoke and functional CI jobs load `HF_TOKEN` from Buildkite Secrets
 and pass it into the container by environment variable name. Before running them,
 create a secret named `HF_TOKEN` under Buildkite **Agents > the jobs' cluster >
