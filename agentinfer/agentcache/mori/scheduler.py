@@ -67,11 +67,8 @@ class MoriScheduler(Scheduler):
     _previous_step_had_forward = False
     _rebind_confirmed_pages = False
     decision_trace = None
-    _agentcache = None
 
     def __init__(self, vllm_config, kv_cache_config, *args, **kwargs):
-        if vllm_config.additional_config.get("agentcache", {}).get("strategy") != "mori":
-            raise ValueError("MoriScheduler requires the MORI Program strategy")
         async_enabled = isinstance(self, AsyncScheduler)
         if vllm_config.scheduler_config.async_scheduling is not async_enabled:
             raise ValueError("The MORI scheduler class must match vLLM's async scheduling mode")
@@ -93,29 +90,12 @@ class MoriScheduler(Scheduler):
             ) * self.block_size
             install_mori_request_preprocessing()
             install_mori_inline_eviction_writeback()
-            self._initialize_program_scheduling()
         except BaseException:
-            self._agentcache = self.program_cache_adapter = None
-            manager.close_hiradix(self.connector)
+            try:
+                super().shutdown()
+            finally:
+                manager.close_hiradix(self.connector)
             raise
-
-    def _initialize_program_scheduling(self) -> None:
-        from agentinfer.agentcache.core.scheduler import _VllmAdmissionHooks
-        from agentinfer.agentcache.mori.program_cache import HiRadixProgramCache
-
-        self.program_cache_adapter = HiRadixProgramCache(self.tree_cache)
-        self._agentcache = _VllmAdmissionHooks(self, self.vllm_config, self.kv_cache_config, self.block_size)
-        self.tree_cache.placement.current_ref = self._agentcache.program_scheduling.runtime.registry.current_ref
-
-    def add_request(self, request):
-        if self._agentcache is None:
-            return super().add_request(request)
-        return self._agentcache.add_request(self, request, super().add_request)
-
-    def finish_requests(self, request_ids, finished_status):
-        if self._agentcache is None:
-            return super().finish_requests(request_ids, finished_status)
-        return self._agentcache.finish_requests(self, request_ids, finished_status, super().finish_requests)
 
     @property
     def tree_cache(self) -> HiRadix:
@@ -124,6 +104,18 @@ class MoriScheduler(Scheduler):
         return tree
 
     def _initialize_hiradix(self) -> None:
+        step_budget = self._prefill_step_budget()
+        if self.scheduler_config.enable_chunked_prefill:
+            if step_budget <= 0 or step_budget % self.block_size:
+                raise ValueError(
+                    f"MORI chunked prefill requires a positive step budget divisible by block_size "
+                    f"(step budget={step_budget}, block_size={self.block_size})"
+                )
+        elif step_budget < self.max_model_len:
+            raise ValueError(
+                f"MORI without chunked prefill requires the step budget ({step_budget}) "
+                f"to cover max_model_len ({self.max_model_len})"
+            )
         self.new_token_ratio = _INITIAL_NEW_TOKEN_RATIO
         self.failed_decodes: set[str] = set()
         settings = self.vllm_config.additional_config.get("agentcache", {})
@@ -203,10 +195,14 @@ class MoriScheduler(Scheduler):
             return grammar is not None and grammar.grammar is not None
         return request.status in _WAITING_READY
 
+    def _prefill_step_budget(self) -> int:
+        # The worker's input-buffer capacity and the scheduler's issue limit
+        # both bound a single forward, including when one is overridden.
+        return min(self.max_num_scheduled_tokens, self.scheduler_config.max_num_batched_tokens)
+
     def _prefer_prefill(self, chunked, decode, waiting, holding, ranked=None):
         tree = self.tree_cache
         page = tree.page_size
-        max_steps = self.max_num_scheduled_tokens
         batch = PrefillBatch()
         if not chunked and (not waiting and not holding or len(decode) >= self.max_num_active_reqs):
             return batch
@@ -217,7 +213,8 @@ class MoriScheduler(Scheduler):
         )
         current = self.kv_cache_manager.block_pool.get_num_free_blocks() * page
         available = current - reserve
-        budget = max_steps
+        budget = self._prefill_step_budget()
+        chunking = self.scheduler_config.enable_chunked_prefill
         input_budget = self.max_prefill_tokens
         for request in chunked:
             remaining = request.num_tokens - request.num_computed_tokens
@@ -292,7 +289,14 @@ class MoriScheduler(Scheduler):
             padded = round_up(extend, page)
             if padded >= input_budget and has_prefill:
                 break
-            allocated = padded if padded <= budget else budget // page * page
+            if chunking:
+                allocated = padded if padded <= budget else budget // page * page
+            else:
+                # With no chunk cap SGLang admits a whole extend. vLLM's
+                # forward still has a hard budget for actual input tokens.
+                if extend > budget:
+                    break
+                allocated = padded
             if allocated <= 0:
                 if host_hit and tree.share_issued_loads and tree.has_inline_writeback():
                     # HiRadix load_back runs before PrefillAdder checks the
@@ -310,7 +314,7 @@ class MoriScheduler(Scheduler):
             if host_hit and tree.share_batch_loads:
                 batch.planned_host.update(block.block_id for block in host)
             remaining_slots -= 1
-            budget -= allocated
+            budget -= allocated if chunking else extend
             batch.add_extend(request, min(extend, allocated))
             if lora_config is not None and request.lora_request is not None:
                 active_loras.add(request.lora_request.lora_int_id)
@@ -669,14 +673,9 @@ class MoriScheduler(Scheduler):
 
     def shutdown(self) -> None:
         try:
-            if self._agentcache is not None:
-                self._agentcache.program_scheduling.cancel_gates()
+            super().shutdown()
         finally:
-            self._agentcache = self.program_cache_adapter = None
-            try:
-                super().shutdown()
-            finally:
-                self.kv_cache_manager.close_hiradix(self.connector)
+            self.kv_cache_manager.close_hiradix(self.connector)
 
 
 class MoriAsyncScheduler(MoriScheduler, AsyncScheduler):

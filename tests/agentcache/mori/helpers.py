@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from types import SimpleNamespace
 
 from vllm.sampling_params import SamplingParams
 from vllm.v1.core.kv_cache_utils import BlockHash, make_block_hash_with_group_id
@@ -75,4 +76,5 @@ def _test_controller(cache):
 def make_scheduler():
     scheduler = MoriScheduler.__new__(MoriScheduler)
     scheduler.lora_config = None
+    scheduler.scheduler_config = SimpleNamespace(max_num_batched_tokens=8192, enable_chunked_prefill=True)
     return scheduler

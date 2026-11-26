@@ -2,11 +2,12 @@
 
 `vllm serve MODEL --agentinfer --agentinfer-strategy mori` 选择 MORI。省略策略选项时使用 Progress-TTL。
 MORI 的 ProgramSchedulingBridge 在单个 EngineCore 内负责 Program 准入。
-MoriScheduler 和 MoriAsyncScheduler 共用请求选批逻辑，由请求 KV manager 的 HiRadix 记录 HBM/RAM 副本。
+同步与异步 Bridge 分别继承 MoriScheduler 和 MoriAsyncScheduler，处理 Program 许可。引擎选择请求批次，由请求 KV manager 的 HiRadix 记录 HBM/RAM 副本。
 公开服务通过一个端口接收 Chat 和 Program 释放。
 
 在运行 vLLM 的环境中用 `python -m pip install -e .` 安装此检出。已验证 vLLM 0.31.0。启动时检查实际 ABI。
 当前支持单 DP rank、一个 dense full-attention KV 组、FCFS、哈希和分配页相同、非推测解码。MORI 引擎仅支持文本输入。
+启用分块 prefill 时，有效步预算须为 KV 页长的正整数倍；它取 scheduler 发放上限与 worker 输入容量中的较小值。关闭分块时，有效步预算须覆盖模型最大长度。短请求和末段依实际 token 数计算。
 以下示例给 Host KV 分配 1 GiB，实际可按模型和可用 RAM 调整。
 
 ```bash
@@ -25,7 +26,10 @@ vllm serve "$MODEL" --agentinfer --agentinfer-strategy mori \
 `GET /agentinfer/mori/cache` 查询每个 Program 代次的页归属。
 默认异步调度，也可显式使用 `--no-async-scheduling` 选择同步调度。
 需要对齐 SGLang 文本模板时设置 `agentcache.mori.sglang_text_chat`；
-`sglang_unseeded_chat` 同时启用文本归一化、忽略请求 seed 和联合采样。
+`sglang_unseeded_chat` 同时启用文本归一化、忽略请求 seed 并默认开启联合采样。
+可通过 `agentcache.mori.joint_flashinfer_sampling` 单独开启或关闭 FlashInfer 的联合 top-k/top-p 过滤。
+逐层 H2D 通过 connector 的 `mori_layerwise_loads` 配置；分阶段选择 attention backend 可通过
+`--worker-cls agentinfer.agentcache.mori.attention.MORIFlashAttentionPrefillWorker` 显式启用。
 服务自动启动 Core 调度时钟。可以通过 `additional_config.agentcache.mori.interval_seconds` 设置间隔，默认 5 秒。
 
 ## 和 ThunderAgent 的对应关系

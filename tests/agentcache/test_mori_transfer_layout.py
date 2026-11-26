@@ -30,7 +30,7 @@ class _CudaRegion:
         return getattr(self.tensor, name)
 
 
-def _bind_layerwise_worker(monkeypatch, source, destination, stream, *, cuda=True):
+def _bind_layerwise_worker(monkeypatch, source, destination, stream, *, cuda=True, layerwise=True, use_v2=False):
     worker = mori.SimpleCPUOffloadWorker(None, None, 1024)
     worker.load_stream = stream
     worker._backend = mori.DmaCopyBackend()
@@ -41,9 +41,25 @@ def _bind_layerwise_worker(monkeypatch, source, destination, stream, *, cuda=Tru
     monkeypatch.setattr(mori.current_platform, "is_cuda", lambda: cuda)
     connector = mori.MoriCPUOffloadConnector.__new__(mori.MoriCPUOffloadConnector)
     connector.worker_handler = worker
-    connector._layerwise_loads = True
+    connector._vllm_config = SimpleNamespace(use_v2_model_runner=use_v2)
+    connector._layerwise_loads = layerwise
     connector.register_kv_caches(dict(reversed(list(worker.gpu_kv_caches.items()))))
     return connector
+
+
+@pytest.mark.parametrize(("use_v2", "layerwise"), [(True, True), (False, True), (True, False)])
+def test_registered_layers_select_v2_graph_dispatch(monkeypatch, use_v2, layerwise):
+    from agentinfer.agentcache.mori import vllm_compat
+
+    install = Mock()
+    monkeypatch.setattr(vllm_compat, "install_mori_layerwise_graph_dispatch", install)
+    source = {"layer": torch.zeros((4, 32), dtype=torch.uint8)}
+    destination = {"layer": torch.empty_like(source["layer"])}
+    connector = _bind_layerwise_worker(
+        monkeypatch, source, destination, SimpleNamespace(cuda_stream=23), layerwise=layerwise, use_v2=use_v2
+    )
+    assert bool(connector._layer_load_params) is layerwise
+    assert install.call_count == int(layerwise and use_v2)
 
 
 @pytest.mark.parametrize(

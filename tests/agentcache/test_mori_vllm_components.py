@@ -73,6 +73,8 @@ def test_hiradix_owns_the_scheduler_connector_controller(native_pool_class, alre
         kv_cache_manager=manager,
         connector=connector,
         prefix_replay_tokens=0,
+        scheduler_config=SimpleNamespace(max_num_batched_tokens=64, enable_chunked_prefill=True),
+        max_num_scheduled_tokens=64,
         need_mamba_block_aligned_split=False,
         waiting=FCFSRequestQueue(),
         hash_block_size=16,
@@ -198,11 +200,11 @@ def test_waiting_allocation_counts_protected_prefix_hits_and_waits_once():
     assert tree.eviction_blocks_pending.call_args_list == [(((2, 3),), {})] * 2
 
 
-def test_direct_scheduler_requires_the_program_strategy_before_native_initialization():
-    from agentinfer.agentcache.mori.scheduler import MoriScheduler
+def test_bridge_requires_the_program_strategy_before_native_initialization():
+    from agentinfer.agentcache.mori.bridge import MoriSyncSchedulerBridge
 
     with pytest.raises(ValueError, match="requires the MORI Program strategy"):
-        MoriScheduler(SimpleNamespace(additional_config={}), None)
+        MoriSyncSchedulerBridge(SimpleNamespace(additional_config={}), None)
 
 
 @pytest.mark.parametrize("flag", [None, "--async-scheduling", "--no-async-scheduling"])
@@ -213,6 +215,7 @@ def test_mori_serve_preserves_native_async_scheduler_dispatch(flag):
     from vllm.v1.core.sched.scheduler import Scheduler
 
     from agentinfer.agentcache.entrypoints.cli import serve_profile
+    from agentinfer.agentcache.mori.bridge import MoriAsyncSchedulerBridge, MoriSyncSchedulerBridge
     from agentinfer.agentcache.mori.scheduler import MoriAsyncScheduler, MoriScheduler
 
     parser = serve_profile._import_make_arg_parser()(serve_profile._build_parser())
@@ -242,10 +245,14 @@ def test_mori_serve_preserves_native_async_scheduler_dispatch(flag):
         ),
     )
     assert config.scheduler_config.async_scheduling is async_enabled
-    assert config.scheduler_config.get_scheduler_cls() is (MoriAsyncScheduler if async_enabled else MoriScheduler)
-    assert MoriAsyncScheduler.schedule is MoriScheduler.schedule
-    assert MoriAsyncScheduler._update_after_schedule is AsyncScheduler._update_after_schedule
-    assert MoriScheduler._update_after_schedule is Scheduler._update_after_schedule
+    concrete = config.scheduler_config.get_scheduler_cls()
+    assert concrete is (MoriAsyncSchedulerBridge if async_enabled else MoriSyncSchedulerBridge)
+    assert issubclass(concrete, MoriAsyncScheduler if async_enabled else MoriScheduler)
+    assert concrete.schedule is MoriScheduler.schedule
+    assert concrete.update_from_output is MoriScheduler.update_from_output
+    native = AsyncScheduler if async_enabled else Scheduler
+    assert concrete._update_after_schedule is native._update_after_schedule
+    assert concrete._update_request_with_output is native._update_request_with_output
 
 
 @pytest.mark.parametrize("work", ["idle", "waiting", "previous_forward", "paused"])

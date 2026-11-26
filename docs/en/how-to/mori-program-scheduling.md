@@ -6,6 +6,11 @@ Startup checks the installed scheduler, KV cache and transfer interfaces. It req
 data-parallel rank, a single dense full-attention KV group, FCFS queues, matching hash and
 allocation page sizes, and non-speculative generation. The MORI engine accepts text inputs only.
 
+With chunked prefill, the effective step budget must be a positive multiple of the KV page size.
+vLLM bounds each step by both the scheduler issue limit and the worker input capacity. Without
+chunking, that effective budget must cover the maximum model length. Short prompts and the
+last chunk compute their actual token counts.
+
 ## Start the service
 
 ```bash
@@ -20,8 +25,9 @@ vllm serve "$MODEL" --agentinfer --agentinfer-strategy mori \
 Size the host KV budget for the model and available RAM. The example requests 1 GiB.
 The profile enables prefix caching, installs the two-way CPU connector and starts Program scheduling
 in EngineCore. Async scheduling is the default. Pass `--no-async-scheduling` for synchronous execution.
-Both use the same MORI batch selection policy. The existing Progress-TTL profile is still selected
-by `vllm serve "$MODEL" --agentinfer`. [Progress-TTL deployment](integrate-vllm.md)
+Both Bridge classes handle Program admission and inherit MORI request scheduling from the engine.
+The existing Progress-TTL profile is still selected by `vllm serve "$MODEL" --agentinfer`.
+[Progress-TTL deployment](integrate-vllm.md)
 
 ## Send and release a Program
 
@@ -43,3 +49,7 @@ per-generation page ownership. The Program timer defaults to five seconds and is
 
 For SGLang text-template parity use `agentcache.mori.sglang_text_chat`. Set
 `agentcache.mori.sglang_unseeded_chat` to also discard per-request seeds and select joint sampling.
+Override the FlashInfer filter independently with `agentcache.mori.joint_flashinfer_sampling`.
+Layerwise H2D uses the connector's `mori_layerwise_loads` setting. To also select separate
+prefill and decode attention backends, explicitly pass
+`--worker-cls agentinfer.agentcache.mori.attention.MORIFlashAttentionPrefillWorker`.

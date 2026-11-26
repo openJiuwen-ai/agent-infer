@@ -14,23 +14,9 @@ from vllm.v1.attention.backends.flash_attn import (
 )
 from vllm.v1.attention.backends.flashinfer import FlashInferBackend, FlashInferImpl, FlashInferMetadataBuilder
 from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
-from vllm.v1.sample.ops.topk_topp_sampler import flashinfer_sample
-from vllm.v1.worker.gpu.sample import sampler as native_v2_sampler
 from vllm.v1.worker.gpu_worker import Worker
 
-from agentinfer.agentcache.mori.vllm_compat import install_mori_layerwise_graph_dispatch
-
 logger = init_logger("vllm.agentinfer.mori.attention")
-
-
-def _sample_flashinfer_joint(logits, k, p):
-    if k is None or p is None:
-        return flashinfer_sample(logits, k, p)
-
-    from flashinfer.sampling import top_k_top_p_sampling_from_logits
-
-    logger.info_once("MORI uses native FlashInfer with the original joint top-k/top-p filter")
-    return top_k_top_p_sampling_from_logits(logits, k, p, filter_apply_order="joint").view(-1)
 
 
 class MORIAttentionMetadataBuilder(FlashInferMetadataBuilder):
@@ -100,9 +86,4 @@ class MORIFlashAttentionPrefillWorker(Worker):
         ):
             raise ValueError("MORI split attention requires V2, one rank, unquantized KV and native FlashInfer")
         register_backend(AttentionBackendEnum.FLASHINFER, f"{__name__}.MORIAttentionBackend")
-        additional = vllm_config.additional_config
-        settings = additional.get("agentcache") if isinstance(additional, dict) else None
-        if isinstance(settings, dict) and settings.get("mori_joint_flashinfer_sampling"):
-            native_v2_sampler.flashinfer_sample = _sample_flashinfer_joint
-        install_mori_layerwise_graph_dispatch()
         super().__init__(vllm_config, *args, **kwargs)

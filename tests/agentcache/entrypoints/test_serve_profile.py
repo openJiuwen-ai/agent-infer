@@ -353,7 +353,7 @@ def test_public_mori_serve_uses_single_listener_and_embedded_policy(monkeypatch,
     assert serve_profile.run_agentinfer_serve(argv) == 0
     served = recorded["namespace"]
     assert (served.host, served.port) == ("0.0.0.0", 8300)
-    assert served.scheduler_cls.split(".")[-1] == ("MoriScheduler" if sync else "MoriAsyncScheduler")
+    assert served.scheduler_cls.split(".")[-1] == ("MoriSyncSchedulerBridge" if sync else "MoriAsyncSchedulerBridge")
     assert served.middleware == [
         "agentinfer.agentcache.mori.api.MORIDirectUnseededTextChatMiddleware",
         mori_serve.SSE_FRAMING_MIDDLEWARE,
@@ -384,3 +384,17 @@ def test_conflicting_strategy_does_not_install_an_engine() -> None:
     with pytest.raises(serve_profile.AgentInferServeError, match="Conflicting AgentInfer strategy"):
         serve_profile.inject_profile(namespace, explicit)
     assert namespace.scheduler_cls is None
+
+
+@pytest.mark.parametrize(("unseeded", "joint"), [(True, False), (False, True)])
+def test_mori_can_select_joint_sampling_independently(monkeypatch, unseeded, joint):
+    from agentinfer.agentcache.entrypoints.cli import mori_serve
+
+    monkeypatch.setattr(mori_serve, "_configure_kv", lambda namespace: None)
+    namespace, _ = _parse(["MODEL", "--agentinfer", "--agentinfer-strategy", "mori"])
+    namespace.additional_config = {
+        "agentcache": {"mori": {"sglang_unseeded_chat": unseeded, "joint_flashinfer_sampling": joint}}
+    }
+    profile = mori_serve.configure_embedded(namespace)
+    assert profile.agentcache_config["mori_joint_flashinfer_sampling"] is joint
+    assert ("Unseeded" in profile.middlewares[0]) is unseeded

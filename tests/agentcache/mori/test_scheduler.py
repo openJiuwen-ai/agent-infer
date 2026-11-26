@@ -752,6 +752,87 @@ def text_scheduler(cache):
     return scheduler
 
 
+@pytest.mark.parametrize(
+    ("chunking", "scheduled", "batched", "message"),
+    [
+        (True, 0, 64, r"step budget=0, block_size=16"),
+        (True, 8, 64, r"step budget=8, block_size=16"),
+        (True, 24, 64, r"step budget=24, block_size=16"),
+        (True, 32, 24, r"step budget=24, block_size=16"),
+        (False, 32, 64, r"step budget \(32\).*max_model_len \(64\)"),
+    ],
+)
+def test_startup_rejects_unusable_prefill_budget(chunking, scheduled, batched, message):
+    from vllm.config import SchedulerConfig
+
+    scheduler = make_scheduler()
+    scheduler.scheduler_config = SchedulerConfig(
+        max_model_len=64,
+        is_encoder_decoder=False,
+        enable_chunked_prefill=chunking,
+        max_num_seqs=4,
+        max_num_batched_tokens=batched,
+        max_num_scheduled_tokens=scheduled,
+    )
+    scheduler.block_size = 16
+    scheduler.max_model_len = 64
+    scheduler.max_num_scheduled_tokens = scheduled
+    with pytest.raises(ValueError, match=message):
+        scheduler._initialize_hiradix()
+
+
+@pytest.mark.parametrize(("length", "steps"), [(6, [6]), (39, [16, 16, 7])])
+def test_chunked_prefill_sends_actual_tail_to_worker(text_scheduler, length, steps):
+    scheduler = text_scheduler
+    scheduler.max_num_scheduled_tokens = 16
+    scheduler.max_model_len = 128
+    scheduler.num_sampled_tokens_per_step = 1
+    scheduler.current_step = 1
+    scheduler.use_pp = False
+    del scheduler._update_after_schedule  # Advance the request through vLLM's native chunk bookkeeping.
+    req = _request("cold", (), length)
+    scheduler.requests[req.request_id] = req
+    scheduler.waiting.add_request(req)
+
+    for tokens in steps:
+        output, _ = scheduler._schedule_batch(scheduler.running.copy(), [], list(scheduler.waiting), [], False)
+        assert output.num_scheduled_tokens == {"cold": tokens}
+    assert req.num_computed_tokens == length
+    assert not req.is_prefill_chunk
+
+
+def test_chunked_prefill_rounds_each_tail_in_the_batch_budget(text_scheduler):
+    scheduler = text_scheduler
+    scheduler.max_num_scheduled_tokens = 16
+    first = _request("first", (), 6)
+    second = _request("second", (), 4)
+    scheduler.waiting.extend([first, second])
+    scheduler.requests = {req.request_id: req for req in (first, second)}
+
+    output, _ = scheduler._schedule_batch([], [], list(scheduler.waiting), [], False)
+    assert output.num_scheduled_tokens == {"first": 6}
+    assert list(scheduler.waiting) == [second]
+    output, _ = scheduler._schedule_batch([], [first], list(scheduler.waiting), [], False)
+    assert output.num_scheduled_tokens == {"second": 4}
+
+
+def test_unchunked_prefill_uses_actual_token_budget_and_defers_whole_prompts(text_scheduler):
+    scheduler = text_scheduler
+    scheduler.scheduler_config.enable_chunked_prefill = False
+    scheduler.max_model_len = scheduler.max_num_scheduled_tokens = 24
+    for name, length in [("first", 17), ("second", 17), ("tail", 6)]:
+        req = _request(name, (), length)
+        scheduler.requests[name] = req
+        scheduler.waiting.add_request(req)
+
+    first, _ = scheduler._schedule_batch([], [], list(scheduler.waiting), [], False)
+    assert first.num_scheduled_tokens == {"first": 17}
+    assert [r.request_id for r in scheduler.waiting] == ["second", "tail"]
+    second, _ = scheduler._schedule_batch([], scheduler.running.copy(), list(scheduler.waiting), [], False)
+    assert second.num_scheduled_tokens == {"second": 17, "tail": 6}
+    assert not scheduler.waiting
+
+
 @pytest.mark.parametrize("prefix_state", ["unchanged", "evicted", "attached"])
 def test_prefill_commit_uses_each_requests_planned_extend(cache, text_scheduler, monkeypatch, prefix_state):
     scheduler = text_scheduler

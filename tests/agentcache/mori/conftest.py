@@ -16,7 +16,9 @@ def step_without_worker(monkeypatch):
         scheduler.max_num_scheduled_tokens = getattr(scheduler, "max_num_scheduled_tokens", 128)
         scheduler.kv_cache_manager = getattr(scheduler, "kv_cache_manager", SimpleNamespace())
         scheduler.kv_cache_manager.new_step_starts = lambda: None
-        scheduler.scheduler_config = SimpleNamespace(max_num_batched_tokens=scheduler.max_num_scheduled_tokens)
+        scheduler.scheduler_config = SimpleNamespace(
+            max_num_batched_tokens=scheduler.max_num_scheduled_tokens, enable_chunked_prefill=True
+        )
         scheduler.prefill_capacity_bound = False
         scheduler.deferred_waiting = set()
         scheduler.get_request_counts = lambda: (

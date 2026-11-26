@@ -220,12 +220,26 @@ def test_writeback_stream_dependency_is_scoped_to_retired_evictions(monkeypatch,
     assert calls == (expected if retired else [("wait", compute), *expected])
 
 
-def test_mori_flashinfer_sampling_uses_upstream_joint_filter(monkeypatch):
+@pytest.mark.parametrize("use_v2", [False, True])
+@pytest.mark.parametrize("joint_enabled", [False, True])
+def test_mori_flashinfer_sampling_uses_upstream_joint_filter(monkeypatch, use_v2, joint_enabled):
     import torch
     from flashinfer import sampling
+    from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorRole
+    from vllm.v1.sample.ops import topk_topp_sampler as v1_sampler
+    from vllm.v1.worker.gpu.sample import sampler as v2_sampler
 
-    from agentinfer.agentcache.mori import attention
+    from agentinfer.agentcache.mori.connector import MoriCPUOffloadConnector
 
+    sampler, other = (v2_sampler, v1_sampler) if use_v2 else (v1_sampler, v2_sampler)
+    other_native = other.flashinfer_sample
+    config = SimpleNamespace(
+        use_v2_model_runner=use_v2,
+        additional_config={"agentcache": {"mori_joint_flashinfer_sampling": joint_enabled}},
+        cache_config=SimpleNamespace(enable_prefix_caching=True),
+        parallel_config=SimpleNamespace(world_size=1),
+        kv_transfer_config=SimpleNamespace(is_kv_consumer=True, kv_connector_extra_config={}),
+    )
     logits = torch.tensor([[1.0, 2.0]])
     k = torch.tensor([2])
     p = torch.tensor([0.8])
@@ -235,10 +249,25 @@ def test_mori_flashinfer_sampling_uses_upstream_joint_filter(monkeypatch):
         assert filter_apply_order == "joint"
         return torch.tensor([[1]])
 
+    def native(actual_logits, actual_k, actual_p, *args):
+        assert actual_logits is logits and actual_k is k
+        assert args == (() if use_v2 else ({},))
+        return actual_k
+
     monkeypatch.setattr(sampling, "top_k_top_p_sampling_from_logits", joint)
-    monkeypatch.setattr(attention, "flashinfer_sample", lambda actual_logits, actual_k, actual_p: actual_k)
-    assert attention._sample_flashinfer_joint(logits, k, p).tolist() == [1]
-    assert attention._sample_flashinfer_joint(logits, k, None) is k
+    monkeypatch.setattr(sampler, "flashinfer_sample", native)
+    scheduler_connector = MoriCPUOffloadConnector(config, KVConnectorRole.SCHEDULER, None)
+    assert sampler.flashinfer_sample is native
+    worker_connector = MoriCPUOffloadConnector(config, KVConnectorRole.WORKER, None)
+    args = () if use_v2 else ({},)
+    try:
+        assert other.flashinfer_sample is other_native
+        assert sampler.flashinfer_sample(logits, k, p, *args).tolist() == ([1] if joint_enabled else [2])
+        assert sampler.flashinfer_sample(logits, k, None, *args) is k
+    finally:
+        worker_connector.shutdown()
+        scheduler_connector.shutdown()
+    assert sampler.flashinfer_sample is native
 
 
 @pytest.mark.parametrize("partial_utf8", [False, True])

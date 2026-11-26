@@ -16,7 +16,7 @@ from agentinfer.agentcache.entrypoints.cli.serve_profile import (
     _coerce_additional_config,
 )
 
-_MORI_SCHEDULERS = "agentinfer.agentcache.mori.scheduler"
+_MORI_BRIDGE = "agentinfer.agentcache.mori.bridge"
 _MORI_CONNECTOR = "agentinfer.agentcache.mori.connector"
 SSE_FRAMING_MIDDLEWARE = "agentinfer.agentcache.mori.sse_framing.SSEJsonFramingMiddleware"
 
@@ -66,13 +66,14 @@ def configure_embedded(namespace: Namespace) -> ServeProfile:
     supported = {
         "interval_seconds",
         "scheduler_interval",
+        "joint_flashinfer_sampling",
         "sglang_unseeded_chat",
         "sglang_text_chat",
         "max_prefill_tokens",
     }
     if unknown := set(settings) - supported:
         raise AgentInferServeError(f"Unknown agentcache.mori settings: {sorted(unknown)}")
-    for key in ("sglang_unseeded_chat", "sglang_text_chat"):
+    for key in ("joint_flashinfer_sampling", "sglang_unseeded_chat", "sglang_text_chat"):
         if key in settings and type(settings[key]) is not bool:
             raise AgentInferServeError(f"agentcache.mori.{key} must be a boolean")
     interval = settings.get("interval_seconds", settings.get("scheduler_interval", 5))
@@ -82,11 +83,12 @@ def configure_embedded(namespace: Namespace) -> ServeProfile:
     source = "agentinfer.agentcache.mori.api"
     if settings.get("sglang_unseeded_chat", False):
         middleware = f"{source}.MORIDirectUnseededTextChatMiddleware"
-        agentcache = {**agentcache, "mori_joint_flashinfer_sampling": True}
     elif settings.get("sglang_text_chat", False):
         middleware = f"{source}.MORIDirectTextChatMiddleware"
     else:
         middleware = f"{source}.MORIDirectMiddleware"
+    if "joint_flashinfer_sampling" in settings or settings.get("sglang_unseeded_chat"):
+        agentcache = {**agentcache, "mori_joint_flashinfer_sampling": settings.get("joint_flashinfer_sampling", True)}
     if "max_prefill_tokens" in settings:
         agentcache = {**agentcache, "mori_max_prefill_tokens": settings["max_prefill_tokens"]}
     for configured in getattr(namespace, "middleware", None) or ():
@@ -101,8 +103,8 @@ def configure_embedded(namespace: Namespace) -> ServeProfile:
     config = _coerce_additional_config(namespace.additional_config)
     namespace.additional_config = {**config, "agentcache": agentcache}
     return ServeProfile(
-        async_scheduler_cls=f"{_MORI_SCHEDULERS}.MoriAsyncScheduler",
-        sync_scheduler_cls=f"{_MORI_SCHEDULERS}.MoriScheduler",
+        async_scheduler_cls=f"{_MORI_BRIDGE}.MoriAsyncSchedulerBridge",
+        sync_scheduler_cls=f"{_MORI_BRIDGE}.MoriSyncSchedulerBridge",
         middlewares=(middleware, SSE_FRAMING_MIDDLEWARE),
         agentcache_config=agentcache,
     )

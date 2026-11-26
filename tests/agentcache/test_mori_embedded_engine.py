@@ -21,10 +21,11 @@ from vllm.v1.request import Request, RequestStatus
 from agentinfer.agentcache.core.program_scheduling import ATTEMPT_ARG, InvalidMoriAdmission, ProgramOperation
 from agentinfer.agentcache.core.scheduling_ipc import UTILITY_METHOD
 from agentinfer.agentcache.mori.block_pool import MoriBlockPool
+from agentinfer.agentcache.mori.bridge import MoriAsyncSchedulerBridge, MoriSyncSchedulerBridge
 from agentinfer.agentcache.mori.hiradix import HiRadix
 from agentinfer.agentcache.mori.kv_cache_manager import MoriKVCacheManager
 from agentinfer.agentcache.mori.programs import PROGRAM_ARG, CacheClass, request_program
-from agentinfer.agentcache.mori.scheduler import MoriAsyncScheduler, MoriScheduler
+from agentinfer.agentcache.mori.scheduler import MoriScheduler
 from agentinfer.scheduling import runtime
 from agentinfer.scheduling.transitions import ProgramPlacement
 from tests.helpers.marks import test_marks
@@ -32,9 +33,8 @@ from tests.helpers.marks import test_marks
 pytestmark = test_marks(hardware="cpu")
 
 
-@pytest.fixture(params=[MoriScheduler, MoriAsyncScheduler])
-def scheduler(request):
-    owner = request.param.__new__(request.param)
+@pytest.fixture(params=[MoriSyncSchedulerBridge, MoriAsyncSchedulerBridge])
+def scheduler(request, monkeypatch):
     device = MoriBlockPool(num_gpu_blocks=76, enable_caching=True, hash_block_size=4)
     host = MoriBlockPool(num_gpu_blocks=41, enable_caching=True, hash_block_size=4)
     tree = HiRadix(device, host, 4)
@@ -44,17 +44,22 @@ def scheduler(request):
     manager.hiradix = tree
     manager._radix_depth = {}
     manager.block_pool = device
-    owner.kv_cache_manager = manager
-    owner.block_size = 4
-    owner.vllm_config = SimpleNamespace(additional_config={"agentcache": {"strategy": "mori"}})
-    owner.kv_cache_config = SimpleNamespace(num_blocks=9999)
-    owner._initialize_program_scheduling()
-    owner.requests = {}
-    owner.waiting = FCFSRequestQueue()
-    owner.log_stats = False
-    owner.spec_decode_metrics_level = "none"
-    owner.connector = None
-    return owner
+
+    def initialize_engine(owner, config, kv_config):
+        owner.kv_cache_manager = manager
+        owner.block_size = 4
+        owner.vllm_config = config
+        owner.kv_cache_config = kv_config
+        owner.requests = {}
+        owner.waiting = FCFSRequestQueue()
+        owner.log_stats = False
+        owner.spec_decode_metrics_level = "none"
+        owner.connector = None
+
+    monkeypatch.setattr(MoriScheduler, "__init__", initialize_engine)
+    return request.param(
+        SimpleNamespace(additional_config={"agentcache": {"strategy": "mori"}}), SimpleNamespace(num_blocks=9999)
+    )
 
 
 def native(rid, extra):
@@ -204,3 +209,37 @@ def test_partial_placement_retry_on_real_tree_and_release_after_cold_demotion(sc
     assert cache.tree.placement.type_for_id("A") is CacheClass.INACTIVE
     assert bridge.release("A")
     assert not cache.tree.placement.has_program("A")
+
+
+def test_shutdown_resolves_pending_admission_before_releasing_engine(scheduler, monkeypatch):
+    bridge = scheduler._agentcache.program_scheduling
+    assert bridge.begin("a", "A", 500, "_empty_").result()
+    waiting = bridge.begin("b", "B", 10000, "_empty_")
+    assert not waiting.done()
+    released = []
+
+    def release_engine(owner):
+        assert waiting.result(timeout=0) is False
+        assert owner.tree_cache.placement.current_ref is None
+        released.append(owner)
+
+    monkeypatch.setattr(MoriScheduler, "shutdown", release_engine)
+    scheduler.shutdown()
+    assert released == [scheduler]
+
+
+def test_failed_admission_setup_closes_the_initialized_engine(scheduler, monkeypatch):
+    from agentinfer.agentcache.mori import bridge as bridge_module
+
+    released = []
+
+    def fail(*args):
+        raise ValueError("invalid admission config")
+
+    monkeypatch.setattr(bridge_module, "_VllmAdmissionHooks", fail)
+    monkeypatch.setattr(MoriScheduler, "shutdown", lambda owner: released.append(owner))
+    with pytest.raises(ValueError, match="invalid admission config"):
+        type(scheduler)(scheduler.vllm_config, scheduler.kv_cache_config)
+    (owner,) = released
+    assert owner is not scheduler
+    assert owner._agentcache is owner.program_cache_adapter is None

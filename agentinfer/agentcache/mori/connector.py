@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from typing import NamedTuple
 
 import numpy as np
@@ -105,6 +105,7 @@ class MoriCPUOffloadConnector(SimpleCPUOffloadConnector):
     _layer_load_events: dict[str, torch.Event] | None = None
     early_layerwise_loads = False
     _prepared_layer_load: _PreparedLayerLoad | None = None
+    _worker_settings: ExitStack | None = None
 
     def __init__(self, vllm_config, role, kv_cache_config):
         # Start at the connector protocol constructor. The SimpleCPU constructor
@@ -130,6 +131,19 @@ class MoriCPUOffloadConnector(SimpleCPUOffloadConnector):
         self._fence_previous_forward = not transfer.is_kv_consumer
         if role is KVConnectorRole.WORKER:
             self.worker_handler = SimpleCPUOffloadWorker(vllm_config, kv_cache_config, self.cpu_capacity_per_rank)
+            settings = vllm_config.additional_config.get("agentcache", {})
+            if settings.get("mori_joint_flashinfer_sampling"):
+                from agentinfer.agentcache.mori.sampling import mori_joint_flashinfer_sampling
+
+                self._worker_settings = ExitStack()
+                self._worker_settings.enter_context(mori_joint_flashinfer_sampling(vllm_config.use_v2_model_runner))
+
+    def shutdown(self) -> None:
+        try:
+            super().shutdown()
+        finally:
+            if self._worker_settings is not None:
+                self._worker_settings.close()
 
     def bind_controller(self, controller) -> None:
         if self.role is not KVConnectorRole.SCHEDULER or self.scheduler_manager is not None:
@@ -167,6 +181,10 @@ class MoriCPUOffloadConnector(SimpleCPUOffloadConnector):
                 bpb=params.bpb[span],
                 num_layers=1,
             )
+        if self._layer_load_params and self._vllm_config.use_v2_model_runner:
+            from agentinfer.agentcache.mori.vllm_compat import install_mori_layerwise_graph_dispatch
+
+            install_mori_layerwise_graph_dispatch()
         cpu_caches = worker.cpu_kv_caches
         if (
             current_platform.is_cuda()
