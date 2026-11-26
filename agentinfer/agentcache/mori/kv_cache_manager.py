@@ -200,6 +200,30 @@ class MoriKVCacheManager(KVCacheManager):
         finally:
             self._observed_allocation = None
         if blocks is not None and self.enable_caching:
+            if (
+                waiting
+                and tree is not None
+                and not args
+                and not request.num_computed_tokens
+                and not kwargs.get("num_external_computed_tokens", 0)
+                and not pending_batch_load
+                and (local_tokens := kwargs.get("num_new_computed_tokens", 0))
+                and (hits := kwargs.get("new_computed_blocks")) is not None
+                and self.block_pool.hiradix_index is tree.device
+                and len(self.coordinator.single_type_managers) == 1
+            ):
+                (native,) = self.coordinator.single_type_managers
+                (local_blocks,) = hits.blocks
+                # FullAttentionManager pins and appends whole local hits unchanged.
+                # A partial hit can redirect the tail through native copy-on-write.
+                if (
+                    type(native) is FullAttentionManager
+                    and native.block_size == tree.page_size
+                    and local_tokens == len(local_blocks) * tree.page_size
+                    and native.num_cached_block.get(request.request_id, 0) >= len(local_blocks)
+                    and native.req_to_blocks[request.request_id][len(local_blocks) - 1] is local_blocks[-1]
+                ):
+                    tree.record_attached_hbm_prefix(request.request_id, local_blocks)
             if replaying:
                 # SGLang considers already generated tokens part of fill_ids
                 # when a retracted request is prefilling again.
@@ -395,12 +419,14 @@ class MoriKVCacheManager(KVCacheManager):
             return
         keys = request.block_hashes
         if end > start:
+            depth = max(start, min(end, tree.attached_hbm_prefixes.pop(request.request_id, 0)))
+        if end > depth:
             (blocks,) = self.coordinator.get_blocks(request.request_id)
             program_id = request_program(request)
             release_replaced = self.release_replaced_hiradix_blocks
             rebind = release_replaced is not None and not request.is_finished()
             replaced = []
-            for index in range(start, min(end, len(blocks))):
+            for index in range(depth, min(end, len(blocks))):
                 block = blocks[index]
                 if block.is_null or block.block_hash_num_tokens != (index + 1) * tree.page_size:
                     break
@@ -417,8 +443,8 @@ class MoriKVCacheManager(KVCacheManager):
                 self._hiradix_block_table_updates.add(request.request_id)
                 release_replaced(replaced, request.last_sched_seq)
                 logger.info_once("MORI rebinds confirmed HiRadix pages through native V2 block-table updates")
-            if depth > start:
-                self._radix_depth[request.request_id] = depth
+        if depth > start:
+            self._radix_depth[request.request_id] = depth
         if (depth > start or refresh_existing) and (published := min(end, depth)) > 0:
             tree.touch_prefix(keys, published)
 
@@ -446,6 +472,7 @@ class MoriKVCacheManager(KVCacheManager):
         if self.release_replaced_hiradix_blocks is not None:
             self._hiradix_block_table_updates.discard(request.request_id)
         if (tree := self.hiradix) is not None:
+            tree.attached_hbm_prefixes.pop(request.request_id, None)
             tree.release_load(request.request_id)
         self._radix_depth.pop(request.request_id, None)
 

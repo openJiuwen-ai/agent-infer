@@ -93,6 +93,95 @@ def test_inserting_terminal_prefix_touches_old_edge_before_splitting(cache):
     assert cache.device.plan(1, include_uncached=False) == [[unrelated.block_id]]
 
 
+@pytest.mark.parametrize(
+    "case", ["suffix", "partial", "invalidated", "retracted", "aborted", "unprepared", "duplicate", "pressure"]
+)
+def test_first_publication_of_attached_hbm_prefix(monkeypatch, case):
+    import torch
+    from vllm.v1.kv_cache_interface import FullAttentionSpec, KVCacheConfig, KVCacheGroupSpec
+
+    from agentinfer.agentcache.mori.vllm_compat import mori_block_pool_constructor
+
+    page = 16
+    spec = FullAttentionSpec(block_size=page, num_kv_heads=1, head_size=64, dtype=torch.float16)
+    config = KVCacheConfig(8, [], [KVCacheGroupSpec(["layer"], spec)])
+    with mori_block_pool_constructor():
+        manager = MoriKVCacheManager(config, max_model_len=256, scheduler_block_size=page, hash_block_size=page)
+    gpu = manager.block_pool
+    host = MoriBlockPool(num_gpu_blocks=2, enable_caching=True, hash_block_size=page)
+    tree = manager.hiradix = HiRadix(gpu, host, page)
+    gpu.bind_hiradix_index(tree.device, authoritative=True)
+    a, b = insert(tree, (1, 2), program="first")
+    request = _request("second", (1, 2, 3), 49)
+    matches, _ = tree.request_match(request)
+    tree.stamp_prefill(key(2), "second")
+    assert tree.pages[key(2)].shared
+    if case != "unprepared":
+        tree.remember_hbm_match(request, matches)
+    hits, local, _ = manager.get_computed_blocks(request)
+    if case == "duplicate":
+        (other,) = gpu.get_new_blocks(1)
+        gpu._insert_block_hash(b.block_hash, other, num_tokens=2 * page)
+        hits = KVCacheBlocks(([a, other],))
+        manager.release_replaced_hiradix_blocks = lambda blocks, _: gpu.free_blocks(blocks)
+    allocated = manager.allocate_slots(
+        request, 128 if case == "pressure" else page, new_computed_blocks=hits, num_new_computed_tokens=local
+    )
+    tree.finish_native_schedule()
+    if case == "pressure":
+        assert allocated is None
+        assert not tree.attached_hbm_prefixes and a.ref_cnt == b.ref_cnt == 0
+        return
+    assert allocated is not None
+    assert a.ref_cnt == 1
+    assert b.ref_cnt == (0 if case == "duplicate" else 1)
+    table = manager.get_blocks(request.request_id).blocks[0]
+    assert table[:2] == [a, other if case == "duplicate" else b]
+    assert bool(tree.attached_hbm_prefixes) is (case not in ("unprepared", "duplicate"))
+    if case == "retracted":
+        request.status = RequestStatus.RUNNING
+        manager.free(request)
+        assert not tree.attached_hbm_prefixes and a.ref_cnt == b.ref_cnt == 0
+        return
+    if case == "aborted":
+        request.status = RequestStatus.FINISHED_ABORTED
+        held = manager.pop_blocks_for_free(request)
+        assert not tree.attached_hbm_prefixes and a.ref_cnt == b.ref_cnt == 1
+        gpu.free_blocks(held)
+        assert a.ref_cnt == b.ref_cnt == 0
+        return
+    if case == "invalidated":
+        gpu.evict_blocks({b.block_id})
+    published = []
+    publish = tree.publish
+
+    def observe(block, *args):
+        published.append(block)
+        publish(block, *args)
+
+    monkeypatch.setattr(tree, "publish", observe)
+    if case == "partial":
+        original_recency = tree.pages[key(1)].accessed
+        manager.confirm_hiradix(request, page)
+        assert published == [] and manager._radix_depth[request.request_id] == 1
+        assert tree.pages[key(1)].accessed > original_recency and tree.pages[key(1)].boundary
+    manager.confirm_hiradix(request, 3 * page)
+    if case == "invalidated":
+        assert published == [a] and manager._radix_depth[request.request_id] == 1
+    elif case == "duplicate":
+        assert published[:2] == [a, other] and table[1] is b
+        assert b.ref_cnt == other.ref_cnt == 1  # The producer still holds the duplicate.
+        assert manager.take_hiradix_block_table_updates({request.request_id: 1})
+        gpu.free_blocks([other])
+        assert other.block_hash is None
+    else:
+        start = {"unprepared": 0, "partial": 1, "suffix": 2}[case]
+        assert published == list(table[start:])
+        assert manager._radix_depth[request.request_id] == 3
+        assert tree.pages[key(2)].shared and tree.pages[key(3)].boundary
+    assert not tree.attached_hbm_prefixes
+
+
 def test_confirmed_active_request_reuses_canonical_pages_at_the_worker_fence(cache):
     (canonical,) = insert(cache, (1,))
     pool = cache.device.pool

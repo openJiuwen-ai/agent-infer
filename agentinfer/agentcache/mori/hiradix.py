@@ -16,7 +16,7 @@ from vllm.logger import init_logger
 from agentinfer.agentcache.mori.programs import CacheClass, MoriProgramRegistry
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
 
     from vllm.config import VllmConfig
     from vllm.v1.core.kv_cache_utils import BlockHashWithGroupId, KVCacheBlock
@@ -82,6 +82,8 @@ class HiRadix:
         self.prefill_host_sources: frozenset[int] = frozenset()
         self.native_schedule_active = False
         self._prepared_hbm_matches: dict[str, list[KVCacheBlock]] = {}
+        # Canonical HBM hits already pinned in the native request block table.
+        self.attached_hbm_prefixes: dict[str, int] = {}
         self._native_match: tuple[Request, list[KVCacheBlock], list[KVCacheBlock]] | None = None
 
     @classmethod
@@ -486,7 +488,7 @@ class HiRadix:
         self._native_match = None
         if connector and previous is not None and previous[0] is request:
             return previous[1], previous[2]
-        prepared = self._prepared_hbm_matches.pop(request.request_id, None)
+        prepared = self._prepared_hbm_matches.get(request.request_id)
         if prepared is not None:
             device = prepared
             host: list[KVCacheBlock] = []
@@ -496,6 +498,11 @@ class HiRadix:
         if self.native_schedule_active and not connector:
             self._native_match = (request, device, host)
         return device, host
+
+    def record_attached_hbm_prefix(self, request_id: str, blocks: Sequence[KVCacheBlock]) -> None:
+        # Only accept the exact list produced by the scheduler's resident match.
+        if self._prepared_hbm_matches.pop(request_id, None) is blocks:
+            self.attached_hbm_prefixes[request_id] = len(blocks)
 
     def finish_native_schedule(self) -> None:
         self.native_schedule_active = False
@@ -716,6 +723,9 @@ class _TierIndex:
         replicas = self.replicas(page)
         del replicas[block_id]
         if not self.host:
+            # Explicit invalidation can remove even a pinned canonical replica.
+            if self.tree.attached_hbm_prefixes and self.pool.blocks[block_id].ref_cnt:
+                self.tree.attached_hbm_prefixes.clear()
             if not replicas:
                 assert page.parent is not None
                 page.parent.device_children -= 1
