@@ -2,21 +2,7 @@
 # upload_pipeline.py expands it from hardware.yml.
 
 steps:
-  # The compose plugin reuses an image only when meta-data names it. There is no
-  # registry, so this step builds on the host and records the local tag. Later
-  # steps on this queue must share this machine's Docker daemon.
-  - label: ":docker: Build CI image"
-    key: ci-image
-    mirror_hardwares: l20_1
-    host_only: true
-    timeout_in_minutes: 30
-    commands:
-      - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu" || true
-      - |
-        COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 \
-          docker compose -f docker/docker-compose.yml build --pull agentinfer-ci
-      - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-ci-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu"
-
+  # pipeline.yml builds the shared GPU image and records both Compose services.
   # GPU smoke for the AgentInfer serve flag. Not the tests/e2e suite.
   - label: "smoke: agentinfer serve"
     depends_on: ci-image
@@ -80,19 +66,9 @@ steps:
   - group: ":card_index_dividers: e2e accuracy"
     depends_on: ci-image
     steps:
-      - label: ":docker: Build Jiuwen accuracy image"
-        key: ready-accuracy-image
-        mirror_hardwares: l20_2
-        host_only: true
-        timeout_in_minutes: 30
-        commands:
-          - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-ready-accuracy-gpu" || true
-          - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose --profile accuracy -f docker/docker-compose.yml build agentinfer-accuracy-jiuwen
-          - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-accuracy-jiuwen-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-ready-accuracy-gpu"
-
       - label: "accuracy: JiuwenSwarm AgentInfer"
         key: ready-accuracy-jiuwenswarm
-        depends_on: ready-accuracy-image
+        depends_on: ci-image
         secrets:
           - HF_TOKEN
         mirror_hardwares: l20_2
@@ -107,7 +83,7 @@ steps:
           - docker-compose#v4.9.0:
               config: docker/docker-compose.yml
               cli-version: 2
-              run: agentinfer-accuracy-jiuwen
+              run: agentinfer-accuracy
               skip-pull: true
               require-prebuild: true
               environment:
@@ -125,7 +101,7 @@ steps:
     key: ci-image-cpu
     mirror_hardwares: cpu_small
     host_only: true
-    timeout_in_minutes: 30
+    timeout_in_minutes: 60
     commands:
       - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-cpu" || true
       - |
@@ -137,29 +113,17 @@ steps:
     depends_on: ci-image-cpu
     steps:
       - label: "ut"
+        key: unit-tests
         commands:
           - pytest tests -sv -m "cpu and ready"
         timeout_in_minutes: 10
         mirror_hardwares: cpu_small
 
-  # A plain wait skips every later step when an earlier step failed, which
-  # leaves this build's tagged images on the agent. Continue so cleanup still
-  # runs; the build stays failed.
-  - wait: ~
-    continue_on_failure: true
-  - label: ":broom: Cleanup GPU agent"
-    mirror_hardwares: l20_1
-    # Host docker prune. Do not wrap this step in the CI container.
-    host_only: true
-    timeout_in_minutes: 5
-    commands:
-      - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu" || true
-      - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-ready-accuracy-gpu" || true
-      - docker image prune -f
   - label: ":broom: Cleanup CPU agent"
+    depends_on: unit-tests
+    allow_dependency_failure: true
     mirror_hardwares: cpu_small
     host_only: true
     timeout_in_minutes: 5
     commands:
       - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-cpu" || true
-      - docker image prune -f

@@ -83,9 +83,11 @@ Compare baseline and AgentInfer results from the same agent and profile.
 ## Ready CI
 
 The `ready` pipeline runs only JiuwenSwarm's AgentInfer accuracy case with two tasks.
-Its `agentinfer-accuracy-jiuwen` Compose service builds the `accuracy-jiuwen` target, which adds the scorer
-and Jiuwen SDK to the common CI dependencies. Claude and ZCode CLIs are installed only in the full nightly image.
-Both accuracy targets use `workswarm==0.2.8` (`openjiuwen==0.1.20`), matching the upstream adapter.
+Its `agentinfer-accuracy` Compose service reuses the ready functional image and the common `ci` target.
+The image contains all four agent CLIs and an isolated SWE-bench scoring environment at
+`/opt/agentbench/swebench-venv`, configured through `/opt/agentbench/evaluation.yaml`.
+Functional and accuracy jobs use the same agent versions, including Claude Code `2.1.323` and
+`workswarm==0.2.8` (`openjiuwen==0.1.20`), matching the upstream functional runtime.
 The preflight initializes a temporary Jiuwen home and verifies the model client and execution hooks before serving.
 All Python installs use the `PIP_INDEX_URL` build argument, defaulting to Huawei Cloud's PyPI mirror.
 Ready and nightly builds forward the agent's `PIP_INDEX_URL` environment variable when it is set.
@@ -135,14 +137,17 @@ pipeline, while pytest markers select the cases inside its jobs. Both `ready` an
 Ordinary PR builds and main-branch pushes do not run nightly without these conditions.
 The `ready` and `nightly-test` labels select their pipelines independently. When both labels are present,
 both pipelines run in the same build; execution order follows their dependencies and agent availability.
-Their GPU image tags are separate: ordinary ready jobs use `agentinfer-ci:<build-id>-gpu`, Jiuwen accuracy uses
-`agentinfer-ci:<build-id>-ready-accuracy-gpu`, and nightly uses `agentinfer-ci:<build-id>-nightly-gpu`.
-All use the same Dockerfile: ordinary ready/CPU jobs build `ci`, ready accuracy builds `accuracy-jiuwen`,
-and nightly builds `accuracy`. The targets share `ci-deps`, preserving the existing dependency installs
-and package mirror. Both accuracy targets also share the scoring and Jiuwen dependency layers.
-Accuracy builds reuse those cached layers without forcing another base-image pull with `--pull`.
-The nightly file also applies the bootstrap's trigger condition to its outer group, covering image build,
-both accuracy jobs, and cleanup. Uploading that file directly still requires the nightly label or `NIGHTLY=1`.
+The bootstrap builds `agentinfer-ci:<build-id>-gpu` once and records the same image for the functional
+`agentinfer-ci` and scoring `agentinfer-accuracy` Compose services. Both lanes depend on that build;
+scheduled nightly builds use the same entry point even when ready is not selected.
+The accuracy service adds root execution and the Docker socket needed by the scorer.
+The shared image is removed only after both selected pipelines and their uploaded jobs finish,
+including after test failures. Docker dependency layers remain available for subsequent builds.
+The CPU agent builds the same `ci` target on its own Docker daemon with a separate `<build-id>-cpu` tag.
+The shared GPU image build does not set a step-level timeout. The CPU image build allows 60 minutes;
+ready accuracy allows 30 minutes and each nightly accuracy job allows 90 minutes.
+The nightly file retains the trigger condition on its outer group. Upload it through the bootstrap,
+which supplies the shared `ci-image` dependency and image metadata.
 
 Keep the Buildkite pipeline's entry point at `.buildkite/pipeline.yml`. In its GitHub settings:
 

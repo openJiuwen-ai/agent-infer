@@ -2,28 +2,16 @@
 # Buildkite Schedule setup: tests/e2e/acc/README.md (Nightly triggers).
 # The schedule sets NIGHTLY=1; this step YAML does not register a timer.
 # Accuracy coverage follows PR #64 / RFC #54. Use an x86_64 L20 agent.
-# All steps must share a Docker daemon, as in test-ready.yml.
+# pipeline.yml builds and cleans up the shared GPU image for both CI lanes.
 
 steps:
   - group: ":full_moon: Nightly accuracy"
     key: nightly-accuracy
     if: build.env("NIGHTLY") == "1" || build.pull_request.labels includes "nightly-test"
     steps:
-      - label: ":docker: Build accuracy image"
-        key: nightly-accuracy-image
-        mirror_hardwares: l20_2
-        host_only: true
-        timeout_in_minutes: 30
-        commands:
-          # Accuracy extends the cached CI dependency stage; do not pull/rebuild
-          # the ready image a second time when both labels run in this build.
-          - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-nightly-gpu" || true
-          - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose --profile accuracy -f docker/docker-compose.yml build agentinfer-accuracy
-          - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-accuracy-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-nightly-gpu"
-
       - label: "accuracy: baseline"
         key: nightly-accuracy-baseline
-        depends_on: nightly-accuracy-image
+        depends_on: ci-image
         secrets:
           - HF_TOKEN
         mirror_hardwares: l20_2
@@ -55,7 +43,7 @@ steps:
 
       - label: "accuracy: AgentInfer"
         key: nightly-accuracy-agentinfer
-        depends_on: nightly-accuracy-image
+        depends_on: ci-image
         secrets:
           - HF_TOKEN
         mirror_hardwares: l20_2
@@ -84,12 +72,3 @@ steps:
           - "tests/result/acc/*-agentinfer-*/**/*"
         commands:
           - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k agentinfer
-
-      - wait: ~
-        continue_on_failure: true
-      - label: ":broom: Cleanup nightly image"
-        mirror_hardwares: l20_2
-        host_only: true
-        timeout_in_minutes: 5
-        commands:
-          - docker image rm "agentinfer-ci:$$BUILDKITE_BUILD_ID-nightly-gpu" || true

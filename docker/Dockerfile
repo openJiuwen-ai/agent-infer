@@ -79,8 +79,8 @@ RUN chmod 755 /usr/local/bin/ci-entrypoint.sh \
 ENTRYPOINT ["/usr/local/bin/ci-entrypoint.sh"]
 CMD ["/bin/bash"]
 
-# The functional suite keeps all upstream agent/profile runtimes.
-FROM ci-deps AS function-deps
+# Functional and accuracy jobs share the same agent runtimes.
+FROM ci-deps AS agent-deps
 
 ARG CLAUDE_CODE_VERSION=2.1.323
 RUN npm install --global --prefix /usr/local \
@@ -96,6 +96,7 @@ RUN sed -i '1{/^#!/d;}' /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
  && sed -i '1i#!/opt/zcode-node/bin/node' /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
  && chmod 755 /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
  && ln -s /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs /usr/local/bin/zcode \
+ && ln -s /usr/local/bin/zcode /usr/local/bin/zcode-launcher \
  && test "$(zcode --version)" = "0.17.1"
 
 # WorkSwarm provides the JiuwenSwarm commands in an isolated Python environment.
@@ -107,14 +108,11 @@ RUN python3 -m venv --system-site-packages /opt/jiuwenswarm \
       && ln -s "/opt/jiuwenswarm/bin/$command" "/usr/local/bin/$command" || exit 1; \
     done
 
-# Shared scoring and Jiuwen dependencies for ready and nightly accuracy.
-FROM ci-deps AS jiuwen-accuracy-deps
-
+# The scorer uses a separate Python environment to preserve vLLM dependencies.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends docker.io \
  && rm -rf /var/lib/apt/lists/*
 
-# Keep scoring and Jiuwen dependencies separate from vLLM.
 RUN python3 -m venv /opt/agentbench/swebench-venv \
  && /opt/agentbench/swebench-venv/bin/python -m pip install \
       'swebench==4.1.0' 'numpy>=2' \
@@ -123,58 +121,8 @@ RUN python3 -m venv /opt/agentbench/swebench-venv \
       'harness_python: /opt/agentbench/swebench-venv/bin/python' \
       >/opt/agentbench/evaluation.yaml
 
-# Read dependency metadata separately so Jiuwen also caches AgentInfer dependencies.
-COPY pyproject.toml /opt/agentbench/agentinfer-pyproject.toml
-ARG JIUWENSWARM_VERSION=0.2.8
-RUN python3 -m venv /opt/agentbench/jiuwenswarm-venv \
- && python3 -c 'import tomllib, sys; p = tomllib.load(sys.stdin.buffer); print(*p["build-system"]["requires"], *p["project"]["dependencies"], sep="\n")' \
-      </opt/agentbench/agentinfer-pyproject.toml >/opt/agentbench/agentinfer-requirements.txt \
- && /opt/agentbench/jiuwenswarm-venv/bin/python -m pip install \
-      -r /opt/agentbench/agentinfer-requirements.txt \
-      "workswarm==${JIUWENSWARM_VERSION}" \
- && /opt/agentbench/jiuwenswarm-venv/bin/python -m pip check \
- && for name in jiuwenswarm jiuwenswarm-init jiuwenswarm-start jiuwenbox-server; do \
-      ln -s /opt/agentbench/jiuwenswarm-venv/bin/$name /usr/local/bin/$name; \
-    done
-
-# Ready accuracy installs Jiuwen and the scorer, without Claude/ZCode CLIs.
-FROM jiuwen-accuracy-deps AS accuracy-jiuwen
-
-WORKDIR /app
-COPY . .
-RUN pip install --no-cache-dir \
-      -e . --no-deps --no-build-isolation \
- && /opt/agentbench/jiuwenswarm-venv/bin/python -m pip install \
-      -e . --no-deps --no-build-isolation \
- && /opt/agentbench/jiuwenswarm-venv/bin/python -m pip check
-
-# Nightly keeps the accuracy-tested Claude version and reuses the pinned ZCode build.
-FROM jiuwen-accuracy-deps AS accuracy
-
-RUN npm install --global --prefix /usr/local \
-      @anthropic-ai/claude-code@2.1.327
-
-# Keep the workspace and adjacent resources: the CLI bundles external runtime assets.
-COPY --from=zcode-build /opt/zcode /opt/zcode
-COPY --from=zcode-build /usr/local/bin/node /opt/zcode-node/bin/node
-RUN sed -i '1{/^#!/d;}' /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
- && sed -i '1i#!/opt/zcode-node/bin/node' /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
- && chmod 755 /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
- && ln -s /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs /usr/local/bin/zcode \
- && test "$(zcode --version)" = "0.17.1"
-
-RUN ln -s /usr/local/bin/zcode /usr/local/bin/zcode-launcher
-
-WORKDIR /app
-COPY . .
-RUN pip install --no-cache-dir \
-      -e . --no-deps --no-build-isolation \
- && /opt/agentbench/jiuwenswarm-venv/bin/python -m pip install \
-      -e . --no-deps --no-build-isolation \
- && /opt/agentbench/jiuwenswarm-venv/bin/python -m pip check
-
-# Ready functional and CPU jobs use the upstream functional runtime.
-FROM function-deps AS ci
+# One target serves ready, nightly and CPU jobs; dependency layers precede the checkout.
+FROM agent-deps AS ci
 
 WORKDIR /app
 COPY . .

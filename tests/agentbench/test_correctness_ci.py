@@ -427,6 +427,70 @@ def test_ci_uploads_every_accuracy_artifact(report_config, pipeline):
     assert checked
 
 
+def test_ci_gpu_image_is_built_once_and_retained_until_both_pipelines_finish():
+    import runpy
+    import shlex
+
+    import yaml
+
+    repo = Path(__file__).resolve().parents[2]
+    buildkite = repo / ".buildkite"
+    render = runpy.run_path(str(buildkite / "upload_pipeline.py"))["render"]
+    pipelines = {
+        name: yaml.safe_load(render(buildkite / name, buildkite / "hardware.yml"))
+        for name in ("pipeline.yml", "test-ready.yml", "test-nightly.yml")
+    }
+
+    def jobs(steps, inherited=()):
+        for step in steps:
+            dependencies = step.get("depends_on", inherited)
+            if isinstance(dependencies, str):
+                dependencies = [dependencies]
+            if "steps" in step:
+                yield from jobs(step["steps"], dependencies)
+            else:
+                yield step, dependencies
+
+    all_jobs = [job for pipeline in pipelines.values() for job in jobs(pipeline["steps"])]
+    keys = [job["key"] for job, _ in all_jobs if "key" in job]
+    assert len(keys) == len(set(keys))
+    for _, dependencies in all_jobs:
+        assert set(dependencies) <= set(keys), "a dynamically uploaded job has an unknown dependency"
+    builds = [
+        job
+        for job, _ in all_jobs
+        if any("build --pull agentinfer-ci" in command for command in job.get("commands", []))
+    ]
+    assert len(builds) == 1
+    producer = builds[0]
+    metadata = {}
+    for command in producer["commands"]:
+        argv = shlex.split(command)
+        if argv[:3] == ["buildkite-agent", "meta-data", "set"]:
+            metadata[argv[3]] = argv[4]
+    consumers = 0
+    for job, dependencies in all_jobs:
+        for plugin in job.get("plugins", []):
+            for config in plugin.values():
+                service = config.get("run")
+                if service not in {"agentinfer-ci", "agentinfer-accuracy"}:
+                    continue
+                key = f"docker-compose-plugin-built-image-tag-{service}-docker/docker-compose.yml"
+                assert key in metadata, "a GPU consumer has no prebuilt image metadata"
+                assert producer["key"] in dependencies
+                consumers += 1
+    assert consumers == 5  # serve smoke, functional E2E, ready accuracy, two nightly jobs
+    assert len(set(metadata.values())) == 1
+    cleanup = next(job for job, _ in all_jobs if job.get("key") == "cleanup-gpu-image")
+    uploads = {job["key"] for job in pipelines["pipeline.yml"]["steps"] if "command" in job}
+    assert set(cleanup["depends_on"]) == uploads | {producer["key"]}
+    assert cleanup["allow_dependency_failure"] is True
+    # A child pipeline must not remove the image while the other lane still uses it.
+    for name in ("test-ready.yml", "test-nightly.yml"):
+        for job, _ in jobs(pipelines[name]["steps"]):
+            assert not any("docker rmi" in command and "-gpu" in command for command in job.get("commands", []))
+
+
 @pytest.mark.parametrize("case_path,original_case", BENCHMARKS, ids=[case.test_name for _, case in BENCHMARKS])
 @pytest.mark.parametrize("evaluation", [None, "/opt/agentbench/evaluation.yaml"])
 def test_evaluation_override_preserves_cases(monkeypatch, tmp_path, case_path, original_case, evaluation):

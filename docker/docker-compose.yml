@@ -98,22 +98,12 @@ services:
     <<: *ci-base
     image: agentinfer-ci:${BUILDKITE_BUILD_ID:-local}-cpu
 
-  # Accuracy adds the scorer and runs pytest as root.
+  # Reuse the GPU CI image; accuracy alone needs root and the scoring Docker socket.
   agentinfer-accuracy:
     extends:
       service: agentinfer-ci
-    build:
-      target: accuracy
-    image: agentinfer-ci:${BUILDKITE_BUILD_ID:-local}-nightly-gpu
     profiles: [accuracy]
     environment:
       AGENTINFER_CI_AS_ROOT: "1"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-
-  agentinfer-accuracy-jiuwen:
-    extends:
-      service: agentinfer-accuracy
-    build:
-      target: accuracy-jiuwen
-    image: agentinfer-ci:${BUILDKITE_BUILD_ID:-local}-ready-accuracy-gpu
