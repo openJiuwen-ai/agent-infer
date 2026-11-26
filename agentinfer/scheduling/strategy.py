@@ -31,6 +31,7 @@ from agentinfer.scheduling.transitions import TransitionController
 class SchedulingStrategy(Generic[StrategyGlobalFactorsT, StrategyProgramFactorsT], ABC):
     """Policy that consumes runtime facts and maintained factors under the caller's scheduling lock."""
 
+    observes_request_arrivals = False
     host_driven_checks = False
     resolve_marked_pause = False
 

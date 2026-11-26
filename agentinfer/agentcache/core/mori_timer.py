@@ -10,17 +10,17 @@ from collections.abc import Callable
 from functools import wraps
 from threading import Timer
 
-from agentinfer.agentcache.core.program_scheduling import ProgramSchedulingBridge
+from agentinfer.agentcache.core.program_scheduling import MoriProgramAdmissionController
 
 logger = logging.getLogger(__name__)
-_DEADLINE = object()
+_DEADLINE = "agentinfer.mori.deadline"
 
 
 class MoriTimer:
     """MORI-owned timer whose worker only posts to the Core input queue."""
 
-    def __init__(self, bridge: ProgramSchedulingBridge, wake: Callable[[], None]) -> None:
-        self._bridge = bridge
+    def __init__(self, admission: MoriProgramAdmissionController, wake: Callable[[], None]) -> None:
+        self._admission = admission
         self._wake = wake
         self._timer: Timer | None = None
 
@@ -30,7 +30,7 @@ class MoriTimer:
         self._timer.start()
 
     def start(self) -> None:
-        self._arm(time.monotonic() + self._bridge.config.interval_seconds)
+        self._arm(time.monotonic() + self._admission.config.interval_seconds)
 
     def close(self) -> None:
         if self._timer is not None:
@@ -42,14 +42,14 @@ class MoriTimer:
         started = time.monotonic()
         applied = False
         try:
-            self._bridge.observe_backend()
-            applied = self._bridge.tick()
+            self._admission.observe_backend()
+            applied = self._admission.tick()
         except Exception:
             logger.exception("MORI periodic check failed")
         # Keep the v3 timing rule in the embedded implementation. A successful
         # KV operation starts the interval at acknowledgement.
         start = time.monotonic() if applied else started
-        self._arm(start + self._bridge.config.interval_seconds)
+        self._arm(start + self._admission.config.interval_seconds)
 
 
 def install_mori_timer() -> None:
@@ -65,7 +65,7 @@ def install_mori_timer() -> None:
 
     @wraps(handle)
     def handle_request(self, request_type, payload):
-        if request_type == wakeup and payload is _DEADLINE:
+        if request_type == wakeup and payload == _DEADLINE:
             timer = getattr(self, "_agentinfer_mori_timer", None)
             if timer is not None and self.is_running():
                 timer.on_deadline()
@@ -74,14 +74,14 @@ def install_mori_timer() -> None:
 
     @wraps(run_busy_loop)
     def run_with_timer(self, *args, **kwargs):
-        bridge = getattr(getattr(self.scheduler, "_agentcache", None), "program_scheduling", None)
-        if bridge is None:
+        admission = getattr(getattr(self.scheduler, "_agentcache", None), "program_admission", None)
+        if admission is None:
             return run_busy_loop(self, *args, **kwargs)
 
         def wake() -> None:
             self.input_queue.put_nowait((wakeup, _DEADLINE))
 
-        timer = MoriTimer(bridge, wake)
+        timer = MoriTimer(admission, wake)
         self._agentinfer_mori_timer = timer
         timer.start()
         try:

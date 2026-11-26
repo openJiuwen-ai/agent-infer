@@ -15,7 +15,7 @@ from agentinfer.scheduling.domain import ProgramRef
 from agentinfer.scheduling.identity import AgentIdentity
 from agentinfer.scheduling.mori import MoriConfig, build_mori_strategy
 from agentinfer.scheduling.runtime import ProgramScheduler
-from agentinfer.scheduling.transitions import ProgramPlacement, TransitionRequest
+from agentinfer.scheduling.transitions import ProgramPlacement, TransitionKind, TransitionRequest
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +58,8 @@ class _Admission:
     native_count: int
 
 
-class ProgramSchedulingBridge:
-    """Run one ProgramScheduler on the EngineCore owner thread."""
+class MoriProgramAdmissionController:
+    """Coordinate Program admission, dispatch permits and cache placement on the Core owner."""
 
     def __init__(self, cache: ProgramCacheAdapter, config: MoriConfig, backend_id: str = "vllm-local") -> None:
         self.cache = cache
@@ -68,6 +68,7 @@ class ProgramSchedulingBridge:
         self._pending: dict[str, _Admission] = {}
         self._ready: dict[str, tuple[ProgramRef, int]] = {}
         self._operations: list[ProgramOperation] = []
+        self._inactive: set[ProgramRef] = set()
         self._admitted: dict[str, None] = {}
         self.observation = cache.observe_backend()
         self._backend = self._backend_pool()
@@ -107,7 +108,14 @@ class ProgramSchedulingBridge:
     def begin(
         self, attempt: str, program_id: str, context_chars: int, prefix_group: str, native_count: int = 1
     ) -> Future[bool]:
-        if not attempt or context_chars < 0 or not prefix_group or native_count < 1:
+        if (
+            not attempt
+            or not isinstance(program_id, str)
+            or not program_id.strip()
+            or context_chars < 0
+            or not prefix_group
+            or native_count < 1
+        ):
             raise ValueError("Invalid MORI admission facts")
         if attempt in self._pending or attempt in self._ready:
             raise ValueError("Duplicate MORI attempt")
@@ -188,9 +196,14 @@ class ProgramSchedulingBridge:
         if any(op.program == ref for op in self._operations) and self._flush_operations() is None:
             return False
         factors = self.runtime.strategy_factors.global_factors
-        if (ref in factors.active or ref in factors.warm) and not self._send_operations((ProgramOperation(ref, None),)):
-            return False
+        if ref in factors.active or ref in factors.warm or ref in self._inactive:
+            if not self._send_operations((ProgramOperation(ref, None),)):
+                return False
+            self._inactive.discard(ref)
 
+        # All calls run on the Core owner. release_program cancels this generation's
+        # runtime bindings before it commits RELEASE, including admitted dispatches.
+        # Keep both those bindings and the generation intact until the cache ACK.
         if not self.runtime.release_program(ref):
             return False
         for attempt, admission in tuple(self._pending.items()):
@@ -204,6 +217,14 @@ class ProgramSchedulingBridge:
     def _on_transition(self, transition: TransitionRequest) -> None:
         if transition.placement is not None:
             self._operations.append(ProgramOperation(transition.program, transition.placement))
+            if transition.placement is ProgramPlacement.INACTIVE:
+                self._inactive.add(transition.program)
+            else:
+                self._inactive.discard(transition.program)
+        elif transition.kind is TransitionKind.RELEASE and transition.program in self._inactive:
+            # Cancellation of the last pending attempt can retire an inactive Program.
+            self._inactive.remove(transition.program)
+            self._operations.append(ProgramOperation(transition.program, None))
 
     def _flush_and_publish(self) -> int | None:
         applied = self._flush_operations()

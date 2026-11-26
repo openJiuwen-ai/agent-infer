@@ -8,10 +8,13 @@ import asyncio
 import json
 import logging
 import math
+import os
 from functools import partial
 from uuid import uuid4
 
 from pydantic_core import to_json
+from starlette._utils import get_route_path
+from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -22,12 +25,13 @@ from agentinfer.agentcache.core.scheduling_ipc import UTILITY_METHOD, Event, cha
 logger = logging.getLogger(__name__)
 
 
-def program_id(payload: dict) -> str:
-    """Port ThunderAgent app.get_program_id, preserving body-field precedence."""
-    if "program_id" in payload:
-        return str(payload["program_id"])
+def program_id(payload: dict) -> str | None:
+    """Resolve an explicit Program ID from the body or its OpenAI-compatible extension."""
     extra = payload.get("extra_body")
-    return str(extra["program_id"]) if isinstance(extra, dict) and "program_id" in extra else "default"
+    for value in (payload.get("program_id"), extra.get("program_id") if isinstance(extra, dict) else None):
+        if value is not None and str(value).strip():
+            return str(value)
+    return None
 
 
 def extract_usage(payload: object) -> tuple[int | None, int, int]:
@@ -111,6 +115,27 @@ class MoriSchedulingMiddleware:
     def __init__(self, app) -> None:
         self.app = app
         self._delivery: set[asyncio.Task] = set()
+        self._auth_initialized = False
+        self._auth = None
+
+    def _authorized(self, scope) -> bool:
+        if not self._auth_initialized:
+            args = getattr(scope["app"].state, "args", None)
+            configured = getattr(args, "api_key", None) or [os.environ.get("VLLM_API_KEY")]
+            if tokens := [key for key in configured if key]:
+                try:
+                    from vllm.entrypoints.serve.middleware.authenticate import AuthenticationMiddleware
+                except ModuleNotFoundError as exc:
+                    if exc.name not in (
+                        "vllm.entrypoints.serve.middleware",
+                        "vllm.entrypoints.serve.middleware.authenticate",
+                    ):
+                        raise
+                    from vllm.entrypoints.serve.utils.server_utils import AuthenticationMiddleware
+
+                self._auth = AuthenticationMiddleware(self.app, tokens=tokens)
+            self._auth_initialized = True
+        return self._auth is None or self._auth.verify_token(Headers(scope=scope))
 
     def _send(self, core, event: Event, *args) -> asyncio.Task:
         task = asyncio.create_task(core.call_utility_async(UTILITY_METHOD, event.value, list(args)))
@@ -151,9 +176,13 @@ class MoriSchedulingMiddleware:
         if scope["type"] != "http" or scope["method"] != "POST":
             await self.app(scope, receive, send)
             return
-        path = scope["path"]
+        path = get_route_path(scope)
         if path not in ("/v1/chat/completions", "/programs/release"):
             await self.app(scope, receive, send)
+            return
+
+        if not self._authorized(scope):
+            await JSONResponse({"error": "Unauthorized"}, status_code=401)(scope, receive, send)
             return
 
         request = Request(scope, receive)
@@ -169,13 +198,14 @@ class MoriSchedulingMiddleware:
         emit = partial(self._send, core)
         pid = program_id(payload)
         if path == "/programs/release":
-            if not payload.get("program_id"):
+            if pid is None:
                 await JSONResponse({"detail": "Missing program_id"}, status_code=400)(scope, receive, send)
                 return
             released = await emit(Event.RELEASE, pid)
             await JSONResponse({"program_id": pid, "released": released})(scope, receive, send)
             return
 
+        pid = pid or "default"
         attempt = uuid4().hex
         chars, prefix = chat_facts(payload)
         observer = MoriResponseObserver(send, emit, attempt, bool(payload.get("stream")))

@@ -95,7 +95,7 @@ class EmbeddedSchedulerController(Protocol[RetainedRequestT]):
 class _VllmAdmissionHooks:
     """Composition helper shared by the two single-inheritance native bridges."""
 
-    program_scheduling = None
+    program_admission = None
 
     def __init__(self, owner: Scheduler, vllm_config: object, kv_cache_config: object, block_size: int) -> None:
         attach_agentinfer_to_vllm_logging()
@@ -133,8 +133,8 @@ class _VllmAdmissionHooks:
 
             if getattr(parallel_config, "data_parallel_size", 1) != 1:
                 raise ValueError("Embedded MORI requires one data-parallel rank")
-            self.program_scheduling = build_mori_controller(owner, settings, self.backend_id)
-            self.controller = self.program_scheduling.runtime
+            self.program_admission = build_mori_controller(owner, settings, self.backend_id)
+            self.controller = self.program_admission.runtime
             install_core_utility()
             install_mori_timer()
             return
@@ -150,12 +150,12 @@ class _VllmAdmissionHooks:
 
     def add_request(self, owner: Scheduler, request: Request, native_add: Callable[[Request], None]) -> None:
         """Retain agentic work or pass compatibility traffic directly to vLLM."""
-        if self.program_scheduling is not None:
+        if self.program_admission is not None:
             from agentinfer.agentcache.core.program_scheduling import ATTEMPT_ARG
 
             params = request.sampling_params
             attempt = (params.extra_args or {}).get(ATTEMPT_ARG) if params is not None else None
-            if attempt is not None and not self.program_scheduling.attach(attempt):
+            if attempt is not None and not self.program_admission.attach(attempt):
                 raise ValueError("Native request has no outstanding MORI admission")
             native_add(request)
             return
@@ -178,7 +178,7 @@ class _VllmAdmissionHooks:
 
     def before_schedule(self, owner: Scheduler, native_add: Callable[[Request], None]) -> None:
         """Run one AgentCache cycle and transfer admitted requests to native waiting."""
-        if self.program_scheduling is not None:
+        if self.program_admission is not None:
             return
         self._drain_lifecycle_signals()
         now = time.monotonic()
@@ -319,9 +319,9 @@ class _VllmAdmissionHooks:
         native_finish: Callable[[str | Iterable[str] | None, RequestStatus], list[tuple[str, int]]],
     ) -> list[tuple[str, int]]:
         """Finish retained and native attempts while reporting only terminal lifecycle facts."""
-        if self.program_scheduling is not None:
+        if self.program_admission is not None:
             if request_ids is None:
-                self.program_scheduling.cancel_gates()
+                self.program_admission.cancel_gates()
             return native_finish(request_ids, finished_status)
         normalized_request_ids = (
             request_ids if request_ids is None or isinstance(request_ids, str) else tuple(request_ids)
@@ -380,7 +380,7 @@ class _VllmAdmissionHooks:
 
     def unfinished_count(self, native_count: int) -> int:
         """Merge retained and native liveness without exposing request objects to EngineCore."""
-        if self.program_scheduling is not None:
+        if self.program_admission is not None:
             return native_count
         return native_count + self.controller.retained_request_count
 

@@ -16,6 +16,7 @@ from agentinfer.scheduling.transitions import ProgramPlacement, TransitionContro
 class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
     """Place Programs using ThunderAgent arrival, usage, and periodic rules."""
 
+    observes_request_arrivals = True
     host_driven_checks = True
     resolve_marked_pause = True
 
@@ -27,11 +28,16 @@ class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
         ref = event.program
         program = factors.for_program(ref)
         if program is None:
-            program = MoriProgramFactors(prefix_group=str(event.field("prefix_group")))
+            program = MoriProgramFactors(prefix_group=str(event.field("prefix_group") or ""))
             factors.set_program_factors(ref, program)
         program.steps += 1
-        program.context_chars = int(event.field("context_chars"))
-        program.tokens = int(program.context_chars / factors.global_factors.char_to_token_ratio)
+        context_chars = event.field("context_chars")
+        program.context_chars = int(context_chars or 0)
+        program.tokens = (
+            int(program.context_chars / factors.global_factors.char_to_token_ratio)
+            if context_chars is not None
+            else max(0, int(event.field("prompt_tokens")))
+        )
         program.start_reasoning(event.occurred_at_monotonic_s)
 
     def on_request_progress(self, factors: MoriFactors, event: SchedulingEvent) -> None:
@@ -59,7 +65,7 @@ class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
                 0.2 * sample + 0.8 * state.char_to_token_ratio if state.ratio_initialized else sample
             )
             state.ratio_initialized = True
-        if not program.sampled_prefix:
+        if program.prefix_group and not program.sampled_prefix:
             program.sampled_prefix = True
             cached = int(event.field("cached_prefix_tokens"))
             if cached > state.prefix_lengths.get(program.prefix_group, 0):
