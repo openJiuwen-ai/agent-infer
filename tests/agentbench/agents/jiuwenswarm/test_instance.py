@@ -300,6 +300,48 @@ def test_worker_stop_uses_worker_interpreter_and_falls_back(tmp_path, monkeypatc
     assert "interpreter unavailable" in (instance.artifact_dir / "jiuwenswarm-worker-stop.log").read_text()
 
 
+@pytest.mark.timeout(20)
+def test_stop_reaps_owned_services_and_keeps_logs(tmp_path: Path) -> None:
+    instance = _instance(tmp_path)
+    instance.artifact_dir.mkdir()
+    log_path = instance.artifact_dir / "jiuwenswarm-services.stdout.log"
+
+    async def exercise() -> None:
+        processes: list[asyncio.subprocess.Process] = []
+
+        async def start_process() -> asyncio.subprocess.Process:
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, "-c", "import time; time.sleep(60)", start_new_session=os.name != "nt"
+            )
+            processes.append(process)
+            return process
+
+        with log_path.open("wb") as log:
+            log.write(b"agent server started\n")
+            instance._stdout = log
+            try:
+                server = await start_process()
+                jiuwenbox = await start_process()
+                sibling = await start_process()
+                instance._process = server
+                instance._jiuwenbox_process = jiuwenbox
+
+                await instance.stop()
+
+                assert server.returncode is not None
+                assert jiuwenbox.returncode is not None
+                assert sibling.returncode is None
+                assert log.closed
+            finally:
+                for process in processes:
+                    if process.returncode is None:
+                        process.kill()
+                    await process.wait()
+
+    asyncio.run(exercise())
+    assert log_path.read_bytes() == b"agent server started\n"
+
+
 def test_jiuwenbox_server_uses_supported_listen_flag(
     tmp_path: Path,
     monkeypatch,

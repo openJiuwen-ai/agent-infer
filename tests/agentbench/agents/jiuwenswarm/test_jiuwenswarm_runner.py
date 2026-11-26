@@ -231,6 +231,9 @@ def test_runner_timeout_interrupts_before_instance_stop(
     from agentinfer.agentbench.agents.jiuwenswarm import runner
 
     calls = []
+    stdout = _event("chat.delta", {"content": "partial output"})
+    stderr = b"runtime diagnostic\n"
+    patch = "diff --git a/a b/a\n"
 
     class Instance:
         gateway_url = "ws://127.0.0.1:21003/tui"
@@ -258,18 +261,24 @@ def test_runner_timeout_interrupts_before_instance_stop(
 
     async def communicate(_process, _prompt: bytes, _deadline: float, _prompt_timeout: float, **kwargs):
         calls.append("kill")
-        return b"", b"", True, None
+        return stdout, stderr, True, None
 
     monkeypatch.setattr(runner, "JiuwenInstance", Instance)
     monkeypatch.setattr(runner.asyncio, "create_subprocess_exec", create_process)
     monkeypatch.setattr(runner, "_communicate_with_timeout", communicate)
-    monkeypatch.setattr(runner, "export_patch", lambda _workspace: "")
+    monkeypatch.setattr(runner, "export_patch", lambda _workspace: patch)
 
-    result = runner.asyncio.run(runner.run_jiuwenswarm(_request(tmp_path)))
+    request = _request(tmp_path)
+    result = runner.asyncio.run(runner.run_jiuwenswarm(request))
 
     assert result.outcome is AgentRunOutcome.FAILED
     assert result.termination_reason is TerminationReason.TIMEOUT
     assert calls == ["start", "kill", "interrupt", "stop"]
+    assert result.transcript is not None
+    assert Path(result.transcript).read_bytes() == stdout
+    assert (request.artifact_dir / "jiuwenswarm.stderr.log").read_bytes() == stderr
+    assert result.has_patch
+    assert (request.artifact_dir / "model.patch").read_text(encoding="utf-8") == patch
 
 
 def test_runner_cancellation_preserves_runtime_workspace_before_reraising(

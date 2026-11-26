@@ -5,6 +5,11 @@
 # The image does not hardcode a UID: each agent machine can use its own.
 set -eu
 
+if [ -n "${AGENTINFER_CI_NVIDIA_DRIVER_DIR:-}" ]; then
+  export LD_LIBRARY_PATH="${AGENTINFER_CI_NVIDIA_DRIVER_DIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  export TRITON_LIBCUDA_PATH="$AGENTINFER_CI_NVIDIA_DRIVER_DIR"
+fi
+
 if [ "$(id -u)" != "0" ]; then
   exec "$@"
 fi

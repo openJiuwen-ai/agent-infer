@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
-"""Manage vLLM serve subprocesses for E2E performance scenarios."""
+"""Manage E2E vLLM processes: per-run contexts or explicitly shared sessions."""
 
 from __future__ import annotations
 
