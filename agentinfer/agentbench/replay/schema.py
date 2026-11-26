@@ -115,6 +115,7 @@ class ReplayRequest:
     parallel_with: tuple[str, ...]
     source_evidence: ReplaySourceEvidence | None = None
     source_details: AgentXSourceDetails | None = None
+    source_request_purpose: str | None = None
 
     def __post_init__(self) -> None:
         if self.source_details is not None and not isinstance(self.source_details, AgentXSourceDetails):

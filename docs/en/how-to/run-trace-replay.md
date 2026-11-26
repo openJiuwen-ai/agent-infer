@@ -96,6 +96,8 @@ and `backend.metrics_url` to the complete vLLM metrics URL. For `/v1/messages`, 
 `agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware` to propagate identity and sampling parameters.
 See [vLLM integration](integrate-vllm.md) for deployment options.
 
+To collect Router workflow prediction metrics during Replay, see [Router workflow prediction](../reference/benchmark-config.md#router-workflow-prediction).
+
 Inferact conversion discovers the Backend tokenizer through `/v1/models` and the optional `/tokenizer_info`.
 When matching tokenizer files are available on the same host and raw-text and chat-template token-ID probes match
 the Backend exactly, conversion and Replay calibration use the local tokenizer. Conversion may use incremental
