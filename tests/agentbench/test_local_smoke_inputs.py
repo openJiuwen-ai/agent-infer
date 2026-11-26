@@ -79,7 +79,7 @@ def test_team_limits_reach_benchmark_and_are_validated_before_model_start(tmp_pa
     """Honor JSON child limits and reject invalid limits before starting vLLM."""
     config = E2EConfig.from_case(load_case_file(SMOKE_CASE, benchmark_index=5))
     argv = build_benchmark_argv(config, tmp_path / "run")
-    assert argv[argv.index("--max-subagents") + 1] == "3"
+    assert argv[argv.index("--max-subagents") + 1] == "1"
     assert argv[argv.index("--max-concurrent-subagents") + 1] == "1"
     assert smoke_suite.resolve_agent_type(config) == "jiuwenswarm"
     invalid = replace(

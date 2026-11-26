@@ -100,7 +100,7 @@ Run both JiuwenSwarm modes with `-k jiuwenswarm`. Select just its team mode with
 pytest -s -v tests/e2e/function/agentbench/test_smoke_task.py -k "jiuwenswarm and team.code.normal"
 ```
 
-The team case allows three cumulative child launches and one child doing model
+The team case allows one cumulative child launch and one child doing model
 or tool work at a time, excluding the leader. This keeps the smoke workload
 small and fits the shared server's two sequence slots. Single-agent mode uses
 the default child limits of 1/1. JSON `max-subagents` and
