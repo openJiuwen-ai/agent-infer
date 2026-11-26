@@ -1,3 +1,23 @@
+# Build the exact ZCode CLI supported by the adapter, with its pinned toolchain.
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/node:24.14.0-bookworm AS zcode-build
+ARG ZCODE_COMMIT=a9fe401eede6e6e5e01be9048679c206fe6f02d9
+ARG ZCODE_REPOSITORY=https://github.com/zai-org/ZCode.git
+RUN npm install -g pnpm@10.33.2
+WORKDIR /opt/zcode
+RUN git init . \
+ && git remote add origin "${ZCODE_REPOSITORY}" \
+ && for fetch_attempt in 1 2 3; do \
+      echo "Fetching ZCode source (attempt ${fetch_attempt}/3)"; \
+      if git -c http.version=HTTP/1.1 fetch --depth 1 origin "${ZCODE_COMMIT}"; then break; fi; \
+      if [ "${fetch_attempt}" -eq 3 ]; then exit 1; fi; \
+      sleep 5; \
+    done \
+ && git checkout --detach FETCH_HEAD \
+ && test "$(git rev-parse HEAD)" = "${ZCODE_COMMIT}" \
+ && pnpm install --frozen-lockfile \
+ && pnpm --filter @zcode/cli... build \
+ && test "$(node apps/zcode-cli/packages/cli/dist/zcode.cjs --version)" = "0.17.1"
+
 FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/vllm/vllm-openai:v0.23.0 AS ci-deps
 
 # Unit tests create throwaway repos with `git init` / `git commit`.
@@ -5,10 +25,10 @@ FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/vllm/vllm-openai:v0.23.0
 # sudo is required when the DSH step stays root and wraps plan-subagent
 # with `sudo -u test-user`.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl git sudo xz-utils \
+ && apt-get install -y --no-install-recommends ca-certificates curl git sudo xz-utils tmux bubblewrap socat \
  && rm -rf /var/lib/apt/lists/*
 
-# DSH 0.2.1-rc.2 for tests/e2e/function/agentbench/dsh. Install under /usr/local
+# DSH 0.2.1-rc.2 for the unified AgentBench functional suite. Install under /usr/local
 # so the non-root user from ci-entrypoint.sh can execute node and dsh.
 # Node 24 is inside the supported range (^22.19.0 || >=24).
 ARG NODE_VERSION=24.22.1
@@ -42,6 +62,14 @@ ENV HF_ENDPOINT=https://hf-mirror.com \
     HF_HUB_CACHE=/home/models/hub \
     HOME=/tmp/ci-home
 
+# Jiuwen's sandbox mounts /usr but not /etc/alternatives. Keep the base image's
+# Python interpreter reachable inside the sandbox before creating the venv.
+RUN python3_target="$(readlink -f /usr/bin/python3)" \
+ && test -x "$python3_target" \
+ && if [ "$python3_target" != /usr/bin/python3 ]; then \
+      ln -sfn "$python3_target" /usr/bin/python3; \
+    fi
+
 # Copy the entrypoint before the repo so dependency layers stay cached.
 # It drops root to whatever UID owns the checkout. See docker/ci-entrypoint.sh.
 COPY docker/ci-entrypoint.sh /usr/local/bin/ci-entrypoint.sh
@@ -51,19 +79,39 @@ RUN chmod 755 /usr/local/bin/ci-entrypoint.sh \
 ENTRYPOINT ["/usr/local/bin/ci-entrypoint.sh"]
 CMD ["/bin/bash"]
 
+# The functional suite keeps all upstream agent/profile runtimes.
+FROM ci-deps AS function-deps
+
+ARG CLAUDE_CODE_VERSION=2.1.323
+RUN npm install --global --prefix /usr/local \
+      --registry https://registry.npmjs.org \
+      --allow-scripts=@anthropic-ai/claude-code \
+      "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+ && claude --version
+
+# Keep the workspace and adjacent resources: the CLI bundles external runtime assets.
+COPY --from=zcode-build /opt/zcode /opt/zcode
+COPY --from=zcode-build /usr/local/bin/node /opt/zcode-node/bin/node
+RUN sed -i '1{/^#!/d;}' /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
+ && sed -i '1i#!/opt/zcode-node/bin/node' /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
+ && chmod 755 /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
+ && ln -s /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs /usr/local/bin/zcode \
+ && test "$(zcode --version)" = "0.17.1"
+
+# JiuwenSwarm uses its own Python environment so its dependencies cannot replace vLLM's.
+ARG JIUWENSWARM_VERSION=0.2.4b3
+RUN python3 -m venv --system-site-packages /opt/jiuwenswarm \
+ && /opt/jiuwenswarm/bin/pip install --no-cache-dir "jiuwenswarm==${JIUWENSWARM_VERSION}" \
+ && for command in jiuwenswarm jiuwenswarm-init jiuwenswarm-start jiuwenbox-server; do \
+      test -x "/opt/jiuwenswarm/bin/$command" \
+      && ln -s "/opt/jiuwenswarm/bin/$command" "/usr/local/bin/$command" || exit 1; \
+    done
+
 # Shared scoring and Jiuwen dependencies for ready and nightly accuracy.
 FROM ci-deps AS jiuwen-accuracy-deps
 
-# Jiuwen's sandbox mounts /usr but not /etc/alternatives.
-# Resolve the interpreter before creating the scoring and agent venvs.
-RUN python3_target="$(readlink -f /usr/bin/python3)" \
- && test -x "$python3_target" \
- && if [ "$python3_target" != /usr/bin/python3 ]; then \
-      ln -sfn "$python3_target" /usr/bin/python3; \
-    fi
-
 RUN apt-get update \
- && apt-get install -y --no-install-recommends bubblewrap docker.io \
+ && apt-get install -y --no-install-recommends docker.io \
  && rm -rf /var/lib/apt/lists/*
 
 # Keep scoring and Jiuwen dependencies separate from vLLM.
@@ -99,40 +147,22 @@ RUN pip install --no-cache-dir \
       -e . --no-deps --no-build-isolation \
  && /opt/agentbench/jiuwenswarm-venv/bin/python -m pip check
 
-# Nightly extends the same cached dependencies with all remaining agents.
+# Nightly keeps the accuracy-tested Claude version and reuses the pinned ZCode build.
 FROM jiuwen-accuracy-deps AS accuracy
-
-RUN apt-get update \
- && apt-get install -y --no-install-recommends tmux socat \
- && rm -rf /var/lib/apt/lists/*
 
 RUN npm install --global --prefix /usr/local \
       @anthropic-ai/claude-code@2.1.327
 
-# Build the Node bundle required by the ZCode adapter, preserving NODE_OPTIONS.
-RUN curl -fsSL --retry 3 \
-      https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.xz \
-      -o /tmp/zcode-node.tar.xz \
- && tar -xJf /tmp/zcode-node.tar.xz -C /opt/agentbench \
- && rm /tmp/zcode-node.tar.xz \
- && /opt/agentbench/node-v24.14.0-linux-x64/bin/node \
-      /usr/local/lib/node_modules/npm/bin/npm-cli.js install --global \
-      --prefix /opt/agentbench/node-v24.14.0-linux-x64 pnpm@10.33.2 \
- && curl -fsSL --retry 3 \
-      https://codeload.github.com/zai-org/ZCode/tar.gz/a9fe401eede6e6e5e01be9048679c206fe6f02d9 \
-      -o /tmp/zcode-source.tar.gz \
- && tar -xzf /tmp/zcode-source.tar.gz -C /opt/agentbench \
- && rm /tmp/zcode-source.tar.gz
+# Keep the workspace and adjacent resources: the CLI bundles external runtime assets.
+COPY --from=zcode-build /opt/zcode /opt/zcode
+COPY --from=zcode-build /usr/local/bin/node /opt/zcode-node/bin/node
+RUN sed -i '1{/^#!/d;}' /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
+ && sed -i '1i#!/opt/zcode-node/bin/node' /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
+ && chmod 755 /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
+ && ln -s /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs /usr/local/bin/zcode \
+ && test "$(zcode --version)" = "0.17.1"
 
-RUN export PATH="/opt/agentbench/node-v24.14.0-linux-x64/bin:$PATH" \
- && cd /opt/agentbench/ZCode-a9fe401eede6e6e5e01be9048679c206fe6f02d9 \
- && pnpm install --frozen-lockfile \
- && pnpm --filter @zcode/cli... build \
- && printf '%s\n' '#!/bin/sh' \
-      'exec /opt/agentbench/node-v24.14.0-linux-x64/bin/node /opt/agentbench/ZCode-a9fe401eede6e6e5e01be9048679c206fe6f02d9/apps/zcode-cli/packages/cli/dist/zcode.cjs "$@"' \
-      >/usr/local/bin/zcode-launcher \
- && chmod 755 /usr/local/bin/zcode-launcher \
- && zcode-launcher --version
+RUN ln -s /usr/local/bin/zcode /usr/local/bin/zcode-launcher
 
 WORKDIR /app
 COPY . .
@@ -142,8 +172,8 @@ RUN pip install --no-cache-dir \
       -e . --no-deps --no-build-isolation \
  && /opt/agentbench/jiuwenswarm-venv/bin/python -m pip check
 
-# Keep the default build lightweight; ready and CPU use this target explicitly.
-FROM ci-deps AS ci
+# Ready functional and CPU jobs use the upstream functional runtime.
+FROM function-deps AS ci
 
 WORKDIR /app
 COPY . .

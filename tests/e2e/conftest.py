@@ -11,6 +11,8 @@ import pytest
 
 from tests.helpers.marks import resolve_pytest_marks
 
+from .helpers.case_loader import benchmark_param_variants
+
 _SELECTED_CASE = pytest.StashKey[Path | None]()
 
 
@@ -68,7 +70,14 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
                     agent = case.benchmark_params.get("agent-type", "claude")
                     case_marks = resolve_pytest_marks(case.mark, metafunc.config)
                     params.append(pytest.param(path, case, marks=case_marks, id=f"{case_id}-{agent}"))
+            elif "benchmark_index" in metafunc.fixturenames:
+                for index, benchmark in enumerate(benchmark_param_variants(payload)):
+                    agent = benchmark.get("agent-type", "agent")
+                    profile = benchmark.get("agent-profile", "single")
+                    params.append(pytest.param(path, index, marks=marks, id=f"{case_id}/{agent}/{profile}"))
             else:
+                if isinstance(payload.get("benchmark_params"), list):
+                    raise ValueError("this suite does not support benchmark_params arrays")
                 params.append(pytest.param(path, marks=marks, id=case_id))
         except (OSError, ValueError, TypeError) as exc:
             raise pytest.UsageError(f"{metafunc.definition.nodeid} [{path}]: {exc}") from exc
@@ -76,6 +85,8 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         # Keep benchmarks from the same file together so the module-scoped
         # accuracy server survives between agents and stops before the next group.
         metafunc.parametrize("case_file,benchmark_case", params, scope="module")
+    elif "benchmark_index" in metafunc.fixturenames:
+        metafunc.parametrize("case_file,benchmark_index", params)
     else:
         metafunc.parametrize("case_file", params)
 

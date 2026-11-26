@@ -60,7 +60,7 @@ def test_explicit_benchmark_directory_hands_off_parent_to_benchmark_user(monkeyp
     monkeypatch.setattr(benchmark, "ensure_directory", prepare_parent)
     monkeypatch.setattr(benchmark, "build_benchmark_argv", lambda config, result_dir: [])
     monkeypatch.setattr(benchmark, "_invoke_benchmark", invoke)
-    assert benchmark.run_benchmark(config, result_dir=output, start_server=False) == output
+    assert benchmark.run_benchmark(config, result_dir=output, manage_server=False) == output
     assert output.is_dir()
 
 
@@ -437,8 +437,8 @@ def test_evaluation_override_preserves_cases(monkeypatch, tmp_path, case_path, o
     class BenchmarkIntercepted(Exception):
         pass
 
-    def capture(config, *, start_server, result_dir):
-        assert start_server is False
+    def capture(config, *, manage_server, result_dir):
+        assert manage_server is False
         assert result_dir.parent == tmp_path.parent
         assert result_dir.name.startswith(f"{original_params['agent-type']}-{original_case.scenario.value}-")
         captured.append(config)
@@ -544,7 +544,7 @@ def test_automatic_scoring_checks_overridden_task_count(monkeypatch, tmp_path):
 def test_score_export_preserves_original_evidence_even_when_benchmark_fails(monkeypatch, tmp_path, failed):
     evidence = []
 
-    def benchmark(config, *, result_dir, start_server):
+    def benchmark(config, *, result_dir, manage_server):
         evaluation = result_dir / "evaluations/eval-example/correctness.json"
         evaluation.parent.mkdir(parents=True)
         evaluation.write_text(json.dumps({"counts": {"error": int(failed)}}), encoding="utf-8")

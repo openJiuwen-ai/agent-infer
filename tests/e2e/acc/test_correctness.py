@@ -103,7 +103,7 @@ def test_run_with_correctness(
     print(f"[correctness] agent={agent} scenario={config.scenario.value}", flush=True)
     run_dir = config.result_root / output_dir_name(f"{agent}-{config.scenario.value}")
     try:
-        run_benchmark(config, result_dir=run_dir, start_server=False)
+        run_benchmark(config, result_dir=run_dir, manage_server=False)
     finally:
         evaluations = list((run_dir / "evaluations").glob("*/correctness.json"))
         if len(evaluations) == 1:

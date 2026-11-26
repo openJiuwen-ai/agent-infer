@@ -10,7 +10,7 @@ AgentBench validation is grouped by responsibility and dependency cost:
    and dependency-direction contracts.
 3. **Hermetic benchmark smoke** in `test_benchmark_smoke.py` runs the production
    CLI/config/dataset/workspace/dispatch/proxy-server/trace/finalization path
-   with helpers from `helpers/benchmark_smoke.py`. A test runtime and loopback
+   with helpers from `helpers/mock_benchmark.py`. A test runtime and loopback
    model backend replace external software. The smoke covers single-task
    artifacts plus concurrent task isolation and aggregation; it does not cover
    the production proxy's multiprocessing owner or model quality.

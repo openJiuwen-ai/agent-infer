@@ -18,12 +18,14 @@ steps:
           # Accuracy extends the cached CI dependency stage; do not pull/rebuild
           # the ready image a second time when both labels run in this build.
           - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-nightly-gpu" || true
-          - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose --profile accuracy -f docker/docker-compose.yml build --build-arg PIP_INDEX_URL agentinfer-accuracy
+          - COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose --profile accuracy -f docker/docker-compose.yml build agentinfer-accuracy
           - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-accuracy-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-nightly-gpu"
 
       - label: "accuracy: baseline"
         key: nightly-accuracy-baseline
         depends_on: nightly-accuracy-image
+        secrets:
+          - HF_TOKEN
         mirror_hardwares: l20_2
         env:
           PYTEST_ADDOPTS: >-
@@ -38,6 +40,7 @@ steps:
               skip-pull: true
               require-prebuild: true
               environment:
+                - HF_TOKEN
                 - HOME=/tmp/ci-home
                 - PYTEST_ADDOPTS
         concurrency: 1
@@ -53,6 +56,8 @@ steps:
       - label: "accuracy: AgentInfer"
         key: nightly-accuracy-agentinfer
         depends_on: nightly-accuracy-image
+        secrets:
+          - HF_TOKEN
         mirror_hardwares: l20_2
         env:
           PYTEST_ADDOPTS: >-
@@ -67,6 +72,7 @@ steps:
               skip-pull: true
               require-prebuild: true
               environment:
+                - HF_TOKEN
                 - HOME=/tmp/ci-home
                 - PYTEST_ADDOPTS
         concurrency: 1

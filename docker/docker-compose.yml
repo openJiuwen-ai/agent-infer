@@ -10,10 +10,14 @@ x-nvidia-driver-bind: &nvidia-driver-bind
     create_host_path: false
 
 x-ci-base: &ci-base
-  build: &ci-build
+  build:
     context: ..
     dockerfile: docker/Dockerfile
     target: ci
+    # Share host source settings with explicit and plugin-triggered builds.
+    args:
+      - PIP_INDEX_URL
+      - ZCODE_REPOSITORY
   # Runs as root, then ci-entrypoint.sh switches to the UID that owns the
   # checkout (the working directory). Do not set `user:` here.
   entrypoint: ["/usr/local/bin/ci-entrypoint.sh"]
@@ -39,34 +43,19 @@ x-ci-base: &ci-base
     PYTEST_ADDOPTS: -o cache_dir=/tmp/pytest-cache
 
 services:
+  # GPU jobs share this service. Jiuwen runs bubblewrap inside the CI container.
+  # Direct GPU devices and driver libraries keep the NVIDIA runtime from
+  # adding /proc submounts that block a new procfs inside the task sandbox.
   agentinfer-ci:
     <<: *ci-base
     image: agentinfer-ci:${BUILDKITE_BUILD_ID:-local}-gpu
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
-  # Share the build and checkout settings without inheriting GPU reservations.
-  agentinfer-cpu:
-    <<: *ci-base
-    image: agentinfer-ci:${BUILDKITE_BUILD_ID:-local}-cpu
-
-  # Accuracy runs pytest as root; plan-subagent benchmarks use the requested user.
-  # Accuracy services expose Docker and permit the agent bubblewrap sandboxes.
-  agentinfer-accuracy: &accuracy-base
-    <<: *ci-base
-    build:
-      <<: *ci-build
-      target: accuracy
-    image: agentinfer-ci:${BUILDKITE_BUILD_ID:-local}-nightly-gpu
-    profiles: [accuracy]
-    # Avoid NVIDIA runtime /proc submounts inside the nested agent sandbox.
     runtime: runc
     cap_drop: [MKNOD]
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+      - label=disable
+      - systempaths=unconfined
     devices:
       - /dev/nvidia0:/dev/nvidia0:rw
       - /dev/nvidia1:/dev/nvidia1:rw
@@ -75,21 +64,14 @@ services:
       - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools:rw
     environment:
       <<: *ci-environment
-      AGENTINFER_CI_AS_ROOT: "1"
+      # Preserve the single-card Buildkite agent's CUDA device selection.
       CUDA_VISIBLE_DEVICES:
       NVIDIA_VISIBLE_DEVICES: void
       AGENTINFER_CI_NVIDIA_DRIVER_DIR: /opt/agentbench-nvidia-driver
-    security_opt:
-      - seccomp=unconfined
-      - apparmor=unconfined
-      - label=disable
-      # Bubblewrap needs an unmasked /proc to create its nested PID namespace.
-      - systempaths=unconfined
     volumes:
       - *models-bind
       - *checkout-bind
       - *app-bind
-      - /var/run/docker.sock:/var/run/docker.sock
       - <<: *nvidia-driver-bind
         source: ${AGENTINFER_CI_NVIDIA_LIB_DIR:-/usr/lib/x86_64-linux-gnu}/libcuda.so.1
         target: /opt/agentbench-nvidia-driver/libcuda.so
@@ -112,10 +94,26 @@ services:
         source: /usr/bin/nvidia-smi
         target: /usr/bin/nvidia-smi
 
-  # Ready exercises only Jiuwen; reuse its scoring/SDK layers in nightly.
-  agentinfer-accuracy-jiuwen:
-    <<: *accuracy-base
+  agentinfer-cpu:
+    <<: *ci-base
+    image: agentinfer-ci:${BUILDKITE_BUILD_ID:-local}-cpu
+
+  # Accuracy adds the scorer and runs pytest as root.
+  agentinfer-accuracy:
+    extends:
+      service: agentinfer-ci
     build:
-      <<: *ci-build
+      target: accuracy
+    image: agentinfer-ci:${BUILDKITE_BUILD_ID:-local}-nightly-gpu
+    profiles: [accuracy]
+    environment:
+      AGENTINFER_CI_AS_ROOT: "1"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  agentinfer-accuracy-jiuwen:
+    extends:
+      service: agentinfer-accuracy
+    build:
       target: accuracy-jiuwen
     image: agentinfer-ci:${BUILDKITE_BUILD_ID:-local}-ready-accuracy-gpu
