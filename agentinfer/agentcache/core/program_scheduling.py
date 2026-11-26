@@ -15,11 +15,15 @@ from agentinfer.scheduling.domain import ProgramRef
 from agentinfer.scheduling.identity import AgentIdentity
 from agentinfer.scheduling.mori import MoriConfig, build_mori_strategy
 from agentinfer.scheduling.runtime import ProgramScheduler
-from agentinfer.scheduling.transitions import ProgramPlacement, TransitionRequest
+from agentinfer.scheduling.transitions import ProgramPlacement, TransitionKind, TransitionRequest
 
 logger = logging.getLogger(__name__)
 
 ATTEMPT_ARG = "agentinfer_mori_attempt"
+
+
+class InvalidMoriAdmission(ValueError):
+    """This native ADD arrived without a matching dispatch permit."""
 
 
 @dataclass(frozen=True)
@@ -68,6 +72,7 @@ class ProgramSchedulingBridge:
         self._pending: dict[str, _Admission] = {}
         self._ready: dict[str, tuple[ProgramRef, int]] = {}
         self._operations: list[ProgramOperation] = []
+        self._inactive: set[ProgramRef] = set()
         self._admitted: dict[str, None] = {}
         self.observation = cache.observe_backend()
         self._backend = self._backend_pool()
@@ -129,15 +134,17 @@ class ProgramSchedulingBridge:
         self._flush_and_publish()
         return reply
 
-    def attach(self, attempt: str) -> bool:
-        """Consume the one-shot native dispatch permit."""
-        admission = self._ready.pop(attempt, None)
-        if admission is None:
-            return False
+    def attach(self, attempt: str, program_id: str | None = None) -> ProgramRef | None:
+        """Consume a dispatch permit and retain its exact owner across release and reuse."""
+        admission = self._ready.get(attempt)
+        if admission is None or (program_id is not None and admission[0].program_id != program_id):
+            return None
         ref, remaining = admission
         if remaining > 1:
             self._ready[attempt] = (ref, remaining - 1)
-        return True
+        else:
+            del self._ready[attempt]
+        return ref
 
     def progress(self, attempt: str, delta: int) -> None:
         if delta <= 0:
@@ -188,8 +195,10 @@ class ProgramSchedulingBridge:
         if any(op.program == ref for op in self._operations) and self._flush_operations() is None:
             return False
         factors = self.runtime.strategy_factors.global_factors
-        if (ref in factors.active or ref in factors.warm) and not self._send_operations((ProgramOperation(ref, None),)):
-            return False
+        if ref in factors.active or ref in factors.warm or ref in self._inactive:
+            if not self._send_operations((ProgramOperation(ref, None),)):
+                return False
+            self._inactive.discard(ref)
 
         if not self.runtime.release_program(ref):
             return False
@@ -204,6 +213,14 @@ class ProgramSchedulingBridge:
     def _on_transition(self, transition: TransitionRequest) -> None:
         if transition.placement is not None:
             self._operations.append(ProgramOperation(transition.program, transition.placement))
+            if transition.placement is ProgramPlacement.INACTIVE:
+                self._inactive.add(transition.program)
+            else:
+                self._inactive.discard(transition.program)
+        elif transition.kind is TransitionKind.RELEASE and transition.program in self._inactive:
+            # Cancellation of the last pending attempt can retire an inactive Program.
+            self._inactive.remove(transition.program)
+            self._operations.append(ProgramOperation(transition.program, None))
 
     def _flush_and_publish(self) -> int | None:
         applied = self._flush_operations()

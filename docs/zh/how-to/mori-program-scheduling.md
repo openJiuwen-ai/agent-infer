@@ -1,7 +1,32 @@
 # MORI Program 调度
 
 `vllm serve MODEL --agentinfer --agentinfer-strategy mori` 选择 MORI。省略策略选项时使用 Progress-TTL。
-两个策略共用 AgentCache SchedulerBridge。当前 MORI 面向单 EngineCore、单 DP rank。
+MORI 的 ProgramSchedulingBridge 在单个 EngineCore 内负责 Program 准入。
+MoriScheduler 和 MoriAsyncScheduler 共用请求选批逻辑，由请求 KV manager 的 HiRadix 记录 HBM/RAM 副本。
+公开服务通过一个端口接收 Chat 和 Program 释放。
+
+在运行 vLLM 的环境中用 `python -m pip install -e .` 安装此检出。已验证 vLLM 0.31.0。启动时检查实际 ABI。
+当前支持单 DP rank、一个 dense full-attention KV 组、FCFS、哈希和分配页相同、非推测解码。
+以下示例给 Host KV 分配 1 GiB，实际可按模型和可用 RAM 调整。
+
+```bash
+vllm serve "$MODEL" --agentinfer --agentinfer-strategy mori \
+  --kv-transfer-config '{
+    "kv_connector": "MoriCPUOffloadConnector",
+    "kv_role": "kv_both",
+    "kv_connector_extra_config": {"cpu_bytes_to_use": 1073741824, "kv_offload_backend": "cpu", "lazy_offload": false}
+  }'
+```
+
+客户端在 Chat 请求体中提供 `program_id`，结束时向同一地址的 `/programs/release` 提交 `{"program_id":"…"}`。
+启用 API key 时，Chat、释放和查询请求均须携带 vLLM 的 `Authorization: Bearer …`。
+同 ID 在释放成功后重用会创建新代次。
+`GET /programs` 查询 Program 状态，`GET /agentinfer/mori/metrics` 查询容量，
+`GET /agentinfer/mori/cache` 查询每个 Program 代次的页归属。
+默认异步调度，也可显式使用 `--no-async-scheduling` 选择同步调度。
+需要对齐 SGLang 文本模板时设置 `agentcache.mori.sglang_text_chat`；
+`sglang_unseeded_chat` 同时启用文本归一化、忽略请求 seed 和联合采样。
+服务自动启动 Core 调度时钟。可以通过 `additional_config.agentcache.mori.interval_seconds` 设置间隔，默认 5 秒。
 
 ## 和 ThunderAgent 的对应关系
 
@@ -28,7 +53,7 @@ Core 空闲等待输入时可以被唤醒。Core 正等待 GPU batch 的 future 
 `ProgramCacheAdapter` 提供本地健康及有效 HBM／DRAM，并提交有序的 Program 放置与释放。
 它对应外置 ThunderAgent 的后端容量读取和 KV 操作接口。
 策略和 Bridge 测试注入独立的记录型 adapter，生产服务由所选 KV 后端提供实现。
-选择 MORI 时须配置该能力。
+MORI 引擎在构造 HiRadix 后装配 adapter。用 `--kv-transfer-config` 指定 CPU 卸载和 `kv_role=kv_both`，有效容量取两级池扣除保留页后可容纳的 token 数。
 
 对暂时失败的 placement，Bridge 保留有序操作并重试，相关准入等待确认。
 adapter 应允许按同一 Program 代次重放操作。

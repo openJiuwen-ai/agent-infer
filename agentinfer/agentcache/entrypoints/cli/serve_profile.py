@@ -15,13 +15,12 @@ import argparse
 import json
 import os
 import sys
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 
 ASYNC_SCHEDULER_CLS = "agentinfer.agentcache.core.scheduler.AgentCacheAsyncSchedulerBridge"
 SYNC_SCHEDULER_CLS = "agentinfer.agentcache.core.scheduler.AgentCacheSyncSchedulerBridge"
 IDENTITY_MIDDLEWARE = "agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware"
-MORI_MIDDLEWARE = "agentinfer.agentcache.core.mori_api.MoriSchedulingMiddleware"
 LIFECYCLE_MIDDLEWARE = "agentinfer.agentcache.core.api_adapter.AgentCacheLifecycleMiddleware"
 
 LIFECYCLE_SOCKET_ENV = "AGENTCACHE_VLLM_LIFECYCLE_SOCKET"
@@ -168,6 +167,12 @@ def inject_profile(
     :class:`AgentInferServeError` on conflicting explicit options.
     """
 
+    if SCHEDULER_CLS_DEST in explicit_dests:
+        raise AgentInferServeError(
+            "--agentinfer cannot be combined with --scheduler-cls; remove --scheduler-cls or use the "
+            "explicit long-form command documented in docs/en/how-to/integrate-vllm.md."
+        )
+
     resolved = profile if profile is not None else DEFAULT_SERVE_PROFILE
     injected: dict[str, Any] = {}
     current = _coerce_additional_config(getattr(namespace, ADDITIONAL_CONFIG_DEST, None))
@@ -179,19 +184,11 @@ def inject_profile(
             raise AgentInferServeError("Conflicting AgentInfer strategy settings")
         selected = selected or configured
     if selected == "mori":
-        resolved = replace(
-            resolved,
-            middlewares=(MORI_MIDDLEWARE,),
-            agentcache_config={**resolved.agentcache_config, "strategy": "mori"},
-        )
+        from agentinfer.agentcache.entrypoints.cli.mori_serve import configure_embedded
+
+        resolved = configure_embedded(namespace)
     elif selected not in (None, "progress_ttl"):
         raise AgentInferServeError(f"Unknown AgentInfer scheduling strategy {selected!r}")
-
-    if SCHEDULER_CLS_DEST in explicit_dests:
-        raise AgentInferServeError(
-            "--agentinfer cannot be combined with --scheduler-cls; remove --scheduler-cls or use the "
-            "explicit long-form command documented in docs/en/how-to/integrate-vllm.md."
-        )
 
     if ASYNC_SCHEDULING_DEST in explicit_dests:
         async_enabled = bool(getattr(namespace, ASYNC_SCHEDULING_DEST, None))
@@ -338,6 +335,13 @@ def run_agentinfer_serve(serve_argv: list[str]) -> int:
         raise AgentInferServeError("--agentinfer is required for the AgentInfer serve takeover")
 
     injected = inject_profile(namespace, explicit_dests)
+    if (namespace.additional_config.get("agentcache") or {}).get("strategy") == "mori":
+        from agentinfer.agentcache.entrypoints.cli.mori_serve import embedded_runtime
+
+        _print_transparency(injected, False, "", False)
+        with embedded_runtime():
+            _dispatch_serve(namespace)
+        return 0
     socket_defaulted, socket_value, socket_from_config = _apply_lifecycle_socket_env(namespace)
     _print_transparency(injected, socket_defaulted, socket_value, socket_from_config)
     _dispatch_serve(namespace)

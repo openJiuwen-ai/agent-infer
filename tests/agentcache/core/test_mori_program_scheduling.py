@@ -213,18 +213,6 @@ def test_failed_release_is_retryable_and_does_not_stop_other_programs():
     assert cache.operations == [("A", None)]
 
 
-def test_config_selects_mori_on_the_existing_bridge():
-    from argparse import Namespace
-
-    from agentinfer.agentcache.entrypoints.cli.serve_profile import ASYNC_SCHEDULER_CLS, MORI_MIDDLEWARE, inject_profile
-
-    args = Namespace(agentinfer_strategy="mori", additional_config=None, async_scheduling=True, middleware=[])
-    inject_profile(args, set())
-    assert args.scheduler_cls == ASYNC_SCHEDULER_CLS
-    assert args.middleware == [MORI_MIDDLEWARE]
-    assert args.additional_config["agentcache"]["strategy"] == "mori"
-
-
 def test_shared_vllm_hook_consumes_the_pre_admission_permit():
     from vllm.v1.engine.core import EngineCore
 

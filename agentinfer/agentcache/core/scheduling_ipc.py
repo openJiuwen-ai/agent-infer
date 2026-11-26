@@ -72,4 +72,21 @@ def install_core_utility() -> None:
             raise RuntimeError("EngineCore has no Program scheduling host")
         return handle_event(bridge, name, args)
 
+    def diagnostics(self, action):
+        scheduler = self.scheduler
+        bridge = scheduler._agentcache.program_scheduling
+        if action == "programs":
+            return {view.ref.program_id: view.state.value for view in bridge.runtime.registry.views()}
+        if action == "metrics":
+            obs = bridge.observation
+            cache_config = {
+                "total_tokens_capacity": obs.hbm_capacity_tokens,
+                "cpu_total_tokens_capacity": obs.dram_capacity_tokens,
+            }
+            return {"backends": {bridge.backend_id: {"cache_config": cache_config}}}
+        if action == "cache":
+            return scheduler.program_cache_adapter.snapshot()
+        raise ValueError(f"Unknown MORI diagnostics request {action!r}")
+
     setattr(EngineCore, UTILITY_METHOD, handle)
+    EngineCore.agentinfer_mori_diagnostics = diagnostics

@@ -11,15 +11,20 @@ import math
 from functools import partial
 from uuid import uuid4
 
+from pydantic import TypeAdapter
 from pydantic_core import to_json
-from starlette.requests import Request
+from starlette._utils import get_route_path
+from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 
 from agentinfer.agentcache.core.api_adapter import _replay_receive, _scope_with_content_length
 from agentinfer.agentcache.core.program_scheduling import ATTEMPT_ARG
 from agentinfer.agentcache.core.scheduling_ipc import UTILITY_METHOD, Event, chat_facts
+from agentinfer.agentcache.mori.programs import PROGRAM_ARG
 
 logger = logging.getLogger(__name__)
+_CHAT_CHOICES = TypeAdapter(int | None)
+_CHAT_STREAM = TypeAdapter(bool | None)
 
 
 def program_id(payload: dict) -> str:
@@ -66,7 +71,7 @@ class MoriResponseObserver:
             if self.streaming:
                 self._read_frames()
             if not message.get("more_body"):
-                self.finish()
+                await self.finish()
         await self.send(message)
 
     def _read_frames(self) -> None:
@@ -84,7 +89,7 @@ class MoriResponseObserver:
                 if self._frames == 20:
                     self.emit(Event.PROGRESS, self.attempt, self._frames)
                     self._frames = 0
-                if self._usage[0] is None:
+                if self._usage[0] is None and b'"usage"' in data:
                     self._read_usage(data)
 
     def _read_usage(self, data) -> None:
@@ -96,13 +101,16 @@ class MoriResponseObserver:
         if usage[0] is not None:
             self._usage = usage
 
-    def finish(self) -> None:
+    async def finish(self) -> None:
         if self._finished:
             return
         self._finished = True
         if not self.streaming:
             self._read_usage(self._buffer)
-        self.emit(Event.FINISH, self.attempt, *self._usage)
+        delivery = self.emit(Event.FINISH, self.attempt, *self._usage)
+        # Match ThunderAgent's usage callback before closing a response, so the
+        # next request from this Program observes its completed predecessor.
+        await asyncio.shield(asyncio.gather(delivery, return_exceptions=True))
 
 
 class MoriSchedulingMiddleware:
@@ -128,13 +136,13 @@ class MoriSchedulingMiddleware:
         while (await receive())["type"] != "http.disconnect":
             pass
 
-    async def _await_admission(self, reply: asyncio.Task, receive) -> bool:
+    async def _await_admission(self, reply: asyncio.Task, receive) -> bool | None:
         disconnected = asyncio.create_task(self._wait_for_disconnect(receive))
         try:
             done, _ = await asyncio.wait((reply, disconnected), return_when=asyncio.FIRST_COMPLETED)
             if disconnected in done:
                 disconnected.result()
-                return False
+                return None
             return reply.result()
         finally:
             disconnected.cancel()
@@ -151,7 +159,7 @@ class MoriSchedulingMiddleware:
         if scope["type"] != "http" or scope["method"] != "POST":
             await self.app(scope, receive, send)
             return
-        path = scope["path"]
+        path = get_route_path(scope)
         if path not in ("/v1/chat/completions", "/programs/release"):
             await self.app(scope, receive, send)
             return
@@ -159,7 +167,9 @@ class MoriSchedulingMiddleware:
         request = Request(scope, receive)
         try:
             payload = await request.json()
-        except ValueError:
+        except ClientDisconnect:
+            return
+        except (ValueError, RecursionError):
             payload = None
         if not isinstance(payload, dict):
             await JSONResponse({"detail": "Expected a JSON object"}, status_code=400)(scope, receive, send)
@@ -176,22 +186,36 @@ class MoriSchedulingMiddleware:
             await JSONResponse({"program_id": pid, "released": released})(scope, receive, send)
             return
 
-        attempt = uuid4().hex
-        chars, prefix = chat_facts(payload)
-        observer = MoriResponseObserver(send, emit, attempt, bool(payload.get("stream")))
-        xargs = payload.get("vllm_xargs") or {}
-        if not isinstance(xargs, dict):
+        xargs = payload.get("vllm_xargs")
+        if xargs is not None and not isinstance(xargs, dict):
             await JSONResponse({"detail": "vllm_xargs must be a JSON object"}, status_code=400)(scope, receive, send)
             return
-        count = payload.get("n", 1)
-        native_count = count if isinstance(count, int) and count > 0 else 1
         try:
-            if not await self._await_admission(emit(Event.BEGIN, attempt, pid, chars, prefix, native_count), receive):
+            native_count = max(_CHAT_CHOICES.validate_python(payload.get("n")) or 1, 1)
+            streaming = bool(_CHAT_STREAM.validate_python(payload.get("stream")))
+            chars, prefix = chat_facts(payload)
+        except (TypeError, ValueError, RecursionError):
+            await JSONResponse({"detail": "Invalid MORI Chat request"}, status_code=400)(scope, receive, send)
+            return
+
+        attempt = uuid4().hex
+        observer = MoriResponseObserver(send, emit, attempt, streaming)
+        try:
+            admitted = await self._await_admission(
+                emit(Event.BEGIN, attempt, pid, chars, prefix, native_count), receive
+            )
+            if admitted is None:
+                return
+            if not admitted:
                 await Response(status_code=409)(scope, receive, send)
                 return
-            payload.pop("program_id", None)
-            payload["vllm_xargs"] = {**xargs, ATTEMPT_ARG: attempt, "program_id": pid}
-            if observer.streaming:
+            for key in ("program_id", PROGRAM_ARG, ATTEMPT_ARG):
+                payload.pop(key, None)
+            native_xargs = dict(xargs or {})
+            native_xargs.pop("program_id", None)
+            native_xargs.update({PROGRAM_ARG: pid, ATTEMPT_ARG: attempt})
+            payload["vllm_xargs"] = native_xargs
+            if streaming:
                 options = payload.get("stream_options")
                 if options is None:
                     payload["stream_options"] = {"include_usage": True}
@@ -200,6 +224,6 @@ class MoriSchedulingMiddleware:
             await self._forward_chat(request, payload, receive, observer)
         finally:
             if observer.started:
-                observer.finish()
+                await observer.finish()
             else:
-                await emit(Event.CANCEL, attempt)
+                await asyncio.shield(emit(Event.CANCEL, attempt))

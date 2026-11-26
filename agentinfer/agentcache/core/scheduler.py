@@ -151,12 +151,22 @@ class _VllmAdmissionHooks:
     def add_request(self, owner: Scheduler, request: Request, native_add: Callable[[Request], None]) -> None:
         """Retain agentic work or pass compatibility traffic directly to vLLM."""
         if self.program_scheduling is not None:
-            from agentinfer.agentcache.core.program_scheduling import ATTEMPT_ARG
+            from agentinfer.agentcache.core.program_scheduling import ATTEMPT_ARG, InvalidMoriAdmission
+            from agentinfer.agentcache.mori.programs import PROGRAM_ARG
 
             params = request.sampling_params
-            attempt = (params.extra_args or {}).get(ATTEMPT_ARG) if params is not None else None
-            if attempt is not None and not self.program_scheduling.attach(attempt):
-                raise ValueError("Native request has no outstanding MORI admission")
+            extra = (params.extra_args or {}) if params is not None else {}
+            attempt = extra.get(ATTEMPT_ARG)
+            request._mori_program_ref = None
+            if attempt is not None:
+                ref = (
+                    self.program_scheduling.attach(attempt, extra.get(PROGRAM_ARG))
+                    if isinstance(attempt, str)
+                    else None
+                )
+                if ref is None:
+                    raise InvalidMoriAdmission("Native request has no outstanding MORI admission")
+                request._mori_program_ref = ref
             native_add(request)
             return
         self._drain_lifecycle_signals()

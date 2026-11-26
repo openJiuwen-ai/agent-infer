@@ -10,7 +10,7 @@ from collections.abc import Callable
 from functools import wraps
 from threading import Timer
 
-from agentinfer.agentcache.core.program_scheduling import ProgramSchedulingBridge
+from agentinfer.agentcache.core.program_scheduling import InvalidMoriAdmission, ProgramSchedulingBridge
 
 logger = logging.getLogger(__name__)
 _DEADLINE = object()
@@ -70,7 +70,13 @@ def install_mori_timer() -> None:
             if timer is not None and self.is_running():
                 timer.on_deadline()
             return None
-        return handle(self, request_type, payload)
+        try:
+            return handle(self, request_type, payload)
+        except InvalidMoriAdmission:
+            if request_type != EngineCoreRequestType.ADD:
+                raise
+            request, _ = payload
+            self._send_abort_outputs_to_client([request.request_id], request.client_index)
 
     @wraps(run_busy_loop)
     def run_with_timer(self, *args, **kwargs):

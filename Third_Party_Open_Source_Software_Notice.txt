@@ -1703,3 +1703,10 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 IN THE SOFTWARE.
+
+
+Software: SGLang (MORI request scheduling and hierarchical prefix cache)
+Source: https://github.com/cblmemo/mori/tree/b4f6a1d50fe50a09b522f85333fa432871533690/sglang
+License: Apache License Version 2.0 (full text above)
+Copyright 2023-2024 SGLang Team
+AgentInfer adapts the scheduling and cache management for the vLLM runtime.
