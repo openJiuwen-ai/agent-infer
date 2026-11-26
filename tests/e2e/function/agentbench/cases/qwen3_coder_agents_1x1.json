@@ -102,7 +102,7 @@
       "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
       "agent-executable": "jiuwenswarm",
       "agent-profile": "team.code.normal",
-      "max-subagents": 3,
+      "max-subagents": 1,
       "max-concurrent-subagents": 1,
       "task-num": 1,
       "max-concurrency": 1,
