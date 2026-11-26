@@ -4,6 +4,7 @@
 """Functional orchestration for benchmark runs and task lifecycles."""
 
 import asyncio
+import os
 import time
 import uuid
 from collections import defaultdict
@@ -72,7 +73,8 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
     async def execute() -> None:
         nonlocal context, lifecycle, preflight_succeeded, vllm_start
         try:
-            report = await check_preflight(config)
+            upstream_api_key = _resolve_backend_api_key(config.backend.api_key_env)
+            report = await check_preflight(config, upstream_api_key=upstream_api_key)
         except Exception as exc:
             captures.append(EvidenceCapture(f"{config.agent.type}_runtime", None, False, str(exc), {}))
             raise
@@ -98,6 +100,7 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
             run_id,
             output_dir,
             config.backend.endpoint,
+            upstream_api_key=upstream_api_key,
         )
         handle = await lifecycle.start()
         await lifecycle.wait_ready(config.request_proxy.startup_timeout_seconds)
@@ -439,11 +442,27 @@ def _trace_capture(path: Path, close_result) -> EvidenceCapture:
     return EvidenceCapture("request_trace", path if path.exists() else None, available, reason, health)
 
 
-async def check_preflight(config: AgentBenchConfig) -> AgentPreflightReport | None:
+def _resolve_backend_api_key(env_name: str | None) -> str | None:
+    if not env_name:
+        return None
+    api_key = os.environ.get(env_name, "").strip()
+    if not api_key:
+        raise RuntimeError(f"Backend API key environment variable {env_name!r} is unset or empty")
+    if not api_key.isascii() or not api_key.isprintable():
+        raise RuntimeError(f"Backend API key environment variable {env_name!r} contains invalid header characters")
+    return api_key
+
+
+async def check_preflight(
+    config: AgentBenchConfig, *, upstream_api_key: str | None = None
+) -> AgentPreflightReport | None:
+    if upstream_api_key is None:
+        upstream_api_key = _resolve_backend_api_key(config.backend.api_key_env)
     report = await check_agent_preflight(config.agent.type, config.agent.executable)
     url = f"{config.backend.base_url.rstrip('/')}/v1/models"
+    headers = {"authorization": f"Bearer {upstream_api_key}"} if upstream_api_key is not None else None
     try:
-        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
+        async with httpx.AsyncClient(timeout=10, trust_env=False, headers=headers) as client:
             response = await client.get(url)
     except httpx.RequestError as exc:
         raise RuntimeError(f"Backend preflight failed: GET {url}, timeout=10s; {type(exc).__name__}: {exc}") from exc

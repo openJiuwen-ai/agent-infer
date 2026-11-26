@@ -70,10 +70,10 @@ RUN python3_target="$(readlink -f /usr/bin/python3)" \
       ln -sfn "$python3_target" /usr/bin/python3; \
     fi
 
-# JiuwenSwarm uses its own Python environment so its dependencies cannot replace vLLM's.
-ARG JIUWENSWARM_VERSION=0.2.4b3
+# WorkSwarm provides the JiuwenSwarm commands in an isolated Python environment.
+ARG JIUWENSWARM_VERSION=0.2.8
 RUN python3 -m venv --system-site-packages /opt/jiuwenswarm \
- && /opt/jiuwenswarm/bin/pip install --no-cache-dir "jiuwenswarm==${JIUWENSWARM_VERSION}" \
+ && /opt/jiuwenswarm/bin/pip install --no-cache-dir "workswarm==${JIUWENSWARM_VERSION}" \
  && for command in jiuwenswarm jiuwenswarm-init jiuwenswarm-start jiuwenbox-server; do \
       test -x "/opt/jiuwenswarm/bin/$command" \
       && ln -s "/opt/jiuwenswarm/bin/$command" "/usr/local/bin/$command" || exit 1; \

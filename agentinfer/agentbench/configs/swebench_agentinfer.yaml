@@ -30,7 +30,7 @@ agent:
   # For JiuwenSwarm (uncomment, comment out the Claude lines above,
   # and set backend.endpoint to /v1/chat/completions):
   # type: jiuwenswarm
-  # profile: code.normal
+  # profile: agent.code.normal          # agent.code.normal | team.code.normal
   # executable: jiuwenswarm
 
   # For DeepSeek Harness (uncomment, comment out the Claude lines above,
