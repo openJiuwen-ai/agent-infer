@@ -90,6 +90,6 @@ def install_mori_timer() -> None:
             timer.close()
             self._agentinfer_mori_timer = None
 
-    run_with_timer._agentinfer_mori = True
+    vars(run_with_timer)["_agentinfer_mori"] = True
     EngineCoreProc._handle_client_request = handle_request
     EngineCoreProc.run_busy_loop = run_with_timer

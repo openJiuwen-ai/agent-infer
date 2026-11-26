@@ -214,8 +214,8 @@ class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
             (ref for ref in state.warm if self._reasoning(ledger, ref)),
             key=lambda ref: ledger.factors.for_program(ref).idleness(now),
         )
-        returning = []
-        new = []
+        returning: list[ProgramRef] = []
+        new: list[ProgramRef] = []
         for ref in state.waiting:
             if self._reasoning(ledger, ref):
                 (new if ledger.factors.for_program(ref).steps <= 1 else returning).append(ref)

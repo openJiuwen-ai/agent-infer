@@ -18,7 +18,7 @@ pytestmark = test_marks(hardware="cpu")
 class RecordingHost:
     def __init__(self, hbm: int, dram: int) -> None:
         self.observation = BackendObservation(True, hbm, dram)
-        self.operations = []
+        self.operations: list[tuple[str, str | None]] = []
 
     def observe_backend(self) -> BackendObservation:
         return self.observation
