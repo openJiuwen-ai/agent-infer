@@ -23,6 +23,8 @@ python -c "import agentinfer, vllm; print(vllm.__version__)"
 
 ## 配置生命周期传输
 
+Anthropic 响应里的工具调用块表示 Program 可以在收到工具结果后继续，即使 vLLM 报告 `end_turn`。
+
 为生命周期观测选择一个唯一的本地 Unix socket。缺少该变量时，生命周期中间件会拒绝启动：
 
 ```bash

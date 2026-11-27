@@ -23,6 +23,8 @@ The command should print `0.31.0` or a platform build of that version, such as `
 
 ## Configure Lifecycle Transport
 
+An Anthropic tool-use block signals that the Program can continue with the tool result, even if vLLM reports `end_turn`.
+
 Choose a unique local Unix socket for lifecycle observations. The lifecycle middleware refuses to start when this
 variable is absent:
 
