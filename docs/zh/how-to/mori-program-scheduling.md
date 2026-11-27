@@ -2,7 +2,8 @@
 
 `vllm serve MODEL --agentinfer --agentinfer-strategy mori` 选择 MORI。省略策略选项时使用 Progress-TTL。
 MORI 的 MoriProgramAdmissionController 在单个 EngineCore 内负责 Program 准入。
-同步与异步 Bridge 分别继承 MoriScheduler 和 MoriAsyncScheduler，处理原生 ADD 上的 Program 准入。引擎选择请求批次，由请求 KV manager 的 HiRadix 记录 HBM/RAM 副本。
+同步与异步 Bridge 分别继承 MoriScheduler 和 MoriAsyncScheduler，处理原生 ADD 上的 Program 准入。
+引擎选择请求批次，由请求 KV manager 的 HiRadix 记录 HBM/RAM 副本。
 公开服务通过一个端口接收 Chat 和 Program 释放。
 
 在运行 vLLM 的环境中用 `python -m pip install -e .` 安装此检出。已验证 vLLM 0.31.0。启动时检查实际 ABI。
@@ -43,6 +44,8 @@ vllm serve "$MODEL" --agentinfer --agentinfer-strategy mori \
 | 周期调度 | Router 自己计时，读取后端容量后执行五个阶段。 | Core 内的 MORI 计时器投递本地唤醒，Core 读取有效容量并执行同一顺序。 |
 
 API 把 Program ID、原始字符数、前缀组、Chat 标识和采样子请求数随原生 ADD 交给 Bridge。
+首个 ADD 还记录 API 在本进程内测得的准备时长。策略用它修正 Program 的活跃与空闲时长，
+排队 Program 从实际唤醒开始计 reasoning，各原生队列继续使用自己的时间戳。
 同一 Chat 的所有采样子请求共用一个 Program 代次。排队期间请求保留在 Bridge，
 缓存确认放置后才进入引擎的 waiting 队列。并发 Chat 的模板处理时间不同，
 所以到达 Core 的顺序可能与到达 HTTP 的顺序不同。生成进度、响应结束和显式释放通过 vLLM utility IPC 上报。

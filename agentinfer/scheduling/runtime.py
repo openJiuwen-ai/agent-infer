@@ -167,6 +167,7 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
         *,
         context_chars: int | None = None,
         prefix_group: str | None = None,
+        frontend_preparation_ns: int | None = None,
     ) -> bool:
         """Bind, retain, and run immediate Program-level admission."""
         if request_id in self._request_bindings:
@@ -228,6 +229,11 @@ class ProgramScheduler(Generic[RetainedRequestT, StrategyGlobalFactorsT, Strateg
                         ("context_chars", context_chars),
                         ("prefix_group", prefix_group),
                         ("prompt_tokens", prompt_tokens),
+                    )
+                    + (
+                        (("frontend_preparation_ns", frontend_preparation_ns),)
+                        if frontend_preparation_ns is not None
+                        else ()
                     ),
                 )
             )

@@ -22,6 +22,7 @@ from agentinfer.agentcache.mori.ipc import (
     CHILD_COUNT_ARG,
     CONTEXT_CHARS_ARG,
     PREFIX_ARG,
+    PREPARATION_NS_ARG,
     PROGRAM_ARG,
     RESERVED_ARGS,
     UTILITY_METHOD,
@@ -120,7 +121,10 @@ def test_direct_chat_admits_original_facts_and_shares_the_native_json(monkeypatc
             attempt = data["extra_args"][ATTEMPT_ARG]
             assert attempt not in ("forged", "forged-at-top-level")
             chars, prefix = chat_facts(payload)
+            preparation_ns = data["extra_args"][PREPARATION_NS_ARG]
+            assert isinstance(preparation_ns, int) and preparation_ns >= 0
             assert data["extra_args"] == {
+                PREPARATION_NS_ARG: preparation_ns,
                 PROGRAM_ARG: "official",
                 ATTEMPT_ARG: attempt,
                 CONTEXT_CHARS_ARG: chars,

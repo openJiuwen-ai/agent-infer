@@ -65,6 +65,9 @@ from `extra_body`. Null and blank values fall through to the next source. Chat u
 The API derives the Program ID, character count and prefix group from the original Chat JSON.
 After templating and tokenization, the Bridge handles the first native ADD for that Chat as one
 Program arrival. All sampling children share the admission decision and Program generation.
+The first ADD also carries the time the API spent preparing this Chat. MORI accounts
+for that interval when estimating Program idleness. A queued Program starts its
+reasoning interval on promotion. The vLLM queues keep their own timestamps.
 Waiting children enter the engine scheduler after the cache acknowledges their placement.
 Concurrent Chats can arrive at the Bridge in a different order from their HTTP arrival.
 

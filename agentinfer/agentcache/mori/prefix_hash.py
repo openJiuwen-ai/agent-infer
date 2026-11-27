@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from typing import TYPE_CHECKING
 
-from agentinfer.agentcache.mori.programs import PROGRAM_ARG
+from agentinfer.agentcache.mori.ipc import PROGRAM_ARG
 
 if TYPE_CHECKING:
     from collections.abc import Callable

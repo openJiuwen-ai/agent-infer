@@ -10,7 +10,14 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
-from agentinfer.agentcache.mori.ipc import ATTEMPT_ARG, CHILD_COUNT_ARG, CONTEXT_CHARS_ARG, PREFIX_ARG, PROGRAM_ARG
+from agentinfer.agentcache.mori.ipc import (
+    ATTEMPT_ARG,
+    CHILD_COUNT_ARG,
+    CONTEXT_CHARS_ARG,
+    PREFIX_ARG,
+    PREPARATION_NS_ARG,
+    PROGRAM_ARG,
+)
 from agentinfer.scheduling.backend import BackendInfo, BackendPoolInfo, DpRankInfo
 from agentinfer.scheduling.domain import ProgramRef
 from agentinfer.scheduling.identity import AgentIdentity
@@ -64,7 +71,8 @@ class _Admission:
     program: ProgramRef
     context_chars: int
     prefix_group: str
-    child_count: int
+    child_count: int | None
+    preparation_ns: int | None
     waiting: dict[str, tuple[Request, Callable[[Request], None]]]
     seen: set[str] = field(default_factory=set)
     admitted: bool = False
@@ -130,6 +138,7 @@ class MoriProgramAdmissionController:
         context_chars = extra.get(CONTEXT_CHARS_ARG)
         prefix_group = extra.get(PREFIX_ARG)
         child_count = extra.get(CHILD_COUNT_ARG)
+        preparation_ns = extra.get(PREPARATION_NS_ARG)
         if (
             not isinstance(attempt, str)
             or not attempt
@@ -137,10 +146,10 @@ class MoriProgramAdmissionController:
             or not program_id.strip()
             or type(context_chars) is not int
             or context_chars < 0
+            or (preparation_ns is not None and (type(preparation_ns) is not int or not 0 <= preparation_ns < 1 << 63))
             or not isinstance(prefix_group, str)
             or not prefix_group
-            or type(child_count) is not int
-            or child_count < 1
+            or (child_count is not None and (type(child_count) is not int or child_count < 1))
         ):
             raise InvalidMoriAdmission("Invalid MORI Chat admission metadata")
 
@@ -155,10 +164,13 @@ class MoriProgramAdmissionController:
                 waiting,
                 context_chars=context_chars,
                 prefix_group=prefix_group,
+                frontend_preparation_ns=preparation_ns,
             )
             ref = self.runtime.registry.current_ref(program_id)
             assert ref is not None
-            group = self._attempts[attempt] = _Admission(ref, context_chars, prefix_group, child_count, waiting)
+            group = self._attempts[attempt] = _Admission(
+                ref, context_chars, prefix_group, child_count, preparation_ns, waiting
+            )
             if admitted:
                 self._admitted[attempt] = None
         elif (
@@ -166,8 +178,9 @@ class MoriProgramAdmissionController:
             or group.context_chars != context_chars
             or group.prefix_group != prefix_group
             or group.child_count != child_count
+            or group.preparation_ns != preparation_ns
             or request.request_id in group.seen
-            or len(group.seen) >= child_count
+            or (child_count is not None and len(group.seen) >= child_count)
         ):
             raise InvalidMoriAdmission("Inconsistent or duplicate MORI sampling child")
 

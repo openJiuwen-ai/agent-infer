@@ -6,6 +6,7 @@ from collections.abc import Callable
 from enum import Enum
 from itertools import count
 
+from agentinfer.agentcache.mori.ipc import PROGRAM_ARG as PROGRAM_ARG
 from agentinfer.scheduling.domain import ProgramRef
 
 
@@ -16,7 +17,6 @@ class CacheClass(str, Enum):
     SHARED = "shared"
 
 
-PROGRAM_ARG = "mori_program_id"
 PROGRAM_TYPES = {"interactive": CacheClass.BUSY, "async": CacheClass.IDLE, "inactive": CacheClass.INACTIVE}
 
 

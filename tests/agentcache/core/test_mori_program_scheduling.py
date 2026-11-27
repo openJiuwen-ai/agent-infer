@@ -16,6 +16,7 @@ from agentinfer.agentcache.mori.ipc import (
     CHILD_COUNT_ARG,
     CONTEXT_CHARS_ARG,
     PREFIX_ARG,
+    PREPARATION_NS_ARG,
     PROGRAM_ARG,
     chat_facts,
 )
@@ -38,7 +39,7 @@ class RecordingHost:
         self.operations.extend((op.program.program_id, op.placement and op.placement.value) for op in operations)
 
 
-def native(rid, attempt, program_id, context_chars, n=1):
+def native(rid, attempt, program_id, context_chars, n=1, preparation_ns=0):
     from vllm.sampling_params import SamplingParams
     from vllm.v1.request import Request
 
@@ -49,12 +50,14 @@ def native(rid, attempt, program_id, context_chars, n=1):
         PREFIX_ARG: "_empty_",
         CHILD_COUNT_ARG: n,
     }
+    if preparation_ns:
+        fields[PREPARATION_NS_ARG] = preparation_ns
     return Request(rid, [1, 2, 3], SamplingParams(extra_args=fields), None)
 
 
-def submit(controller, attempt, program_id, chars, n=1):
+def submit(controller, attempt, program_id, chars, n=1, preparation_ns=0):
     dispatched = []
-    controller.add_request(native(attempt, attempt, program_id, chars, n), dispatched.append)
+    controller.add_request(native(attempt, attempt, program_id, chars, n, preparation_ns), dispatched.append)
     return dispatched
 
 
@@ -71,6 +74,91 @@ def test_admission_uses_pretemplate_chars_and_exact_effective_capacity():
 
     assert submit(admitted, "a", "program", 115)
     assert not submit(waiting, "b", "program", 158)
+
+
+@pytest.mark.parametrize("preparation_ns, demotes", [(0, True), (5_000_000, False)])
+def test_ingress_credit_preserves_swe_current_cycle_displacement(clock, preparation_ns, demotes):
+    # At SWE tick 3197, ACTING lasted 1.25764 s after a 1.2616 s REASONING period.
+    host = RecordingHost(300, 1000)
+    controller = MoriProgramAdmissionController(host, MoriConfig())
+    clock.now = 20.005
+    assert submit(controller, "first", "A", 500, preparation_ns=preparation_ns)
+    clock.now = 21.2616
+    controller.finish("first", 150, 100, 0)
+    clock.now = 22
+    assert not submit(controller, "waiting", "B", 500)
+    clock.now = 22.51924
+    controller.tick()
+    assert (("A", "async") in host.operations) is demotes
+
+
+def test_ingress_credit_stops_acting_but_parked_reasoning_starts_at_wake(clock):
+    host = RecordingHost(1200, 1000)
+    controller = MoriProgramAdmissionController(host, MoriConfig())
+    clock.now = 10
+    assert submit(controller, "first", "A", 500, preparation_ns=2_000_000_000)
+    factors = controller.runtime.strategy_factors.for_program(controller.runtime.registry.current_ref("A"))
+    assert factors.reasoning_since == 8
+    clock.now = 11
+    controller.finish("first", 100, 100, 0)
+    host.observation = BackendObservation(True, 0, 1000)
+    controller.observe_backend()
+    controller.tick()
+    clock.now = 15
+    parked = submit(controller, "next", "A", 500, preparation_ns=1_000_000_000)
+    assert not parked and factors.acting_history[-1] == 3 and factors.reasoning_since is None
+    assert controller.runtime.request_pool.get("next").arrived_at_monotonic_s == 15
+    clock.now = 19
+    host.observation = BackendObservation(True, 1200, 1000)
+    controller.observe_backend()
+    controller.tick()
+    assert parked and factors.reasoning_since == 19
+    clock.now = 20
+    controller.finish("next", 150, 100, 0)
+    assert list(factors.reasoning_history) == [3, 1]
+
+
+def test_overlapping_and_stale_preparation_preserve_the_program_clock(clock):
+    controller = MoriProgramAdmissionController(RecordingHost(1200, 1000), MoriConfig())
+    clock.now = 10
+    submit(controller, "old", "A", 100, preparation_ns=500_000_000)
+    old = controller.runtime.strategy_factors.for_program(controller.runtime.registry.current_ref("A"))
+    clock.now = 11
+    submit(controller, "parallel", "A", 100, preparation_ns=3_000_000_000)
+    assert old.reasoning_since == 9.5
+    clock.now = 12
+    controller.finish("parallel", 100, 100, 0)
+    controller.finish("old", 100, 100, 0)
+    # This Chat was already being tokenized before the previous response finished.
+    clock.now = 13
+    submit(controller, "stale", "A", 100, preparation_ns=2_000_000_000)
+    assert old.acting_history[-1] == 1 and old.reasoning_since == 13
+    clock.now = 14
+    assert controller.release("A")
+    clock.now = 15
+    submit(controller, "reused", "A", 100, preparation_ns=2_000_000_000)
+    new = controller.runtime.strategy_factors.for_program(controller.runtime.registry.current_ref("A"))
+    assert new.reasoning_since == 15 and old.reasoning_since == 13
+    assert controller.release("A")
+    clock.now = 17
+    submit(controller, "fresh", "A", 100, preparation_ns=500_000_000)
+    fresh = controller.runtime.strategy_factors.for_program(controller.runtime.registry.current_ref("A"))
+    assert fresh.reasoning_since == 17
+    clock.now = 18
+    controller.finish("fresh", 100, 100, 0)
+    clock.now = 20
+    submit(controller, "same-generation", "A", 100, preparation_ns=500_000_000)
+    assert fresh.reasoning_since == 19.5 and fresh.acting_history[-1] == 1.5
+
+
+def test_legacy_overlap_without_preparation_keeps_latest_arrival_clock(clock):
+    controller = MoriProgramAdmissionController(RecordingHost(1200, 1000), MoriConfig())
+    clock.now = 10
+    submit(controller, "first", "A", 100)
+    clock.now = 12
+    submit(controller, "second", "A", 100)
+    factors = controller.runtime.strategy_factors.for_program(controller.runtime.registry.current_ref("A"))
+    assert factors.reasoning_since == 12
 
 
 def test_mori_chat_facts_use_system_prefix_and_canonical_tools():
@@ -155,6 +243,18 @@ def test_release_discards_retained_children_and_ignores_old_attempt_completion(c
     assert bridge.runtime.strategy_factors.for_program(ref).tokens == 20
 
 
+def test_online_beam_search_adds_each_depth_to_one_chat():
+    admission = MoriProgramAdmissionController(RecordingHost(2000, 0), MoriConfig())
+    sent = []
+    for rid in ("depth-0-beam-0", "depth-1-beam-0", "depth-1-beam-1"):
+        request = native(rid, "attempt", "P", 100)
+        del request.sampling_params.extra_args[CHILD_COUNT_ARG]
+        admission.add_request(request, sent.append)
+    ref = admission.runtime.registry.current_ref("P")
+    assert len(sent) == 3 and all(req._mori_program_ref == ref for req in sent)
+    assert admission.runtime.strategy_factors.for_program(ref).steps == 1
+
+
 def test_partial_child_abort_preserves_queued_sibling_and_prevents_duplicate_dispatch():
     from vllm.v1.request import RequestStatus
 
@@ -191,7 +291,7 @@ def test_aborting_only_known_child_before_fanout_completes_rejects_late_sibling(
 
 
 @pytest.mark.parametrize("event,argument", [("release", "P"), ("cancel", "waiting")])
-def test_control_event_returns_abort_to_each_retained_childs_client(event, argument):
+def test_control_event_notifies_each_client_of_its_retained_children(event, argument):
     from queue import Queue
 
     from vllm.v1.engine import FinishReason

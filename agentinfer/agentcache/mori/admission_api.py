@@ -11,6 +11,7 @@ import math
 import os
 from contextvars import ContextVar
 from functools import partial, wraps
+from time import monotonic_ns
 from uuid import uuid4
 
 from pydantic import TypeAdapter
@@ -26,6 +27,7 @@ from agentinfer.agentcache.mori.ipc import (
     CHILD_COUNT_ARG,
     CONTEXT_CHARS_ARG,
     PREFIX_ARG,
+    PREPARATION_NS_ARG,
     PROGRAM_ARG,
     RESERVED_ARGS,
     UTILITY_METHOD,
@@ -35,7 +37,7 @@ from agentinfer.agentcache.mori.ipc import (
 
 logger = logging.getLogger(__name__)
 _CHAT_CHOICES = TypeAdapter(int | None)
-_CHAT_STREAM = TypeAdapter(bool | None)
+_CHAT_BOOL = TypeAdapter(bool | None)
 
 
 def program_id(payload: dict) -> str | None:
@@ -64,15 +66,17 @@ def extract_usage(payload: object) -> tuple[int | None, int, int]:
 class _ChatAdd:
     """One HTTP attempt shared by all of vLLM's native sampling children."""
 
-    def __init__(self, pid: str, chars: int, prefix: str, count: int) -> None:
+    def __init__(self, pid: str, chars: int, prefix: str, count: int | None) -> None:
+        self.arrived_ns = monotonic_ns()
         self.attempt = uuid4().hex
         self.facts = {
             ATTEMPT_ARG: self.attempt,
             PROGRAM_ARG: pid,
             CONTEXT_CHARS_ARG: chars,
             PREFIX_ARG: prefix,
-            CHILD_COUNT_ARG: count,
         }
+        if count is not None:
+            self.facts[CHILD_COUNT_ARG] = count
         self.sending = asyncio.Lock()
         self.closed = False
         self.submitted = False
@@ -92,7 +96,7 @@ def _bind_add(core) -> None:
         params = request.sampling_params
         extra = params.extra_args if params is not None else None
         chat = _current_chat.get()
-        if chat is None or params is None:
+        if chat is None or params is None or getattr(request, "abort_immediately", False):
             # Other HTTP protocols can forward arbitrary user-supplied extra_args.
             if extra and not RESERVED_ARGS.isdisjoint(extra):
                 params.extra_args = {k: v for k, v in extra.items() if k not in RESERVED_ARGS}
@@ -101,6 +105,8 @@ def _bind_add(core) -> None:
         async with chat.sending:
             if chat.closed:
                 raise asyncio.CancelledError("MORI Chat already ended")
+            if not chat.submitted:
+                chat.facts[PREPARATION_NS_ARG] = monotonic_ns() - chat.arrived_ns
             params.extra_args = {**(extra or {}), **chat.facts}
             chat.submitted = True
             return await native_add(request)
@@ -284,7 +290,10 @@ class MoriSchedulingMiddleware:
             return
         try:
             native_count = max(_CHAT_CHOICES.validate_python(payload.get("n")) or 1, 1)
-            streaming = bool(_CHAT_STREAM.validate_python(payload.get("stream")))
+            # Online beam search issues new native requests at each decoding depth.
+            if payload.get("use_beam_search") and _CHAT_BOOL.validate_python(payload["use_beam_search"]):
+                native_count = None
+            streaming = bool(_CHAT_BOOL.validate_python(payload.get("stream")))
             chars, prefix = chat_facts(payload)
         except (TypeError, ValueError, RecursionError):
             await JSONResponse({"detail": "Invalid MORI Chat request"}, status_code=400)(scope, receive, send)
