@@ -21,7 +21,7 @@ from typing import Any
 ASYNC_SCHEDULER_CLS = "agentinfer.agentcache.core.scheduler.AgentCacheAsyncSchedulerBridge"
 SYNC_SCHEDULER_CLS = "agentinfer.agentcache.core.scheduler.AgentCacheSyncSchedulerBridge"
 IDENTITY_MIDDLEWARE = "agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware"
-MORI_MIDDLEWARE = "agentinfer.agentcache.core.mori_api.MoriSchedulingMiddleware"
+MORI_MIDDLEWARE = "agentinfer.agentcache.mori.admission_api.MoriSchedulingMiddleware"
 LIFECYCLE_MIDDLEWARE = "agentinfer.agentcache.core.api_adapter.AgentCacheLifecycleMiddleware"
 
 LIFECYCLE_SOCKET_ENV = "AGENTCACHE_VLLM_LIFECYCLE_SOCKET"

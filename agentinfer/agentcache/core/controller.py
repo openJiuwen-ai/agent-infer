@@ -75,7 +75,7 @@ _REMOVED_PROGRESS_TTL_SETTINGS = frozenset(
 
 def build_mori_controller(owner, settings: JsonMapping, backend_id: str):
     """Compose the MORI bridge with the Program cache adapter installed on a native Scheduler."""
-    from agentinfer.agentcache.core.program_scheduling import MoriProgramAdmissionController
+    from agentinfer.agentcache.mori.admission import MoriProgramAdmissionController
     from agentinfer.scheduling.mori import MoriConfig
 
     cache = getattr(owner, "program_cache_adapter", None)
