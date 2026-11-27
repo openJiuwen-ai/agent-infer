@@ -9,20 +9,33 @@ import json
 import logging
 import math
 import os
-from functools import partial
+from contextvars import ContextVar
+from functools import partial, wraps
 from uuid import uuid4
 
+from pydantic import TypeAdapter
 from pydantic_core import to_json
 from starlette._utils import get_route_path
 from starlette.datastructures import Headers
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.requests import ClientDisconnect, Request
+from starlette.responses import JSONResponse
 
 from agentinfer.agentcache.core.api_adapter import _replay_receive, _scope_with_content_length
-from agentinfer.agentcache.mori.admission import ATTEMPT_ARG
-from agentinfer.agentcache.mori.ipc import UTILITY_METHOD, Event, chat_facts
+from agentinfer.agentcache.mori.ipc import (
+    ATTEMPT_ARG,
+    CHILD_COUNT_ARG,
+    CONTEXT_CHARS_ARG,
+    PREFIX_ARG,
+    PROGRAM_ARG,
+    RESERVED_ARGS,
+    UTILITY_METHOD,
+    Event,
+    chat_facts,
+)
 
 logger = logging.getLogger(__name__)
+_CHAT_CHOICES = TypeAdapter(int | None)
+_CHAT_STREAM = TypeAdapter(bool | None)
 
 
 def program_id(payload: dict) -> str | None:
@@ -48,29 +61,74 @@ def extract_usage(payload: object) -> tuple[int | None, int, int]:
     return integer(usage.get("total_tokens")), integer(usage.get("prompt_tokens")) or 0, cached or 0
 
 
+class _ChatAdd:
+    """One HTTP attempt shared by all of vLLM's native sampling children."""
+
+    def __init__(self, pid: str, chars: int, prefix: str, count: int) -> None:
+        self.attempt = uuid4().hex
+        self.facts = {
+            ATTEMPT_ARG: self.attempt,
+            PROGRAM_ARG: pid,
+            CONTEXT_CHARS_ARG: chars,
+            PREFIX_ARG: prefix,
+            CHILD_COUNT_ARG: count,
+        }
+        self.sending = asyncio.Lock()
+        self.closed = False
+        self.submitted = False
+
+
+_current_chat: ContextVar[_ChatAdd | None] = ContextVar("mori_chat_add", default=None)
+
+
+def _bind_add(core) -> None:
+    """Attach trusted Chat facts at the common API-to-Core boundary."""
+    native_add = core.add_request_async
+    if getattr(native_add, "_mori_chat_add", False):
+        return
+
+    @wraps(native_add)
+    async def add_request(request):
+        params = request.sampling_params
+        extra = params.extra_args if params is not None else None
+        chat = _current_chat.get()
+        if chat is None or params is None:
+            # Other HTTP protocols can forward arbitrary user-supplied extra_args.
+            if extra and not RESERVED_ARGS.isdisjoint(extra):
+                params.extra_args = {k: v for k, v in extra.items() if k not in RESERVED_ARGS}
+            return await native_add(request)
+
+        async with chat.sending:
+            if chat.closed:
+                raise asyncio.CancelledError("MORI Chat already ended")
+            params.extra_args = {**(extra or {}), **chat.facts}
+            chat.submitted = True
+            return await native_add(request)
+
+    vars(add_request)["_mori_chat_add"] = True
+    core.add_request_async = add_request
+
+
 class MoriResponseObserver:
     """Observe completed SSE frames and end-of-response usage."""
 
-    def __init__(self, send, emit, attempt: str, streaming: bool) -> None:
+    def __init__(self, send, emit, chat: _ChatAdd, streaming: bool) -> None:
         self.send = send
         self.emit = emit
-        self.attempt = attempt
+        self.chat = chat
         self.streaming = streaming
-        self.started = False
-        self._finished = False
+        self.finished = False
         self._buffer = bytearray()
         self._usage: tuple[int | None, int, int] = (None, 0, 0)
         self._frames = 0
 
     async def __call__(self, message) -> None:
-        if message["type"] == "http.response.start":
-            self.started = True
         if message["type"] == "http.response.body":
             self._buffer.extend(message.get("body", b""))
             if self.streaming:
                 self._read_frames()
             if not message.get("more_body"):
-                self.finish()
+                await self.finish()
         await self.send(message)
 
     def _read_frames(self) -> None:
@@ -86,9 +144,10 @@ class MoriResponseObserver:
                     continue
                 self._frames += 1
                 if self._frames == 20:
-                    self.emit(Event.PROGRESS, self.attempt, self._frames)
+                    if self.chat.submitted:
+                        self.emit(Event.PROGRESS, self.chat.attempt, self._frames)
                     self._frames = 0
-                if self._usage[0] is None:
+                if self._usage[0] is None and b'"usage"' in data:
                     self._read_usage(data)
 
     def _read_usage(self, data) -> None:
@@ -100,13 +159,26 @@ class MoriResponseObserver:
         if usage[0] is not None:
             self._usage = usage
 
-    def finish(self) -> None:
-        if self._finished:
+    async def finish(self, cancelled: bool = False) -> None:
+        if self.finished:
             return
-        self._finished = True
-        if not self.streaming:
-            self._read_usage(self._buffer)
-        self.emit(Event.FINISH, self.attempt, *self._usage)
+        self.chat.closed = True
+        # A disconnected streaming response can end before n native children were sent.
+        async with self.chat.sending:
+            if self.finished:
+                return
+            self.finished = True
+            if not self.chat.submitted:
+                return
+            if cancelled:
+                delivery = self.emit(Event.CANCEL, self.chat.attempt)
+            else:
+                if not self.streaming:
+                    self._read_usage(self._buffer)
+                delivery = self.emit(Event.FINISH, self.chat.attempt, *self._usage)
+        # Match ThunderAgent's usage callback before closing a response, so the
+        # next request from this Program observes its completed predecessor.
+        await asyncio.shield(asyncio.gather(delivery, return_exceptions=True))
 
 
 class MoriSchedulingMiddleware:
@@ -115,6 +187,7 @@ class MoriSchedulingMiddleware:
     def __init__(self, app) -> None:
         self.app = app
         self._delivery: set[asyncio.Task] = set()
+        self._bound_core = None
         self._auth_initialized = False
         self._auth = None
 
@@ -148,31 +221,25 @@ class MoriSchedulingMiddleware:
         if not task.cancelled() and (error := task.exception()) is not None:
             logger.error("MORI event delivery failed: %s", error)
 
-    @staticmethod
-    async def _wait_for_disconnect(receive) -> None:
-        while (await receive())["type"] != "http.disconnect":
-            pass
-
-    async def _await_admission(self, reply: asyncio.Task, receive) -> bool:
-        disconnected = asyncio.create_task(self._wait_for_disconnect(receive))
-        try:
-            done, _ = await asyncio.wait((reply, disconnected), return_when=asyncio.FIRST_COMPLETED)
-            if disconnected in done:
-                disconnected.result()
-                return False
-            return reply.result()
-        finally:
-            disconnected.cancel()
-            await asyncio.gather(disconnected, return_exceptions=True)
-
     async def _forward_chat(self, request: Request, payload: dict, receive, send) -> None:
-        """Deliver admitted Chat JSON to the native server as UTF-8 bytes."""
+        """Deliver Chat JSON to the native server as UTF-8 bytes."""
         body = to_json(payload)
         message = {"type": "http.request", "body": body, "more_body": False}
         scope = _scope_with_content_length(request.scope, len(body))
         await self.app(scope, _replay_receive([message], receive), send)
 
+    def _chat_input_error(self, payload: dict) -> str | None:
+        """Let the engine reject unsupported Chat inputs before Program admission."""
+        return None
+
     async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] in ("http", "websocket"):
+            client = getattr(scope["app"].state, "engine_client", None)
+            core = getattr(client, "engine_core", None)
+            if core is not None and self._bound_core is not core:
+                _bind_add(core)
+                self._bound_core = core
+
         if scope["type"] != "http" or scope["method"] != "POST":
             await self.app(scope, receive, send)
             return
@@ -188,7 +255,9 @@ class MoriSchedulingMiddleware:
         request = Request(scope, receive)
         try:
             payload = await request.json()
-        except ValueError:
+        except ClientDisconnect:
+            return
+        except (ValueError, RecursionError):
             payload = None
         if not isinstance(payload, dict):
             await JSONResponse({"detail": "Expected a JSON object"}, status_code=400)(scope, receive, send)
@@ -206,22 +275,31 @@ class MoriSchedulingMiddleware:
             return
 
         pid = pid or "default"
-        attempt = uuid4().hex
-        chars, prefix = chat_facts(payload)
-        observer = MoriResponseObserver(send, emit, attempt, bool(payload.get("stream")))
-        xargs = payload.get("vllm_xargs") or {}
-        if not isinstance(xargs, dict):
+        if input_error := self._chat_input_error(payload):
+            await JSONResponse({"detail": input_error}, status_code=400)(scope, receive, send)
+            return
+        xargs = payload.get("vllm_xargs")
+        if xargs is not None and not isinstance(xargs, dict):
             await JSONResponse({"detail": "vllm_xargs must be a JSON object"}, status_code=400)(scope, receive, send)
             return
-        count = payload.get("n", 1)
-        native_count = count if isinstance(count, int) and count > 0 else 1
         try:
-            if not await self._await_admission(emit(Event.BEGIN, attempt, pid, chars, prefix, native_count), receive):
-                await Response(status_code=409)(scope, receive, send)
-                return
+            native_count = max(_CHAT_CHOICES.validate_python(payload.get("n")) or 1, 1)
+            streaming = bool(_CHAT_STREAM.validate_python(payload.get("stream")))
+            chars, prefix = chat_facts(payload)
+        except (TypeError, ValueError, RecursionError):
+            await JSONResponse({"detail": "Invalid MORI Chat request"}, status_code=400)(scope, receive, send)
+            return
+
+        chat = _ChatAdd(pid, chars, prefix, native_count)
+        observer = MoriResponseObserver(send, emit, chat, streaming)
+        token = _current_chat.set(chat)
+        try:
             payload.pop("program_id", None)
-            payload["vllm_xargs"] = {**xargs, ATTEMPT_ARG: attempt, "program_id": pid}
-            if observer.streaming:
+            for key in RESERVED_ARGS:
+                payload.pop(key, None)
+            if xargs:
+                payload["vllm_xargs"] = {k: v for k, v in xargs.items() if k != "program_id" and k not in RESERVED_ARGS}
+            if streaming:
                 options = payload.get("stream_options")
                 if options is None:
                     payload["stream_options"] = {"include_usage": True}
@@ -229,7 +307,6 @@ class MoriSchedulingMiddleware:
                     options.setdefault("include_usage", True)
             await self._forward_chat(request, payload, receive, observer)
         finally:
-            if observer.started:
-                observer.finish()
-            else:
-                await emit(Event.CANCEL, attempt)
+            _current_chat.reset(token)
+            if not observer.finished:
+                await asyncio.shield(observer.finish(cancelled=True))

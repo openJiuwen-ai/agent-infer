@@ -151,13 +151,10 @@ class _VllmAdmissionHooks:
     def add_request(self, owner: Scheduler, request: Request, native_add: Callable[[Request], None]) -> None:
         """Retain agentic work or pass compatibility traffic directly to vLLM."""
         if self.program_admission is not None:
-            from agentinfer.agentcache.mori.admission import ATTEMPT_ARG
-
-            params = request.sampling_params
-            attempt = (params.extra_args or {}).get(ATTEMPT_ARG) if params is not None else None
-            if attempt is not None and not self.program_admission.attach(attempt):
-                raise ValueError("Native request has no outstanding MORI admission")
-            native_add(request)
+            queued_at = time.monotonic()
+            self.program_admission.add_request(
+                request, lambda child: self._add_to_native_waiting(child, queued_at, native_add)
+            )
             return
         self._drain_lifecycle_signals()
         metadata = _metadata_from_request(request)
@@ -319,13 +316,14 @@ class _VllmAdmissionHooks:
         native_finish: Callable[[str | Iterable[str] | None, RequestStatus], list[tuple[str, int]]],
     ) -> list[tuple[str, int]]:
         """Finish retained and native attempts while reporting only terminal lifecycle facts."""
-        if self.program_admission is not None:
-            if request_ids is None:
-                self.program_admission.cancel_gates()
-            return native_finish(request_ids, finished_status)
         normalized_request_ids = (
             request_ids if request_ids is None or isinstance(request_ids, str) else tuple(request_ids)
         )
+        if self.program_admission is not None:
+            from agentinfer.agentcache.mori.ipc import native_finished_requests
+
+            retained_children = self.program_admission.finish_requests(normalized_request_ids, finished_status)
+            return native_finished_requests(retained_children) + native_finish(normalized_request_ids, finished_status)
         retained = self.cancel_retained(normalized_request_ids)
         token_counts = {
             request_id: request.num_tokens

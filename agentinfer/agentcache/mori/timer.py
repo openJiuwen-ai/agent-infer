@@ -10,7 +10,8 @@ from collections.abc import Callable
 from functools import wraps
 from threading import Timer
 
-from agentinfer.agentcache.mori.admission import MoriProgramAdmissionController
+from agentinfer.agentcache.mori.admission import InvalidMoriAdmission, MoriProgramAdmissionController
+from agentinfer.agentcache.mori.ipc import native_finished_requests, send_retained_aborts
 
 logger = logging.getLogger(__name__)
 _DEADLINE = "agentinfer.mori.deadline"
@@ -56,6 +57,7 @@ def install_mori_timer() -> None:
     """Use vLLM's local wakeup queue so deadlines also run when the engine is idle."""
     from vllm.v1.engine import EngineCoreRequestType
     from vllm.v1.engine.core import EngineCoreProc
+    from vllm.v1.request import RequestStatus
 
     run_busy_loop = EngineCoreProc.run_busy_loop
     if getattr(run_busy_loop, "_agentinfer_mori", False):
@@ -69,8 +71,15 @@ def install_mori_timer() -> None:
             timer = getattr(self, "_agentinfer_mori_timer", None)
             if timer is not None and self.is_running():
                 timer.on_deadline()
+                send_retained_aborts(self, self.scheduler._agentcache.program_admission)
             return None
-        return handle(self, request_type, payload)
+        try:
+            return handle(self, request_type, payload)
+        except InvalidMoriAdmission:
+            if request_type != EngineCoreRequestType.ADD:
+                raise
+            request, _ = payload
+            self._send_abort_outputs_to_client([request.request_id], request.client_index)
 
     @wraps(run_busy_loop)
     def run_with_timer(self, *args, **kwargs):
@@ -89,6 +98,11 @@ def install_mori_timer() -> None:
         finally:
             timer.close()
             self._agentinfer_mori_timer = None
+            # A graceful drain can finish with every remaining request parked at
+            # admission. Native Core has no queue entries for those clients.
+            retained = admission.finish_requests(None, RequestStatus.FINISHED_ABORTED)
+            if retained:
+                self._send_abort_outputs(native_finished_requests(retained))
 
     vars(run_with_timer)["_agentinfer_mori"] = True
     EngineCoreProc._handle_client_request = handle_request

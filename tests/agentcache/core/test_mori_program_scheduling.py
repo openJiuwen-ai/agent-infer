@@ -6,8 +6,19 @@ from types import SimpleNamespace
 
 import pytest
 
-from agentinfer.agentcache.mori.admission import BackendObservation, MoriProgramAdmissionController
-from agentinfer.agentcache.mori.ipc import chat_facts
+from agentinfer.agentcache.mori.admission import (
+    BackendObservation,
+    InvalidMoriAdmission,
+    MoriProgramAdmissionController,
+)
+from agentinfer.agentcache.mori.ipc import (
+    ATTEMPT_ARG,
+    CHILD_COUNT_ARG,
+    CONTEXT_CHARS_ARG,
+    PREFIX_ARG,
+    PROGRAM_ARG,
+    chat_facts,
+)
 from agentinfer.scheduling import runtime
 from agentinfer.scheduling.mori import MoriConfig
 from tests.helpers.marks import test_marks
@@ -27,6 +38,26 @@ class RecordingHost:
         self.operations.extend((op.program.program_id, op.placement and op.placement.value) for op in operations)
 
 
+def native(rid, attempt, program_id, context_chars, n=1):
+    from vllm.sampling_params import SamplingParams
+    from vllm.v1.request import Request
+
+    fields = {
+        ATTEMPT_ARG: attempt,
+        PROGRAM_ARG: program_id,
+        CONTEXT_CHARS_ARG: context_chars,
+        PREFIX_ARG: "_empty_",
+        CHILD_COUNT_ARG: n,
+    }
+    return Request(rid, [1, 2, 3], SamplingParams(extra_args=fields), None)
+
+
+def submit(controller, attempt, program_id, chars, n=1):
+    dispatched = []
+    controller.add_request(native(attempt, attempt, program_id, chars, n), dispatched.append)
+    return dispatched
+
+
 @pytest.fixture
 def clock(monkeypatch):
     state = SimpleNamespace(now=1.0)
@@ -38,8 +69,8 @@ def test_admission_uses_pretemplate_chars_and_exact_effective_capacity():
     admitted = MoriProgramAdmissionController(RecordingHost(123, 0), MoriConfig())
     waiting = MoriProgramAdmissionController(RecordingHost(123, 0), MoriConfig())
 
-    assert admitted.begin("a", "program", 115, "_empty_").result()
-    assert not waiting.begin("b", "program", 158, "_empty_").done()
+    assert submit(admitted, "a", "program", 115)
+    assert not submit(waiting, "b", "program", 158)
 
 
 def test_mori_chat_facts_use_system_prefix_and_canonical_tools():
@@ -56,16 +87,15 @@ def test_mori_chat_facts_use_system_prefix_and_canonical_tools():
 def test_idle_displacement_requires_dram_and_then_resumes_waiter(clock, dram, can_displace):
     host = RecordingHost(300, dram)
     bridge = MoriProgramAdmissionController(host, MoriConfig())
-    assert bridge.begin("a", "A", 500, "_empty_").result()
-    assert bridge.attach("a")
+    assert submit(bridge, "a", "A", 500)
     clock.now = 2.0
     bridge.finish("a", 160, 100, 0)
-    request = bridge.begin("b", "B", 500, "_empty_")
-    assert not request.done()
+    request = submit(bridge, "b", "B", 500)
+    assert not request
 
     clock.now = 4.0
     assert bridge.tick() is can_displace
-    assert request.done() is can_displace
+    assert bool(request) is can_displace
     assert host.operations == ([("A", "async"), ("B", "interactive")] if can_displace else [])
 
 
@@ -76,7 +106,7 @@ def test_idle_displacement_requires_dram_and_then_resumes_waiter(clock, dram, ca
 def test_reasoning_overflow_defers_placement_until_response(clock, dram, final_tokens, expected):
     host = RecordingHost(300, dram)
     bridge = MoriProgramAdmissionController(host, MoriConfig())
-    assert bridge.begin("a", "A", 500, "_empty_").result()
+    assert submit(bridge, "a", "A", 500)
     bridge.progress("a", 150)
     assert not bridge.tick()
     assert not host.operations
@@ -92,12 +122,12 @@ def test_reasoning_overflow_defers_placement_until_response(clock, dram, final_t
 def test_cpu_overflow_moves_warm_program_to_waiting(clock):
     host = RecordingHost(300, 160)
     bridge = MoriProgramAdmissionController(host, MoriConfig())
-    assert bridge.begin("a", "A", 500, "_empty_").result()
+    assert submit(bridge, "a", "A", 500)
     bridge.finish("a", 160, 100, 0)
-    pending = bridge.begin("b", "B", 500, "_empty_")
+    pending = submit(bridge, "b", "B", 500)
     clock.now = 3
     assert bridge.tick()
-    assert pending.result()
+    assert len(pending) == 1
 
     host.observation = BackendObservation(True, 300, 159)
     bridge.observe_backend()
@@ -105,34 +135,104 @@ def test_cpu_overflow_moves_warm_program_to_waiting(clock):
     assert host.operations == [("A", "async"), ("B", "interactive"), ("A", "inactive")]
 
 
-def test_release_resolves_gate_and_ignores_old_attempt_completion(clock):
+def test_release_discards_retained_children_and_ignores_old_attempt_completion(clock):
     host = RecordingHost(300, 10)
     bridge = MoriProgramAdmissionController(host, MoriConfig())
-    waiting = bridge.begin("first", "A", 2000, "_empty_")
-    assert not waiting.done()
+    waiting = submit(bridge, "first", "A", 2000)
+    assert not waiting
     assert bridge.release("A")
-    assert not waiting.result()
+    assert not waiting
+    assert [req.request_id for req in bridge.take_aborted_requests()] == ["first"]
     assert not host.operations
 
-    assert bridge.begin("second", "A", 100, "_empty_", 2).result()
-    assert bridge.attach("second")
-    assert bridge.attach("second")
-    assert not bridge.attach("second")
+    dispatched = submit(bridge, "second", "A", 100, 2)
+    bridge.add_request(native("sibling", "second", "A", 100, 2), dispatched.append)
+    assert [req.request_id for req in dispatched] == ["second", "sibling"]
+    with pytest.raises(InvalidMoriAdmission):
+        bridge.add_request(native("extra", "second", "A", 100, 2), dispatched.append)
     bridge.finish("first", 800, 100, 0)
     ref = bridge.runtime.registry.current_ref("A")
     assert bridge.runtime.strategy_factors.for_program(ref).tokens == 20
+
+
+def test_partial_child_abort_preserves_queued_sibling_and_prevents_duplicate_dispatch():
+    from vllm.v1.request import RequestStatus
+
+    cache = RecordingHost(100, 0)
+    admission = MoriProgramAdmissionController(cache, MoriConfig())
+    sent = []
+    first = native("0_req", "attempt", "P", 2000, 2)
+    sibling = native("1_req", "attempt", "P", 2000, 2)
+    for request in (first, sibling):
+        admission.add_request(request, sent.append)
+    assert not sent
+    assert admission.finish_requests([first.request_id], RequestStatus.FINISHED_ABORTED) == [first]
+    assert not admission.take_aborted_requests()
+    cache.observation = BackendObservation(True, 2000, 0)
+    admission.observe_backend()
+    admission.tick()
+    admission.tick()
+    assert sent == [sibling]
+
+
+def test_aborting_only_known_child_before_fanout_completes_rejects_late_sibling():
+    from vllm.v1.request import RequestStatus
+
+    admission = MoriProgramAdmissionController(RecordingHost(100, 0), MoriConfig())
+    sent = []
+    child = native("0_req", "partial", "P", 2000, 2)
+    admission.add_request(child, sent.append)
+    assert admission.finish_requests(child.request_id, RequestStatus.FINISHED_ABORTED) == [child]
+    with pytest.raises(InvalidMoriAdmission):
+        admission.add_request(native("1_req", "partial", "P", 2000, 2), sent.append)
+    admission.cancel("partial")
+    assert not sent
+    assert not admission.take_aborted_requests()
+
+
+@pytest.mark.parametrize("event,argument", [("release", "P"), ("cancel", "waiting")])
+def test_control_event_returns_abort_to_each_retained_childs_client(event, argument):
+    from queue import Queue
+
+    from vllm.v1.engine import FinishReason
+    from vllm.v1.engine.core import EngineCoreProc
+
+    from agentinfer.agentcache.mori.ipc import UTILITY_METHOD, install_core_utility
+
+    admission = MoriProgramAdmissionController(RecordingHost(100, 0), MoriConfig())
+    core = object.__new__(EngineCoreProc)
+    core.scheduler = SimpleNamespace(_agentcache=SimpleNamespace(program_admission=admission))
+    core.output_queue = Queue()
+    install_core_utility()
+    for i in range(2):
+        child = native(f"{i}_req", "waiting", "P", 4000, 2)
+        child.client_index = i
+        admission.add_request(child, lambda _: pytest.fail("parked request dispatched"))
+    for _ in range(2):
+        getattr(core, UTILITY_METHOD)(event, [argument])
+    clients = set()
+    for _ in range(2):
+        client_index, outputs = core.output_queue.get_nowait()
+        clients.add(client_index)
+        assert [(item.request_id, item.finish_reason) for item in outputs.outputs] == [
+            (f"{client_index}_req", FinishReason.ABORT)
+        ]
+    assert clients == {0, 1}
+    assert core.output_queue.empty()
 
 
 def test_cancel_and_missing_observation_do_not_force_an_admission():
     host = RecordingHost(300, 20)
     host.observation = BackendObservation(False, None, None)
     bridge = MoriProgramAdmissionController(host, MoriConfig())
-    pending = bridge.begin("a", "A", 100, "_empty_")
-    assert not pending.done()
+    pending = submit(bridge, "a", "A", 100)
+    assert not pending
     assert not bridge.tick()
 
-    bridge.cancel_gates()
-    assert not pending.result()
+    bridge.cancel("a")
+    assert not pending
+    assert [request.request_id for request in bridge.take_aborted_requests()] == ["a"]
+    assert not bridge.take_aborted_requests()
     assert not bridge.runtime.registry.views()
 
 
@@ -149,16 +249,16 @@ class FlakyCache(RecordingHost):
 def test_failed_placement_keeps_pending_admission_and_retries(clock):
     cache = FlakyCache(300, 160)
     bridge = MoriProgramAdmissionController(cache, MoriConfig())
-    assert bridge.begin("a", "A", 500, "_empty_").result()
+    assert submit(bridge, "a", "A", 500)
     bridge.finish("a", 160, 100, 0)
-    pending = bridge.begin("b", "B", 500, "_empty_")
+    pending = submit(bridge, "b", "B", 500)
     clock.now = 3.0
 
     cache.fail_next = True
     assert not bridge.tick()
-    assert not pending.done()
+    assert not pending
     assert bridge.tick()
-    assert pending.result()
+    assert len(pending) == 1
     assert cache.operations == [("A", "async"), ("B", "interactive")]
 
 
@@ -179,16 +279,16 @@ def test_failed_batch_retries_in_order_after_a_partial_apply(clock):
 
     cache = PartialCache()
     bridge = MoriProgramAdmissionController(cache, MoriConfig())
-    assert bridge.begin("a", "A", 500, "_empty_").result()
+    assert submit(bridge, "a", "A", 500)
     bridge.finish("a", 160, 100, 0)
-    pending = bridge.begin("b", "B", 500, "_empty_")
+    pending = submit(bridge, "b", "B", 500)
     clock.now = 3.0
 
     assert not bridge.tick()
     assert len(cache.placement) == 1
-    assert not pending.done()
+    assert not pending
     assert bridge.tick()
-    assert pending.result()
+    assert len(pending) == 1
     assert cache.batches[0] == cache.batches[1]
     assert {ref.program_id: placement.value for ref, placement in cache.placement.items()} == {
         "A": "async",
@@ -199,7 +299,7 @@ def test_failed_batch_retries_in_order_after_a_partial_apply(clock):
 def test_failed_release_is_retryable_and_does_not_stop_other_programs():
     cache = FlakyCache(600, 160)
     bridge = MoriProgramAdmissionController(cache, MoriConfig())
-    assert bridge.begin("a", "A", 100, "_empty_").result()
+    assert submit(bridge, "a", "A", 100)
 
     cache.fail_next = True
     assert not bridge.release("A")
@@ -207,12 +307,10 @@ def test_failed_release_is_retryable_and_does_not_stop_other_programs():
     assert ref is not None
     bridge.progress("a", 7)
     assert bridge.runtime.strategy_factors.for_program(ref).tokens == 27
-    assert bridge.begin("b", "B", 100, "_empty_").result()
+    assert submit(bridge, "b", "B", 100)
     assert bridge.release("A")
-    assert bridge.attach("a")  # A request already granted admission can reach Core.
     bridge.finish("a", 50, 30, 0)
     assert bridge.runtime.registry.current_ref("A") is None
-    assert bridge.attach("b")
     assert cache.operations == [("A", None)]
     assert not bridge.release("A")
     assert cache.operations == [("A", None)]
@@ -221,7 +319,7 @@ def test_failed_release_is_retryable_and_does_not_stop_other_programs():
 def test_inactive_generation_keeps_cache_ownership_until_release_ack(clock):
     cache = FlakyCache(300, 0)
     controller = MoriProgramAdmissionController(cache, MoriConfig())
-    assert controller.begin("a", "A", 500, "_empty_").result()
+    assert submit(controller, "a", "A", 500)
     controller.progress("a", 150)
     controller.tick()
     clock.now = 2
@@ -234,7 +332,7 @@ def test_inactive_generation_keeps_cache_ownership_until_release_ack(clock):
     assert controller.runtime.registry.current_ref("A") == ref
     assert controller.release("A")
     assert cache.operations == [("A", "inactive"), ("A", None)]
-    assert controller.begin("new", "A", 100, "_empty_").result()
+    assert submit(controller, "new", "A", 100)
     assert controller.runtime.registry.current_ref("A") != ref
 
 
@@ -250,29 +348,30 @@ def test_config_selects_mori_on_the_existing_bridge():
     assert args.additional_config["agentcache"]["strategy"] == "mori"
 
 
-def test_shared_vllm_hook_consumes_the_pre_admission_permit():
-    from vllm.v1.engine.core import EngineCore
-
+def test_shared_vllm_hook_counts_one_arrival_and_dispatches_each_native_child_once():
     from agentinfer.agentcache.core.scheduler import _VllmAdmissionHooks
-    from agentinfer.agentcache.mori.ipc import UTILITY_METHOD
 
     host = RecordingHost(600, 200)
     owner = SimpleNamespace(program_cache_adapter=host)
     config = SimpleNamespace(additional_config={"agentcache": {"strategy": "mori"}})
     hooks = _VllmAdmissionHooks(owner, config, SimpleNamespace(num_blocks=999), 16)
-    assert hooks.program_admission.observation.hbm_capacity_tokens == 600
-    core = SimpleNamespace(scheduler=SimpleNamespace(_agentcache=hooks))
-    handle = getattr(EngineCore, UTILITY_METHOD)
-    assert handle(core, "begin", ["attempt", "A", 100, "_empty_"]).result()
-    request = SimpleNamespace(sampling_params=SimpleNamespace(extra_args={"agentinfer_mori_attempt": "attempt"}))
-    native = []
-    hooks.add_request(owner, request, native.append)
-    with pytest.raises(ValueError, match="no outstanding MORI admission"):
-        hooks.add_request(owner, request, native.append)
-    assert native == [request]
+    controller = hooks.program_admission
+    assert controller.observation.hbm_capacity_tokens == 600
+    children = [native(f"{i}_request", "attempt", "A", 100, 2) for i in range(2)]
+    dispatched = []
+    for child in children:
+        hooks.add_request(owner, child, dispatched.append)
+    controller.tick()
+    assert dispatched == children
+    ref = controller.runtime.registry.current_ref("A")
+    assert all(child._mori_program_ref == ref for child in children)
+    assert controller.runtime.strategy_factors.for_program(ref).steps == 1
+    with pytest.raises(InvalidMoriAdmission):
+        hooks.add_request(owner, children[0], dispatched.append)
+    assert dispatched == children
 
 
-def test_api_preserves_begin_progress_end_and_release_order():
+def test_api_preserves_add_progress_end_and_release_order():
     import asyncio
     import json
 
@@ -281,8 +380,11 @@ def test_api_preserves_begin_progress_end_and_release_order():
     from starlette.requests import Request
     from starlette.responses import StreamingResponse
     from starlette.routing import Route
+    from vllm.sampling_params import SamplingParams
+    from vllm.v1.engine import EngineCoreRequest
+    from vllm.v1.request import Request as NativeRequest
+    from vllm.v1.serial_utils import MsgpackDecoder, MsgpackEncoder
 
-    from agentinfer.agentcache.mori.admission import ATTEMPT_ARG
     from agentinfer.agentcache.mori.admission_api import MoriSchedulingMiddleware
     from agentinfer.agentcache.mori.ipc import UTILITY_METHOD, handle_event
 
@@ -291,16 +393,24 @@ def test_api_preserves_begin_progress_end_and_release_order():
     events = []
 
     class FakeCore:
+        async def add_request_async(self, req):
+            wire = MsgpackEncoder().encode(req)
+            received = MsgpackDecoder(EngineCoreRequest).decode(wire)
+            native = NativeRequest.from_engine_core_request(received, None)
+            dispatched = []
+            bridge.add_request(native, dispatched.append)
+            assert dispatched == [native]
+            events.append("add")
+
         async def call_utility_async(self, method, event, args):
             assert method == UTILITY_METHOD
             events.append(event)
-            result = handle_event(bridge, event, args)
-            return await asyncio.wrap_future(result) if event == "begin" else result
+            return handle_event(bridge, event, args)
 
     async def native_chat(request: Request):
         payload = await request.json()
-        attempt = payload["vllm_xargs"][ATTEMPT_ARG]
-        assert bridge.attach(attempt)
+        native = EngineCoreRequest("request", [1, 2, 3], None, SamplingParams(), None, 1.0, None, None, None)
+        await request.app.state.engine_client.engine_core.add_request_async(native)
         assert payload["stream_options"]["include_usage"]
         assert payload["messages"] == [{"role": "system", "content": "你好"}]
 
@@ -336,12 +446,11 @@ def test_api_preserves_begin_progress_end_and_release_order():
             assert response.json()["released"]
 
     asyncio.run(start())
-    assert events == ["begin", "progress", "finish", "release"]
+    assert events == ["add", "progress", "finish", "release"]
     assert host.operations == [("A", None)]
 
 
-def test_core_timer_wakes_idle_input_queue_and_executes_on_owner(monkeypatch):
-    import pickle
+def test_idle_owner_timer_dispatches_newly_admitted_work_and_closes_retained_requests(monkeypatch):
     from queue import Queue
     from threading import get_ident
 
@@ -349,30 +458,35 @@ def test_core_timer_wakes_idle_input_queue_and_executes_on_owner(monkeypatch):
 
     from agentinfer.agentcache.mori.timer import install_mori_timer
 
-    called = []
-    owner = get_ident()
-    bridge = SimpleNamespace(
-        config=MoriConfig(interval_seconds=0.01),
-        observe_backend=lambda: called.append(("observe", get_ident())),
-        tick=lambda: called.append(("tick", get_ident())),
-    )
+    host = RecordingHost(200, 400)
+    admission = MoriProgramAdmissionController(host, MoriConfig(interval_seconds=0.01))
+    native_add = []
+    req = native("ready", "ready", "A", 2000)
+    admission.add_request(req, lambda child: native_add.append((get_ident(), child)))
+    parked = native("parked", "parked", "B", 100000)
+    parked.client_index = 3
+    admission.add_request(parked, lambda _: pytest.fail("insufficient capacity"))
+    assert not native_add
+    host.observation = BackendObservation(True, 2000, 400)
 
     def run_busy_loop(self):
-        request = self.input_queue.get(timeout=2)
-        assert called == []
-        self._handle_client_request(*pickle.loads(pickle.dumps(request)))
+        self._handle_client_request(*self.input_queue.get(timeout=2))
+        assert native_add == [(get_ident(), req)]
 
     monkeypatch.setattr(EngineCoreProc, "run_busy_loop", run_busy_loop)
     monkeypatch.setattr(EngineCoreProc, "_handle_client_request", lambda *_: pytest.fail("unexpected vLLM event"))
     install_mori_timer()
     core = object.__new__(EngineCoreProc)
-    core.scheduler = SimpleNamespace(_agentcache=SimpleNamespace(program_admission=bridge))
+    core.scheduler = SimpleNamespace(_agentcache=SimpleNamespace(program_admission=admission))
     core.input_queue = Queue()
+    core.output_queue = Queue()
     core.is_running = lambda: True
-
     core.run_busy_loop()
-    assert called == [("observe", owner), ("tick", owner)]
     assert core._agentinfer_mori_timer is None
+    index, outputs = core.output_queue.get_nowait()
+    assert index == 3
+    assert [output.request_id for output in outputs.outputs] == ["parked"]
+    assert core.output_queue.empty()
 
 
 @pytest.mark.parametrize("interval", [0, -1, float("nan"), float("inf")])
@@ -409,8 +523,7 @@ def test_overlapping_finishes_keep_program_reasoning_until_last_request(clock, f
 
     controller = MoriProgramAdmissionController(RecordingHost(300, 300), MoriConfig())
     for request in ("first", "second"):
-        assert controller.begin(request, "A", 500, "_empty_").result()
-        assert controller.attach(request)
+        assert submit(controller, request, "A", 500)
     controller.progress("first", 150)
     controller.tick()
     program = controller.runtime.registry.require(controller.runtime.registry.current_ref("A"))
@@ -438,13 +551,19 @@ def test_authenticated_program_routes_share_id_resolution_before_core(configured
     from agentinfer.agentcache.mori.admission_api import MoriSchedulingMiddleware
 
     events = []
+    submitted = []
 
     class Core:
+        async def add_request_async(self, child):
+            submitted.append(child.sampling_params.extra_args[PROGRAM_ARG])
+
         async def call_utility_async(self, method, event, args):
             events.append((event, args))
             return True
 
     async def chat(request: Request):
+        child = SimpleNamespace(sampling_params=SimpleNamespace(extra_args=None))
+        await request.app.state.engine_client.engine_core.add_request_async(child)
         return JSONResponse({})
 
     app = Starlette(routes=[Route("/v1/chat/completions", chat, methods=["POST"])])
@@ -469,7 +588,7 @@ def test_authenticated_program_routes_share_id_resolution_before_core(configured
             ]:
                 payload = {"program_id": top, "extra_body": {"program_id": extra}}
                 assert (await client.post("v1/chat/completions", json=payload, headers=headers)).status_code == 200
-                assert [args[1] for kind, args in events if kind == "begin"][-1] == expected
+                assert submitted[-1] == expected
                 result = await client.post("programs/release", json=payload, headers=headers)
                 if expected == "default":
                     assert result.status_code == 400

@@ -1,15 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
-"""Bridge between API-owned request gates and a Program scheduling runtime."""
+"""Retain native vLLM ADDs until their logical Chat is admitted by MORI."""
 
 from __future__ import annotations
 
 import logging
 import time
-from concurrent.futures import Future
-from dataclasses import dataclass
-from typing import Protocol
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Protocol
 
+from agentinfer.agentcache.mori.ipc import ATTEMPT_ARG, CHILD_COUNT_ARG, CONTEXT_CHARS_ARG, PREFIX_ARG, PROGRAM_ARG
 from agentinfer.scheduling.backend import BackendInfo, BackendPoolInfo, DpRankInfo
 from agentinfer.scheduling.domain import ProgramRef
 from agentinfer.scheduling.identity import AgentIdentity
@@ -17,9 +18,14 @@ from agentinfer.scheduling.mori import MoriConfig, build_mori_strategy
 from agentinfer.scheduling.runtime import ProgramScheduler
 from agentinfer.scheduling.transitions import ProgramPlacement, TransitionKind, TransitionRequest
 
+if TYPE_CHECKING:
+    from vllm.v1.request import Request, RequestStatus
+
 logger = logging.getLogger(__name__)
 
-ATTEMPT_ARG = "agentinfer_mori_attempt"
+
+class InvalidMoriAdmission(ValueError):
+    """The native child cannot join this logical Chat attempt."""
 
 
 @dataclass(frozen=True)
@@ -51,22 +57,29 @@ class ProgramCacheAdapter(Protocol):
     def apply_program_ops(self, operations: tuple[ProgramOperation, ...]) -> None: ...
 
 
-@dataclass(frozen=True)
+@dataclass
 class _Admission:
+    """One Chat arrival and its native sampling children, all on the Core owner."""
+
     program: ProgramRef
-    reply: Future[bool]
-    native_count: int
+    context_chars: int
+    prefix_group: str
+    child_count: int
+    waiting: dict[str, tuple[Request, Callable[[Request], None]]]
+    seen: set[str] = field(default_factory=set)
+    admitted: bool = False
+    cancelled: bool = False
 
 
 class MoriProgramAdmissionController:
-    """Coordinate Program admission, dispatch permits and cache placement on the Core owner."""
+    """Hand native children to vLLM after their Program placement is acknowledged."""
 
     def __init__(self, cache: ProgramCacheAdapter, config: MoriConfig, backend_id: str = "vllm-local") -> None:
         self.cache = cache
         self.config = config
         self.backend_id = backend_id
-        self._pending: dict[str, _Admission] = {}
-        self._ready: dict[str, tuple[ProgramRef, int]] = {}
+        self._attempts: dict[str, _Admission] = {}
+        self._aborted: list[Request] = []
         self._operations: list[ProgramOperation] = []
         self._inactive: set[ProgramRef] = set()
         self._admitted: dict[str, None] = {}
@@ -105,47 +118,68 @@ class MoriProgramAdmissionController:
         self.observation = self.cache.observe_backend()
         self._backend = self._backend_pool()
 
-    def begin(
-        self, attempt: str, program_id: str, context_chars: int, prefix_group: str, native_count: int = 1
-    ) -> Future[bool]:
+    def add_request(self, request: Request, native_add: Callable[[Request], None]) -> None:
+        params = request.sampling_params
+        extra = (params.extra_args or {}) if params is not None else {}
+        request._mori_program_ref = None
+        if ATTEMPT_ARG not in extra:
+            native_add(request)
+            return
+        attempt = extra[ATTEMPT_ARG]
+        program_id = extra.get(PROGRAM_ARG)
+        context_chars = extra.get(CONTEXT_CHARS_ARG)
+        prefix_group = extra.get(PREFIX_ARG)
+        child_count = extra.get(CHILD_COUNT_ARG)
         if (
-            not attempt
+            not isinstance(attempt, str)
+            or not attempt
             or not isinstance(program_id, str)
             or not program_id.strip()
+            or type(context_chars) is not int
             or context_chars < 0
+            or not isinstance(prefix_group, str)
             or not prefix_group
-            or native_count < 1
+            or type(child_count) is not int
+            or child_count < 1
         ):
-            raise ValueError("Invalid MORI admission facts")
-        if attempt in self._pending or attempt in self._ready:
-            raise ValueError("Duplicate MORI attempt")
-        reply: Future[bool] = Future()
-        admitted = self.runtime.on_request_arrival(
-            attempt,
-            AgentIdentity(program_id),
-            0,
-            self._backend,
-            reply,
-            context_chars=context_chars,
-            prefix_group=prefix_group,
-        )
-        ref = self.runtime.registry.current_ref(program_id)
-        assert ref is not None
-        self._pending[attempt] = _Admission(ref, reply, native_count)
-        if admitted:
-            self._admitted[attempt] = None
-        self._flush_and_publish()
-        return reply
+            raise InvalidMoriAdmission("Invalid MORI Chat admission metadata")
 
-    def attach(self, attempt: str) -> bool:
-        """Consume the one-shot native dispatch permit."""
-        admission = self._ready.pop(attempt, None)
-        if admission is None:
-            return False
-        ref, remaining = admission
-        if remaining > 1:
-            self._ready[attempt] = (ref, remaining - 1)
-        return True
+        group = self._attempts.get(attempt)
+        if group is None:
+            waiting: dict[str, tuple[Request, Callable[[Request], None]]] = {}
+            admitted = self.runtime.on_request_arrival(
+                attempt,
+                AgentIdentity(program_id),
+                request.num_prompt_tokens,
+                self._backend,
+                waiting,
+                context_chars=context_chars,
+                prefix_group=prefix_group,
+            )
+            ref = self.runtime.registry.current_ref(program_id)
+            assert ref is not None
+            group = self._attempts[attempt] = _Admission(ref, context_chars, prefix_group, child_count, waiting)
+            if admitted:
+                self._admitted[attempt] = None
+        elif (
+            group.program.program_id != program_id
+            or group.context_chars != context_chars
+            or group.prefix_group != prefix_group
+            or group.child_count != child_count
+            or request.request_id in group.seen
+            or len(group.seen) >= child_count
+        ):
+            raise InvalidMoriAdmission("Inconsistent or duplicate MORI sampling child")
+
+        group.seen.add(request.request_id)
+        if group.cancelled:
+            raise InvalidMoriAdmission("MORI sampling group was cancelled before admission")
+        if group.admitted:
+            request._mori_program_ref = group.program
+            native_add(request)
+            return
+        group.waiting[request.request_id] = (request, native_add)
+        self._flush_and_publish()
 
     def progress(self, attempt: str, delta: int) -> None:
         if delta <= 0:
@@ -153,29 +187,50 @@ class MoriProgramAdmissionController:
         self.runtime.on_response_progress(attempt, delta)
 
     def finish(self, attempt: str, total: int | None, prompt: int, cached: int) -> None:
-        self._ready.pop(attempt, None)
-        if attempt in self._pending:
+        group = self._attempts.get(attempt)
+        if group is None:
+            return
+        if not group.admitted:
             self.cancel(attempt)
             return
+        del self._attempts[attempt]
         self.runtime.on_reported_completion(attempt, total, prompt, cached)
         self._flush_and_publish()
 
-    def _cancel_attempt(self, attempt: str) -> None:
-        self._ready.pop(attempt, None)
+    def _cancel_waiting(self, attempt: str, group: _Admission) -> None:
         self._admitted.pop(attempt, None)
-        pending = self._pending.pop(attempt, None)
-        self.runtime.cancel_request(attempt)
-        if pending is not None:
-            pending.reply.set_result(False)
+        group.cancelled = True
+        self._aborted.extend(request for request, _ in group.waiting.values())
+        group.waiting.clear()
 
     def cancel(self, attempt: str) -> None:
-        self._cancel_attempt(attempt)
-        self._flush_and_publish()
+        group = self._attempts.pop(attempt, None)
+        if group is not None:
+            self._cancel_waiting(attempt, group)
+            self.runtime.cancel_request(attempt)
+            self._flush_and_publish()
 
-    def cancel_gates(self) -> None:
-        """Resolve pending API waiters when the native scheduler is stopping."""
-        for attempt in (*self._pending, *self._ready):
-            self._cancel_attempt(attempt)
+    def take_aborted_requests(self) -> list[Request]:
+        """Transfer utility-triggered cancellations to the native Core output channel."""
+        aborted, self._aborted = self._aborted, []
+        return aborted
+
+    def finish_requests(self, request_ids: str | Iterable[str] | None, finished_status: RequestStatus) -> list[Request]:
+        """Return native children the engine cannot find in its own waiting/running queues."""
+        ids = None if request_ids is None else {request_ids} if isinstance(request_ids, str) else set(request_ids)
+        finished = []
+        for attempt, group in self._attempts.items():
+            children = tuple(group.waiting) if ids is None else group.waiting.keys() & ids
+            for request_id in children:
+                request, _ = group.waiting.pop(request_id)
+                request.status = finished_status
+                finished.append(request)
+            if (ids is None or children) and not group.waiting and not group.cancelled and not group.admitted:
+                group.cancelled = True
+                self._admitted.pop(attempt, None)
+                self.runtime.cancel_request(attempt)
+        self._flush_and_publish()
+        return finished
 
     def tick(self) -> bool:
         prior = self._flush_operations()
@@ -206,11 +261,9 @@ class MoriProgramAdmissionController:
         # Keep both those bindings and the generation intact until the cache ACK.
         if not self.runtime.release_program(ref):
             return False
-        for attempt, admission in tuple(self._pending.items()):
-            if admission.program == ref:
-                self._pending.pop(attempt)
-                self._admitted.pop(attempt, None)
-                admission.reply.set_result(False)
+        for attempt, group in self._attempts.items():
+            if group.program == ref and not group.admitted:
+                self._cancel_waiting(attempt, group)
         self._flush_and_publish()
         return True
 
@@ -233,10 +286,12 @@ class MoriProgramAdmissionController:
         for entry, _ in self.runtime.consume_admitted_requests():
             self._admitted[entry.request_id] = None
         for attempt in self._admitted:
-            admission = self._pending.pop(attempt, None)
-            if admission is not None:
-                self._ready[attempt] = (admission.program, admission.native_count)
-                admission.reply.set_result(True)
+            group = self._attempts[attempt]
+            group.admitted = True
+            for request, native_add in group.waiting.values():
+                request._mori_program_ref = group.program
+                native_add(request)
+            group.waiting.clear()
         self._admitted.clear()
         return applied
 
