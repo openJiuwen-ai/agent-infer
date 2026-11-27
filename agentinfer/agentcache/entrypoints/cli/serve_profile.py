@@ -261,10 +261,8 @@ def _import_make_arg_parser():
 def _setup_cli_env() -> None:
     """Apply the upstream CLI's environment defaults, as the delegating entrypoint would."""
 
-    try:
-        from vllm.entrypoints.utils import cli_env_setup
-    except ImportError:
-        return
+    from vllm.entrypoints.serve.utils.api_utils import cli_env_setup
+
     cli_env_setup()
 
 

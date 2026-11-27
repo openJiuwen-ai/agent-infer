@@ -5,17 +5,17 @@ Progress-TTL controller. Run it on Linux or WSL 2 with a CUDA GPU that supports 
 
 ## 1. Prepare the vLLM Environment
 
-Create or activate the Python environment that runs vLLM. AgentInfer supports Python 3.10 or later and vLLM 0.23.0:
+Create or activate the Python environment that runs vLLM. AgentInfer supports Python 3.10 or later and vLLM 0.31.0:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install "vllm==0.23.0"
+python -m pip install "vllm==0.31.0"
 ```
 
 If your CUDA environment requires a platform-specific vLLM installation, follow the
-[vLLM installation guide](https://docs.vllm.ai/en/latest/getting_started/installation/) and install version `0.23.0`.
+[vLLM installation guide](https://docs.vllm.ai/en/latest/getting_started/installation/) and install version `0.31.0`.
 
 ## 2. Install AgentInfer
 
@@ -27,12 +27,7 @@ cd agent-infer
 python -m pip install -e .
 ```
 
-For a release deployment, download the [AgentInfer 0.2.0 wheel][release-wheel], activate the target vLLM environment,
-and run:
-
-```bash
-python -m pip install agentinfer-0.2.0-py3-none-any.whl
-```
+For an existing vLLM 0.23.0 deployment, use the published [AgentInfer 0.2.0 wheel][release-wheel] in that environment.
 
 ## 3. Start vLLM
 

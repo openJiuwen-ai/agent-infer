@@ -1,6 +1,6 @@
 # 接入 vLLM
 
-本指南将当前 AgentInfer 服务栈接入已有的 vLLM 0.23.0 部署。AgentInfer 必须与 vLLM 安装在同一 Python
+本指南将当前 AgentInfer 服务栈接入已有的 vLLM 0.31.0 部署。AgentInfer 必须与 vLLM 安装在同一 Python
 环境中。
 
 ## 将 AgentInfer 安装到 vLLM 环境
@@ -11,11 +11,7 @@
 python -m pip install -e .
 ```
 
-发布部署时，下载 [AgentInfer 0.2.0 wheel][release-wheel]，然后执行：
-
-```bash
-python -m pip install agentinfer-0.2.0-py3-none-any.whl
-```
+已有 vLLM 0.23.0 部署可在原环境中使用已发布的 [AgentInfer 0.2.0 wheel][release-wheel]。
 
 确认两个包由同一解释器加载：
 
@@ -23,7 +19,7 @@ python -m pip install agentinfer-0.2.0-py3-none-any.whl
 python -c "import agentinfer, vllm; print(vllm.__version__)"
 ```
 
-命令应输出 `0.23.0`。
+命令应输出 `0.31.0` 或同版本的平台构建号，例如 `0.31.0+cu129`。
 
 ## 配置生命周期传输
 

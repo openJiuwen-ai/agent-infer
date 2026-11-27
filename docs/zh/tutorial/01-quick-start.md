@@ -5,17 +5,17 @@ Linux 或 WSL 2 中运行，并准备能够运行所选模型的 CUDA GPU。
 
 ## 1. 准备 vLLM 环境
 
-创建或激活运行 vLLM 的 Python 环境。AgentInfer 支持 Python 3.10 或更高版本以及 vLLM 0.23.0：
+创建或激活运行 vLLM 的 Python 环境。AgentInfer 支持 Python 3.10 或更高版本以及 vLLM 0.31.0：
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install "vllm==0.23.0"
+python -m pip install "vllm==0.31.0"
 ```
 
 如果 CUDA 环境需要特定平台的安装方式，请按
-[vLLM 安装指南](https://docs.vllm.ai/en/latest/getting_started/installation/)安装 `0.23.0` 版本。
+[vLLM 安装指南](https://docs.vllm.ai/en/latest/getting_started/installation/)安装 `0.31.0` 版本。
 
 ## 2. 安装 AgentInfer
 
@@ -27,11 +27,7 @@ cd agent-infer
 python -m pip install -e .
 ```
 
-发布环境中，下载 [AgentInfer 0.2.0 wheel][release-wheel]，激活目标 vLLM 环境并执行：
-
-```bash
-python -m pip install agentinfer-0.2.0-py3-none-any.whl
-```
+已有 vLLM 0.23.0 部署可在原环境中使用已发布的 [AgentInfer 0.2.0 wheel][release-wheel]。
 
 ## 3. 启动 vLLM
 

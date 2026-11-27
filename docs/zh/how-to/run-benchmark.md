@@ -8,7 +8,7 @@ Progress-TTL Agent 感知调度器。BenchKit 通过相同的 Request Proxy 记�
 
 需要以下环境：
 
-- Linux、Python 3.10 或更高版本，以及 vLLM 0.23.0。
+- Linux、Python 3.10 或更高版本，以及 vLLM 0.31.0。
 - 可运行目标模型的 CUDA GPU；默认脚本使用两个张量并行进程。
 - Claude Code、tmux 和 Git，并已完成 Claude Code 身份验证。
 - 支持 Anthropic `POST /v1/messages` 的模型。
@@ -31,7 +31,7 @@ Claude 启动时，框架会在工作区信任提示中选择 `Yes, I trust this
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "vllm==0.23.0"
+python -m pip install "vllm==0.31.0"
 python -m pip install -e .
 ```
 

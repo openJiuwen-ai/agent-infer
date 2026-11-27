@@ -1,6 +1,6 @@
 # Python API 参考
 
-本文记录 AgentInfer 与 vLLM 0.23.0 的公开集成接口。vLLM 自身 API 的完整参数以对应版本的 vLLM 文档为准。
+本文记录 AgentInfer 与 vLLM 0.31.0 的公开集成接口。vLLM 自身 API 的完整参数以对应版本的 vLLM 文档为准。
 
 当前服务路径使用显式的 Agent 感知调度器、API 中间件和内嵌 Progress-TTL 控制器。
 

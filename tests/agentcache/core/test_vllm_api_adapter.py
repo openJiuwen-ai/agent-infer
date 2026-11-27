@@ -72,7 +72,7 @@ def test_anthropic_bridge_without_replay_sampling_keeps_vllm_defaults() -> None:
         }
     )
 
-    chat_request = AnthropicServingMessages._convert_anthropic_to_openai_request(anthropic_request)
+    chat_request = AnthropicServingMessages.to_chat_completion_request(anthropic_request)
 
     assert chat_request.seed is None
     assert chat_request.min_tokens == 0
@@ -301,7 +301,7 @@ def test_identity_middleware_carries_anthropic_headers_to_internal_vllm_xargs() 
     assert adapted_payload["metadata"]["caller"] == "benchkit"
     assert "vllm_xargs" not in adapted_payload
     anthropic_request = AnthropicMessagesRequest.model_validate(adapted_payload)
-    chat_request = AnthropicServingMessages._convert_anthropic_to_openai_request(anthropic_request)
+    chat_request = AnthropicServingMessages.to_chat_completion_request(anthropic_request)
     assert chat_request.seed == 7
     assert chat_request.min_tokens == 8
     assert chat_request.ignore_eos is True

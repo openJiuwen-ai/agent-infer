@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 
+import argparse
 import subprocess
 import sys
 import types
@@ -9,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from agentinfer.agentcache.entrypoints.bench import _normalize_delegated_argv
-from agentinfer.agentcache.entrypoints.cli import main as cli_main
+from agentinfer.agentcache.entrypoints.cli import main as cli_main, serve_profile
 from tests.helpers.marks import test_marks
 
 pytestmark = test_marks(hardware="cpu", ci="ready")
@@ -42,15 +43,9 @@ def test_serve_takeover_conflict_exits_with_code_2(
         parser.add_argument("--scheduler-cls", dest="scheduler_cls", default=None)
         return parser
 
-    cli_args = types.ModuleType("vllm.entrypoints.openai.cli_args")
-    cli_args.make_arg_parser = make_arg_parser
-    for name, module in {
-        "vllm": types.ModuleType("vllm"),
-        "vllm.entrypoints": types.ModuleType("vllm.entrypoints"),
-        "vllm.entrypoints.openai": types.ModuleType("vllm.entrypoints.openai"),
-        "vllm.entrypoints.openai.cli_args": cli_args,
-    }.items():
-        monkeypatch.setitem(sys.modules, name, module)
+    monkeypatch.setattr(serve_profile, "_setup_cli_env", lambda: None)
+    monkeypatch.setattr(serve_profile, "_import_make_arg_parser", lambda: make_arg_parser)
+    monkeypatch.setattr(serve_profile, "_build_parser", argparse.ArgumentParser)
 
     assert cli_main.main(["vllm", "serve", "MODEL", "--agentinfer", "--scheduler-cls", "other.Other"]) == 2
     assert "--scheduler-cls" in capsys.readouterr().err

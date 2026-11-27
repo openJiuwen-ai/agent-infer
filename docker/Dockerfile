@@ -18,7 +18,7 @@ RUN git init . \
  && pnpm --filter @zcode/cli... build \
  && test "$(node apps/zcode-cli/packages/cli/dist/zcode.cjs --version)" = "0.17.1"
 
-FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/vllm/vllm-openai:v0.23.0
+FROM vllm/vllm-openai:v0.31.0-cu129
 ARG PIP_INDEX_URL
 
 # Unit tests create throwaway repos with `git init` / `git commit`.

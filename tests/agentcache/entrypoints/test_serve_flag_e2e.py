@@ -5,7 +5,7 @@ E2E test for `vllm serve MODEL --agentinfer` through the installed vllm entrypoi
 
 - Launches the single-flag AgentInfer serving path in a subprocess
 - Waits for /health readiness
-- Sends completions through the OpenAI-compatible API
+- Exercises OpenAI and Anthropic requests, including a streaming disconnect
 - Verifies the injection banner and the lifecycle socket
 - Verifies conflicting flags exit with code 2 before engine startup
 """
@@ -24,6 +24,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import httpx
 import pytest
 
 from tests.helpers.marks import test_marks
@@ -137,10 +138,11 @@ def _print_server_log(log_file: Path, *, header: str) -> None:
     print(f"===== end {header} ({len(content)} bytes) =====\n", file=sys.stderr, flush=True)
 
 
-@pytest.fixture(scope="module")
-def server(tmp_path_factory: pytest.TempPathFactory):
-    """Launch `vllm serve MODEL --agentinfer`, yield (port, log_file, socket), then shutdown."""
-    workdir = tmp_path_factory.mktemp("agentinfer-serve-e2e")
+@pytest.fixture(scope="module", params=("async", "sync"))
+def server(tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureRequest):
+    """Launch the AgentInfer service in each scheduling mode."""
+    mode = request.param
+    workdir = tmp_path_factory.mktemp(f"agentinfer-serve-{mode}")
     log_file = workdir / "server.log"
     lifecycle_socket = workdir / "lifecycle.sock"
     port = _get_open_port()
@@ -165,6 +167,8 @@ def server(tmp_path_factory: pytest.TempPathFactory):
         "0.5",
         "--no-enable-prefix-caching",
     ]
+    if mode == "sync":
+        cmd.append("--no-async-scheduling")
 
     print(
         f"\n===== starting vllm serve (model={MODEL}, port={port}) =====\ncmd: {' '.join(cmd)}\n",
@@ -191,7 +195,7 @@ def server(tmp_path_factory: pytest.TempPathFactory):
         _print_server_log(log_file, header="server failed to start; full log")
         pytest.fail(f"server failed to start; full log printed above ({log_file})")
 
-    yield port, str(log_file), str(lifecycle_socket)
+    yield port, str(log_file), str(lifecycle_socket), mode
     _shutdown(proc)
     _finish_tee(tee, tee_errors)
     _print_server_log(log_file, header="server shutdown; full log")
@@ -199,24 +203,25 @@ def server(tmp_path_factory: pytest.TempPathFactory):
 
 def test_injection_banner_logged(server):
     """The takeover prints the injected scheduler bridge and middleware to stderr."""
-    _, log_file, _ = server
+    _, log_file, _, mode = server
     with open(log_file) as f:
         content = f.read()
     assert "[agentinfer] --agentinfer injected:" in content
-    assert "AgentCacheAsyncSchedulerBridge" in content
+    bridge = "AgentCacheAsyncSchedulerBridge" if mode == "async" else "AgentCacheSyncSchedulerBridge"
+    assert bridge in content
     assert "AgentCacheLifecycleMiddleware" in content
 
 
 def test_lifecycle_socket_bound(server):
     """The injected lifecycle middleware binds the configured unix socket."""
-    _, _, lifecycle_socket = server
+    _, _, lifecycle_socket, _ = server
     rank_socket = f"{lifecycle_socket}.dp0"
     assert os.path.exists(rank_socket), f"lifecycle socket {rank_socket} was not created"
 
 
 def test_completion(server):
     """A completion request round-trips through the AgentInfer serving path."""
-    port, _, _ = server
+    port, _, _, _ = server
     body = _post_json(
         port,
         "/v1/completions",
@@ -227,7 +232,7 @@ def test_completion(server):
 
 def test_chat_completion(server):
     """A chat completion request round-trips through the AgentInfer serving path."""
-    port, _, _ = server
+    port, _, _, _ = server
     body = _post_json(
         port,
         "/v1/chat/completions",
@@ -239,6 +244,58 @@ def test_chat_completion(server):
         },
     )
     assert body["choices"] and body["choices"][0]["message"]["content"]
+
+
+def test_anthropic_sampling_parameters(server):
+    port, _, _, _ = server
+    with httpx.Client(base_url=f"http://localhost:{port}", timeout=60, trust_env=False) as client:
+        response = client.post(
+            "/v1/messages",
+            headers={"anthropic-version": "2023-06-01", "x-claude-code-session-id": "anthropic-smoke"},
+            json={
+                "model": MODEL,
+                "messages": [{"role": "user", "content": "Say hello."}],
+                "max_tokens": 8,
+                "metadata": {"_agentinfer_replay_sampling": {"seed": 7, "min_tokens": 8, "ignore_eos": True}},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["usage"]["output_tokens"] == 8
+
+
+def test_streaming_disconnect_leaves_the_engine_healthy(server):
+    port, _, _, _ = server
+    with httpx.Client(base_url=f"http://localhost:{port}", timeout=60, trust_env=False) as client:
+        with client.stream(
+            "POST",
+            "/v1/completions",
+            json={
+                "model": MODEL,
+                "prompt": "Count the natural numbers from one to a thousand:",
+                "max_tokens": 256,
+                "min_tokens": 256,
+                "ignore_eos": True,
+                "stream": True,
+            },
+        ) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line.startswith("data: ") or line == "data: [DONE]":
+                    continue
+                choices = json.loads(line[6:])["choices"]
+                if choices and choices[0]["text"]:
+                    assert choices[0]["finish_reason"] is None
+                    break
+            else:
+                pytest.fail("no generated token before the stream closed")
+
+        followup = client.post(
+            "/v1/completions",
+            json={"model": MODEL, "prompt": "Hello, my name is", "max_tokens": 4},
+        )
+        assert followup.status_code == 200, followup.text
+        assert followup.json()["choices"][0]["text"]
 
 
 def test_conflicting_scheduler_cls_exits_before_engine_startup():

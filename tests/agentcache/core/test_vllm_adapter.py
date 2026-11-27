@@ -6,12 +6,15 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from vllm import SamplingParams
 from vllm.v1.core.sched.async_scheduler import AsyncScheduler
 from vllm.v1.core.sched.scheduler import Scheduler
 from vllm.v1.engine import EngineCoreEvent, EngineCoreEventType
+from vllm.v1.request import Request, RequestStatus
 
 from agentinfer.agentcache.core.scheduler import (
     AgentCacheAsyncSchedulerBridge,
+    AgentCacheSyncSchedulerBridge,
     _metadata_from_request,
     _VllmAdmissionHooks,
 )
@@ -30,6 +33,7 @@ class _Controller:
         self.pool: RequestPool[object] = RequestPool()
         self.schedule_calls = 0
         self.completed: list[tuple[str, int]] = []
+        self.cancelled: list[str] = []
         self.prefix_observations: list[tuple[str, int, int | None]] = []
         self.recovery_observations: list[tuple[int, float]] = []
         self.prefix_candidates: list[tuple[str, object]] = []
@@ -78,6 +82,7 @@ class _Controller:
         self.completed.append((request_id, total_tokens))
 
     def cancel_request(self, request_id):
+        self.cancelled.append(request_id)
         return self.pool.cancel(request_id)
 
 
@@ -102,7 +107,7 @@ def test_async_bridge_builds_progress_ttl_controller_directly() -> None:
     def initialize(scheduler, *args, **kwargs) -> None:
         scheduler.waiting = []
         scheduler.running = []
-        scheduler.skipped_waiting = []
+        scheduler.kv_holding_waiting = []
         scheduler.requests = {}
         scheduler.kv_cache_manager = None
 
@@ -159,10 +164,6 @@ def test_async_bridge_retains_then_releases_to_native_waiting() -> None:
     def initialize(scheduler, *args, **kwargs) -> None:
         scheduler.waiting = object()
         scheduler.requests = {}
-        scheduler.kv_cache_manager = SimpleNamespace(
-            prefix_cache_lookup_enabled=lambda request: True,
-            coordinator=SimpleNamespace(find_longest_cache_hit=lambda hashes, maximum: ((), 48)),
-        )
 
     def native_add(scheduler, request) -> None:
         request.events.append(EngineCoreEvent.new_event(EngineCoreEventType.QUEUED, 10.0))
@@ -196,7 +197,6 @@ def test_async_bridge_retains_then_releases_to_native_waiting() -> None:
         assert isinstance(controller, _Controller)
         native_waiting = bridge.waiting
         bridge.add_request(request)
-        controller.prefix_candidates.append(("request-1", request))
 
         assert native_requests == []
         assert bridge.get_num_unfinished_requests() == 1
@@ -233,7 +233,7 @@ def test_prefix_lookup_observer_captures_ref_counts_before_native_allocation() -
 
     def native_get_computed_blocks(request):
         native_calls.append(request.request_id)
-        return computed, 64
+        return computed, 64, 128
 
     owner = SimpleNamespace(
         kv_cache_manager=SimpleNamespace(get_computed_blocks=native_get_computed_blocks),
@@ -246,9 +246,29 @@ def test_prefix_lookup_observer_captures_ref_counts_before_native_allocation() -
 
     returned = owner.kv_cache_manager.get_computed_blocks(SimpleNamespace(request_id="request-1"))
 
-    assert returned == (computed, 64)
+    assert returned == (computed, 64, 128)
     assert native_calls == ["request-1"]
     assert hooks._local_prefix_observations == {"request-1": (64, 32)}
+
+
+@pytest.mark.parametrize("uncached_common_prefix_tokens", [0, 32])
+def test_retained_prefix_observation_uses_only_cached_tokens(uncached_common_prefix_tokens: int) -> None:
+    request = SimpleNamespace(block_hashes=[], num_tokens=97)
+    controller = _Controller()
+    controller.prefix_candidates.append(("request-1", request))
+    hooks = object.__new__(_VllmAdmissionHooks)
+    hooks.controller = controller
+    owner = SimpleNamespace(
+        kv_cache_manager=SimpleNamespace(
+            coordinator=SimpleNamespace(
+                find_longest_cache_hit=lambda hashes, maximum: ((), 64, uncached_common_prefix_tokens),
+            ),
+        ),
+    )
+
+    hooks._observe_retained_prefix_cache(owner)
+
+    assert controller.prefix_observations == [("request-1", 64, None)]
 
 
 def test_async_bridge_rejects_obsolete_configured_rank_count() -> None:
@@ -302,7 +322,8 @@ def test_async_bridge_reports_running_usage_and_native_waiting_token_estimate() 
 
     def initialize(scheduler, *args, **kwargs) -> None:
         scheduler.waiting = [SimpleNamespace(num_tokens=120), SimpleNamespace(num_tokens=80)]
-        scheduler.skipped_waiting = [SimpleNamespace(num_tokens=40)]
+        scheduler.kv_holding_waiting = [SimpleNamespace(num_tokens=40)]
+        scheduler.deferred_waiting = tuple(scheduler.waiting)
         scheduler.kv_cache_manager = SimpleNamespace(usage=lambda: 0.5)
 
     with (
@@ -356,9 +377,11 @@ def test_async_bridge_rejects_invalid_adapter_settings(settings: dict[str, objec
             AgentCacheAsyncSchedulerBridge(config, SimpleNamespace(num_blocks=10), object(), 16, 16)
 
 
-def test_async_bridge_reports_native_abort_as_completion_without_failure_semantics() -> None:
+@pytest.mark.parametrize("async_scheduling", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("abort_all", [False, True], ids=["selected", "all"])
+def test_bridge_finishes_native_and_retained_requests(async_scheduling: bool, abort_all: bool) -> None:
     config = SimpleNamespace(
-        scheduler_config=SimpleNamespace(async_scheduling=True),
+        scheduler_config=SimpleNamespace(async_scheduling=async_scheduling),
         parallel_config=SimpleNamespace(data_parallel_index=0),
         additional_config={
             "agentcache": {
@@ -366,29 +389,49 @@ def test_async_bridge_reports_native_abort_as_completion_without_failure_semanti
             }
         },
     )
-    native_request = SimpleNamespace(num_tokens=123)
+    native_request = Request("native", [1, 2, 3], SamplingParams(max_tokens=8), None, client_index=3)
+    retained_request = Request("retained", [1, 2], SamplingParams(max_tokens=8), None, client_index=7)
+    finished_status = RequestStatus.FINISHED_ABORTED
+    selected_ids = ("retained", "native", "retained")
+    native_request_ids = None if abort_all else selected_ids
+    native_parent = AsyncScheduler if async_scheduling else Scheduler
+    bridge_cls = AgentCacheAsyncSchedulerBridge if async_scheduling else AgentCacheSyncSchedulerBridge
 
     def initialize(scheduler, *args, **kwargs) -> None:
-        scheduler.waiting = []
+        scheduler.waiting = [native_request]
         scheduler.running = []
-        scheduler.skipped_waiting = []
-        scheduler.requests = {"request-1": native_request}
+        scheduler.kv_holding_waiting = []
+        scheduler.requests = {native_request.request_id: native_request}
+
+    def finish_native(scheduler, request_ids, status) -> list[Request]:
+        assert status == finished_status
+        assert request_ids == native_request_ids
+        request = scheduler.requests.pop(native_request.request_id, None)
+        if request is None:
+            return []
+        request.status = status
+        return [request]
 
     with (
         _patch_controller_build(),
-        patch.object(AsyncScheduler, "__init__", initialize),
-        patch.object(
-            Scheduler,
-            "finish_requests",
-            return_value=[("request-1", 3)],
-        ),
+        patch.object(native_parent, "__init__", initialize),
+        patch.object(Scheduler, "get_request_counts", return_value=(0, 1)),
+        patch.object(Scheduler, "finish_requests", finish_native),
     ):
-        bridge = AgentCacheAsyncSchedulerBridge(config, SimpleNamespace(num_blocks=10), object(), 16, 16)
+        bridge = bridge_cls(config, SimpleNamespace(num_blocks=10), object(), 16, 16)
         controller = bridge._agentcache.controller
         assert isinstance(controller, _Controller)
-        bridge._agentcache.tracked_native.add("request-1")
-        finished = bridge.finish_requests("request-1", object())
+        controller.pool.add(RequestPoolEntry("retained", None, 1.0, retained_request))
+        bridge._agentcache.tracked_native.add("native")
+        bridge._agentcache._local_prefix_observations["native"] = (2, 1)
+        finished = bridge.finish_requests(None if abort_all else iter(selected_ids), finished_status)
+        assert bridge.finish_requests(None if abort_all else iter(selected_ids), finished_status) == []
 
-    assert finished == [("request-1", 3)]
-    assert controller.completed == [("request-1", 123)]
+    assert finished == [retained_request, native_request]
+    assert [(request.request_id, request.client_index) for request in finished] == [("retained", 7), ("native", 3)]
+    assert all(request.status == finished_status for request in finished)
+    assert controller.completed == [("native", 3)]
+    assert controller.cancelled == ["retained"]
+    assert controller.retained_request_count == 0
     assert bridge._agentcache.tracked_native == set()
+    assert bridge._agentcache._local_prefix_observations == {}

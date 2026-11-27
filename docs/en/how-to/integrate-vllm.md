@@ -1,6 +1,6 @@
 # Integrate with vLLM
 
-This guide adds the current AgentInfer serving stack to an existing vLLM 0.23.0 deployment. AgentInfer and vLLM must
+This guide adds the current AgentInfer serving stack to an existing vLLM 0.31.0 deployment. AgentInfer and vLLM must
 be installed in the same Python environment.
 
 ## Install AgentInfer into the vLLM Environment
@@ -11,11 +11,7 @@ For a source checkout, activate the environment used by the vLLM service and ins
 python -m pip install -e .
 ```
 
-For a release deployment, download the [AgentInfer 0.2.0 wheel][release-wheel], then run:
-
-```bash
-python -m pip install agentinfer-0.2.0-py3-none-any.whl
-```
+For an existing vLLM 0.23.0 deployment, use the published [AgentInfer 0.2.0 wheel][release-wheel] in that environment.
 
 Confirm that both packages resolve from the same interpreter:
 
@@ -23,7 +19,7 @@ Confirm that both packages resolve from the same interpreter:
 python -c "import agentinfer, vllm; print(vllm.__version__)"
 ```
 
-The command should print `0.23.0`.
+The command should print `0.31.0` or a platform build of that version, such as `0.31.0+cu129`.
 
 ## Configure Lifecycle Transport
 
