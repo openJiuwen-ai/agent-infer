@@ -7,12 +7,19 @@ from __future__ import annotations
 import hashlib
 import json
 from enum import Enum
+from functools import cache
+from typing import get_type_hints
 
+ATTEMPT_ARG = "agentinfer_mori_attempt"
+PROGRAM_ARG = "mori_program_id"
+CONTEXT_CHARS_ARG = "agentinfer_mori_context_chars"
+PREFIX_ARG = "agentinfer_mori_prefix_key"
+CHILD_COUNT_ARG = "agentinfer_mori_child_count"
+RESERVED_ARGS = frozenset((ATTEMPT_ARG, PROGRAM_ARG, CONTEXT_CHARS_ARG, PREFIX_ARG, CHILD_COUNT_ARG))
 UTILITY_METHOD = "agentinfer_program_scheduling"
 
 
 class Event(str, Enum):
-    BEGIN = "begin"
     PROGRESS = "progress"
     FINISH = "finish"
     CANCEL = "cancel"
@@ -22,8 +29,7 @@ class Event(str, Enum):
 def chat_facts(payload: dict) -> tuple[int, str]:
     """Port ThunderAgent router._prefix_group_key and its pre-template JSON size.
 
-    Extract the facts in the API process so the Core can receive a compact
-    admission message ahead of vLLM's native request.
+    Extract the original Chat facts before template rendering and tokenization.
     """
     parts = []
     for message in payload.get("messages") or ():
@@ -51,8 +57,6 @@ def chat_facts(payload: dict) -> tuple[int, str]:
 
 def handle_event(admission, name: str, args: list):
     event = Event(name)
-    if event is Event.BEGIN:
-        return admission.begin(*args)
     if event is Event.PROGRESS:
         return admission.progress(*args)
     if event is Event.FINISH:
@@ -60,6 +64,28 @@ def handle_event(admission, name: str, args: list):
     if event is Event.CANCEL:
         return admission.cancel(*args)
     return admission.release(*args)
+
+
+@cache
+def _finish_returns_requests() -> bool:
+    from vllm.v1.core.sched.scheduler import Scheduler
+    from vllm.v1.request import Request
+
+    # The Core pause/shutdown consumer uses the scheduler's native finish ABI.
+    return get_type_hints(Scheduler.finish_requests)["return"] == list[Request]
+
+
+def native_finished_requests(requests: list) -> list:
+    """Return retained aborts in the same format as vLLM Scheduler.finish_requests."""
+    if not requests or _finish_returns_requests():
+        return requests
+    return [(request.request_id, request.client_index) for request in requests]
+
+
+def send_retained_aborts(core, admission) -> None:
+    requests = admission.take_aborted_requests()
+    if requests:
+        core._send_abort_outputs(native_finished_requests(requests))
 
 
 def install_core_utility() -> None:
@@ -70,7 +96,10 @@ def install_core_utility() -> None:
         admission = self.scheduler._agentcache.program_admission
         if admission is None:
             raise RuntimeError("EngineCore has no Program scheduling host")
-        return handle_event(admission, name, args)
+        result = handle_event(admission, name, args)
+        if name in (Event.CANCEL, Event.RELEASE, Event.FINISH):
+            send_retained_aborts(self, admission)
+        return result
 
     def diagnostics(self, action):
         scheduler = self.scheduler

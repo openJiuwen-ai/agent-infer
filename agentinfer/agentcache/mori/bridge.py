@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 """Install Program admission on the synchronous or asynchronous MORI engine."""
 
+from vllm.v1.request import RequestStatus
+
 from agentinfer.agentcache.core.scheduler import _VllmAdmissionHooks
 from agentinfer.agentcache.mori.program_cache import HiRadixProgramCache
 from agentinfer.agentcache.mori.scheduler import MoriAsyncScheduler, MoriScheduler
@@ -30,7 +32,7 @@ class _MoriProgramAdmissionMixin:
     def shutdown(self):
         try:
             if self._agentcache is not None:
-                self._agentcache.program_admission.cancel_gates()
+                self._agentcache.program_admission.finish_requests(None, RequestStatus.FINISHED_ABORTED)
         finally:
             if self.program_cache_adapter is not None:
                 self.program_cache_adapter.tree.placement.current_ref = None

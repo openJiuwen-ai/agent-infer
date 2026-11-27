@@ -142,7 +142,7 @@ def _mori_chat_frames(send, payload):
 
 
 class MORIDirectMiddleware(MoriSchedulingMiddleware):
-    """Admit native Chat through the local MORI controller and adapt its wire format."""
+    """Prepare native Chat for MORI ADD and adapt its wire format."""
 
     sglang_text_chat = False
     unseeded_chat = False
@@ -166,7 +166,7 @@ class MORIDirectMiddleware(MoriSchedulingMiddleware):
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] != "http":
-            await self.app(scope, receive, send)
+            await super().__call__(scope, receive, send)
             return
         path, method = get_route_path(scope), scope["method"]
         if path.rstrip("/") in _LEGACY_CONTROL:

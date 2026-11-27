@@ -18,11 +18,11 @@ from vllm.v1.engine import EngineCoreRequestType
 from vllm.v1.engine.core import EngineCore, EngineCoreProc
 from vllm.v1.request import Request, RequestStatus
 
-from agentinfer.agentcache.mori.admission import ATTEMPT_ARG, InvalidMoriAdmission, ProgramOperation
+from agentinfer.agentcache.mori.admission import InvalidMoriAdmission, ProgramOperation
 from agentinfer.agentcache.mori.block_pool import MoriBlockPool
 from agentinfer.agentcache.mori.bridge import MoriAsyncSchedulerBridge, MoriSyncSchedulerBridge
 from agentinfer.agentcache.mori.hiradix import HiRadix
-from agentinfer.agentcache.mori.ipc import UTILITY_METHOD
+from agentinfer.agentcache.mori.ipc import ATTEMPT_ARG, CHILD_COUNT_ARG, CONTEXT_CHARS_ARG, PREFIX_ARG, UTILITY_METHOD
 from agentinfer.agentcache.mori.kv_cache_manager import MoriKVCacheManager
 from agentinfer.agentcache.mori.programs import PROGRAM_ARG, CacheClass, request_program
 from agentinfer.agentcache.mori.scheduler import MoriScheduler
@@ -66,6 +66,19 @@ def native(rid, extra):
     return Request(rid, list(range(12)), SamplingParams(extra_args=extra), None)
 
 
+def chat(rid, attempt, program_id, chars=100, n=1):
+    return native(
+        rid,
+        {
+            ATTEMPT_ARG: attempt,
+            PROGRAM_ARG: program_id,
+            CONTEXT_CHARS_ARG: chars,
+            PREFIX_ARG: "_empty_",
+            CHILD_COUNT_ARG: n,
+        },
+    )
+
+
 def publish(owner, request, page_key):
     manager = owner.kv_cache_manager
     pool = manager.block_pool
@@ -84,20 +97,18 @@ def test_old_dispatch_after_release_and_retry_cannot_claim_reused_pages(schedule
     handle = getattr(EngineCore, UTILITY_METHOD)
     tree = scheduler.tree_cache
     adapter = scheduler.program_cache_adapter
-    assert handle(core, "begin", ["old", "p", 100, "_empty_", 2]).result()
-    first = native("first-child", {PROGRAM_ARG: "p", ATTEMPT_ARG: "old"})
+    first = chat("first-child", "old", "p", n=2)
     scheduler.add_request(first)
     old = request_program(first)
     tree.stamp_prefill(None, old)
     publish(scheduler, first, b"first")
     assert handle(core, "release", ["p"])
-    assert handle(core, "begin", ["new", "p", 100, "_empty_"]).result()
-    replacement = native("new-child", {PROGRAM_ARG: "p", ATTEMPT_ARG: "new"})
+    replacement = chat("new-child", "new", "p")
     scheduler.add_request(replacement)
     current = request_program(replacement)
     tree.stamp_prefill(None, current)
     assert current.generation == old.generation + 1
-    late = native("late-child", {PROGRAM_ARG: "p", ATTEMPT_ARG: "old"})
+    late = chat("late-child", "old", "p", n=2)
     scheduler.add_request(late)
     assert request_program(late) == old
     assert list(scheduler.waiting) == [first, replacement, late]
@@ -129,13 +140,14 @@ def test_unmanaged_native_add_and_expired_dispatch_do_not_change_ownership(sched
     scheduler.add_request(unsigned)
     publish(scheduler, unsigned, b"unsigned")
     assert scheduler.tree_cache.pages[b"unsigned"].program is None
-    assert bridge.begin("attempt", "owner", 100, "_empty_").result()
-    forged = native("wrong", {PROGRAM_ARG: "other", ATTEMPT_ARG: "attempt"})
+    actual = chat("matching", "attempt", "owner", n=2)
+    scheduler.add_request(actual)
+    forged = chat("wrong", "attempt", "other", n=2)
     with pytest.raises(InvalidMoriAdmission):
         scheduler.add_request(forged)
-    actual = native("matching", {PROGRAM_ARG: "owner", ATTEMPT_ARG: "attempt"})
-    scheduler.add_request(actual)
-    assert request_program(actual) == bridge.runtime.registry.current_ref("owner")
+    sibling = chat("sibling", "attempt", "owner", n=2)
+    scheduler.add_request(sibling)
+    assert request_program(actual) == request_program(sibling) == bridge.runtime.registry.current_ref("owner")
 
     aborts = []
     core = SimpleNamespace(
@@ -143,45 +155,51 @@ def test_unmanaged_native_add_and_expired_dispatch_do_not_change_ownership(sched
         add_request=lambda req, wave: scheduler.add_request(req),
         _send_abort_outputs_to_client=lambda ids, index: aborts.append((ids, index)),
     )
-    expired = native("expired", {PROGRAM_ARG: "owner", ATTEMPT_ARG: "attempt"})
+    expired = chat("expired", "attempt", "owner", n=2)
     EngineCoreProc._handle_client_request(core, EngineCoreRequestType.ADD, (expired, 0))
     assert aborts == [(["expired"], 0)]
-    assert set(scheduler.requests) == {"matching", "unsigned"}
+    assert set(scheduler.requests) == {"matching", "sibling", "unsigned"}
 
 
-def test_periodic_placement_and_abort_all_use_real_pool_capacity(scheduler, monkeypatch):
+def test_periodic_placement_and_retained_abort_use_real_pool_capacity(scheduler, monkeypatch):
     core = SimpleNamespace(scheduler=scheduler)
     clock = SimpleNamespace(now=1.0)
     monkeypatch.setattr(runtime, "time", SimpleNamespace(monotonic=lambda: clock.now))
     config = EngineCore.agentinfer_mori_diagnostics(core, "metrics")["backends"]["vllm-local"]["cache_config"]
     assert config == {"total_tokens_capacity": 300, "cpu_total_tokens_capacity": 160}
     bridge = scheduler._agentcache.program_admission
-    assert bridge.begin("first", "A", 500, "_empty_").result()
+    scheduler.add_request(chat("first", "first", "A", 500))
     clock.now = 2.0
     bridge.finish("first", 160, 100, 0)
-    pending = bridge.begin("next", "B", 500, "_empty_")
-    assert not pending.done()
+    req = chat("next", "next", "B", 500)
+    scheduler.add_request(req)
+    assert "next" not in scheduler.requests
     clock.now = 4.0
     assert bridge.tick()
-    assert pending.result()
+    assert scheduler.requests["next"] is req
     assert scheduler.tree_cache.placement.type_for_id("A") is CacheClass.IDLE
     assert scheduler.tree_cache.placement.type_for_id("B") is CacheClass.BUSY
 
-    pending = bridge.begin("queued", "C", 10000, "_empty_")
-    assert not pending.done()
-    assert scheduler.finish_requests(None, RequestStatus.FINISHED_ABORTED) == []
-    assert pending.result() is False
-    assert bridge.attach("next") is None
+    pending = chat("queued", "queued", "C", 10000)
+    scheduler.add_request(pending)
+    assert "queued" not in scheduler.requests
+    # Report a retained v0.31 Request to the native pause/abort consumer.
+    assert scheduler.finish_requests(["queued"], RequestStatus.FINISHED_ABORTED) == [pending]
+    assert not bridge.take_aborted_requests()
+    assert not bridge.tick()
+    assert "queued" not in scheduler.requests
 
 
 def test_partial_placement_retry_on_real_tree_and_release_after_cold_demotion(scheduler, monkeypatch):
     clock = SimpleNamespace(now=1.0)
     monkeypatch.setattr(runtime, "time", SimpleNamespace(monotonic=lambda: clock.now))
     bridge = scheduler._agentcache.program_admission
-    assert bridge.begin("a", "A", 500, "_empty_").result()
+    scheduler.add_request(chat("a", "a", "A", 500))
     clock.now = 2.0
     bridge.finish("a", 160, 100, 0)
-    pending = bridge.begin("b", "B", 500, "_empty_")
+    pending = chat("b", "b", "B", 500)
+    scheduler.add_request(pending)
+    assert "b" not in scheduler.requests
     cache = scheduler.program_cache_adapter
     apply = cache.apply_program_ops
     applied = []
@@ -195,9 +213,9 @@ def test_partial_placement_retry_on_real_tree_and_release_after_cold_demotion(sc
 
     monkeypatch.setattr(cache, "apply_program_ops", apply_with_interruption)
     clock.now = 4.0
-    assert not bridge.tick() and not pending.done()
+    assert not bridge.tick() and "b" not in scheduler.requests
     assert scheduler.tree_cache.placement.type_for_id("A") is CacheClass.IDLE
-    assert bridge.tick() and pending.result()
+    assert bridge.tick() and scheduler.requests["b"] is pending
     assert applied[0] == applied[1]
     assert scheduler.tree_cache.placement.type_for_id("B") is CacheClass.BUSY
 
@@ -213,13 +231,14 @@ def test_partial_placement_retry_on_real_tree_and_release_after_cold_demotion(sc
 
 def test_shutdown_resolves_pending_admission_before_releasing_engine(scheduler, monkeypatch):
     bridge = scheduler._agentcache.program_admission
-    assert bridge.begin("a", "A", 500, "_empty_").result()
-    waiting = bridge.begin("b", "B", 10000, "_empty_")
-    assert not waiting.done()
+    scheduler.add_request(chat("a", "a", "A", 500))
+    waiting = chat("b", "b", "B", 10000)
+    scheduler.add_request(waiting)
+    assert "b" not in scheduler.requests
     released = []
 
     def release_engine(owner):
-        assert waiting.result(timeout=0) is False
+        assert bridge.finish_requests(None, RequestStatus.FINISHED_ABORTED) == []
         assert owner.tree_cache.placement.current_ref is None
         released.append(owner)
 

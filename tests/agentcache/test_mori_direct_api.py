@@ -11,15 +11,22 @@ from fastapi import FastAPI, Request
 from starlette.responses import PlainTextResponse, StreamingResponse
 from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
 
-from agentinfer.agentcache.mori.admission import ATTEMPT_ARG
 from agentinfer.agentcache.mori.api import (
     MORIDirectMiddleware,
     MORIDirectTextChatMiddleware,
     MORIDirectUnseededTextChatMiddleware,
     mori_parsed_request_body,
 )
-from agentinfer.agentcache.mori.ipc import UTILITY_METHOD, chat_facts
-from agentinfer.agentcache.mori.programs import PROGRAM_ARG
+from agentinfer.agentcache.mori.ipc import (
+    ATTEMPT_ARG,
+    CHILD_COUNT_ARG,
+    CONTEXT_CHARS_ARG,
+    PREFIX_ARG,
+    PROGRAM_ARG,
+    RESERVED_ARGS,
+    UTILITY_METHOD,
+    chat_facts,
+)
 from tests.helpers.marks import test_marks
 
 pytestmark = test_marks(hardware="cpu")
@@ -35,9 +42,14 @@ def _app_with_core(middleware=MORIDirectMiddleware):
         assert method == UTILITY_METHOD
         return True
 
+    async def add(child):
+        calls.append(("add", child.sampling_params.extra_args))
+
     app = FastAPI()
     app.add_middleware(middleware)
-    app.state.engine_client = SimpleNamespace(engine_core=SimpleNamespace(call_utility_async=utility))
+    app.state.engine_client = SimpleNamespace(
+        engine_core=SimpleNamespace(call_utility_async=utility, add_request_async=add)
+    )
     return app, calls
 
 
@@ -65,6 +77,7 @@ def test_direct_chat_admits_original_facts_and_shares_the_native_json(monkeypatc
     async def chat(body: ChatCompletionRequest, request: Request):
         sampling = body.to_sampling_params(8, {})
         native = await request.json()
+        await request.app.state.engine_client.engine_core.add_request_async(SimpleNamespace(sampling_params=sampling))
         return {
             "messages": native["messages"],
             "tools": native["tools"],
@@ -91,7 +104,7 @@ def test_direct_chat_admits_original_facts_and_shares_the_native_json(monkeypatc
         "extra_body": {"program_id": "ignored"},
         PROGRAM_ARG: "forged-at-top-level",
         ATTEMPT_ARG: "forged-at-top-level",
-        "vllm_xargs": {PROGRAM_ARG: "forged", ATTEMPT_ARG: "forged", "program_id": "forged", "keep": 7},
+        "vllm_xargs": {**dict.fromkeys(RESERVED_ARGS, "forged"), "program_id": "forged", "keep": 7},
     }
 
     async def run():
@@ -106,9 +119,17 @@ def test_direct_chat_admits_original_facts_and_shares_the_native_json(monkeypatc
             assert data["seed"] == seed
             attempt = data["extra_args"][ATTEMPT_ARG]
             assert attempt not in ("forged", "forged-at-top-level")
-            assert data["extra_args"] == {PROGRAM_ARG: "official", ATTEMPT_ARG: attempt, "keep": 7}
+            chars, prefix = chat_facts(payload)
+            assert data["extra_args"] == {
+                PROGRAM_ARG: "official",
+                ATTEMPT_ARG: attempt,
+                CONTEXT_CHARS_ARG: chars,
+                PREFIX_ARG: prefix,
+                CHILD_COUNT_ARG: 2,
+                "keep": 7,
+            }
             assert calls == [
-                (UTILITY_METHOD, "begin", [attempt, "official", *chat_facts(payload), 2]),
+                ("add", data["extra_args"]),
                 (UTILITY_METHOD, "finish", [attempt, 11, 8, 3]),
             ]
             tokenized = (await client.post("/tokenize", json={"messages": messages, "tools": tools, "seed": 42})).json()
@@ -131,6 +152,8 @@ def test_direct_observer_counts_shaped_sse_and_reads_fragmented_cached_usage(mon
         assert payload["stream_options"] == {"include_usage": True}
 
         async def frames():
+            child = SimpleNamespace(sampling_params=SimpleNamespace(extra_args=None))
+            await request.app.state.engine_client.engine_core.add_request_async(child)
             yield b'data: {"choices":[]}\n\n' * fillers
             for _ in range(empties):
                 yield b'data: {"choices":[{"index":0,"delta":{"content":""},"finish_reason":null}]}\n\n'
@@ -152,8 +175,9 @@ def test_direct_observer_counts_shaped_sse_and_reads_fragmented_cached_usage(mon
             assert [json.loads(frame)["choices"][0]["delta"] for frame in frames[-3:-1]] == [{"content": "last"}, {}]
 
     asyncio.run(run())
-    method, begin, (attempt, pid, *_rest) = calls[0]
-    assert (method, begin, pid) == (UTILITY_METHOD, "begin", "nested")
+    (kind, facts) = calls[0]
+    assert kind == "add" and facts[PROGRAM_ARG] == "nested"
+    attempt = facts[ATTEMPT_ARG]
     assert calls[1:-1] == ([(UTILITY_METHOD, "progress", [attempt, 20])] if progress else [])
     assert calls[-1] == (UTILITY_METHOD, "finish", [attempt, 27, 7, 5])
 
@@ -203,48 +227,6 @@ def test_direct_diagnostics_and_release_require_native_auth(monkeypatch):
         ("agentinfer_mori_diagnostics", "cache"),
         (UTILITY_METHOD, "release", ["p"]),
     ]
-
-
-def test_direct_disconnect_cancels_the_pending_admission_without_calling_native(monkeypatch):
-    monkeypatch.delenv("VLLM_API_KEY", raising=False)
-    calls = []
-
-    async def run():
-        queue = asyncio.Queue()
-        release_admission = asyncio.get_running_loop().create_future()
-
-        async def utility(method, event, args):
-            calls.append((method, event, args))
-            if event == "begin":
-                queue.put_nowait({"type": "http.disconnect"})
-                return await release_admission
-            assert event == "cancel"
-            release_admission.set_result(False)
-
-        async def native(*_args):
-            pytest.fail("The disconnected request must not reach native Chat")
-
-        async def send(_message):
-            pytest.fail("The disconnected request must not receive a response")
-
-        scope = {
-            "type": "http",
-            "method": "POST",
-            "path": "/v1/chat/completions",
-            "headers": [],
-            "app": SimpleNamespace(
-                state=SimpleNamespace(
-                    engine_client=SimpleNamespace(engine_core=SimpleNamespace(call_utility_async=utility))
-                )
-            ),
-        }
-        queue.put_nowait({"type": "http.request", "body": b'{"program_id":"p"}', "more_body": False})
-        await asyncio.wait_for(MORIDirectMiddleware(native)(scope, queue.get, send), timeout=2)
-        assert release_admission.done()
-
-    asyncio.run(run())
-    assert [(method, event) for method, event, _ in calls] == [(UTILITY_METHOD, "begin"), (UTILITY_METHOD, "cancel")]
-    assert calls[1][2] == [calls[0][2][0]]
 
 
 @pytest.mark.parametrize("part", [{"type": "image_url"}, {"input_audio": {}}, {"type": "video_embeds", "uuid": "v"}])
