@@ -14,7 +14,7 @@ except ImportError:
 from vllm.sampling_params import SamplingParams
 from vllm.v1.core.kv_cache_utils import BlockHash, make_block_hash_with_group_id
 from vllm.v1.core.sched.request_queue import FCFSRequestQueue
-from vllm.v1.engine import EngineCoreRequestType
+from vllm.v1.engine import EngineCoreEventType, EngineCoreRequestType
 from vllm.v1.engine.core import EngineCore, EngineCoreProc
 from vllm.v1.request import Request, RequestStatus
 
@@ -96,7 +96,7 @@ def test_old_dispatch_after_release_and_retry_cannot_claim_reused_pages(schedule
     core = SimpleNamespace(scheduler=scheduler)
     handle = getattr(EngineCore, UTILITY_METHOD)
     tree = scheduler.tree_cache
-    adapter = scheduler.program_cache_adapter
+    adapter = scheduler.program_admission.cache
     first = chat("first-child", "old", "p", n=2)
     scheduler.add_request(first)
     old = request_program(first)
@@ -134,8 +134,22 @@ def test_old_dispatch_after_release_and_retry_cannot_claim_reused_pages(schedule
     assert EngineCore.agentinfer_mori_diagnostics(core, "programs") == {"p": "active"}
 
 
+def test_interleaved_chats_of_one_program_admit_once_per_attempt(scheduler):
+    first = chat("A1_child1", "A1", "A", n=2)
+    second = chat("A2_child1", "A2", "A")
+    sibling = chat("A1_child2", "A1", "A", n=2)
+    for child in first, second, sibling:
+        scheduler.add_request(child)
+    admission = scheduler.program_admission
+    ref = admission.runtime.registry.current_ref("A")
+    assert admission.runtime.strategy_factors.for_program(ref).steps == 2
+    assert [request_program(child) for child in (first, second, sibling)] == [ref] * 3
+    assert list(scheduler.waiting) == [first, second, sibling]
+    assert list(scheduler.requests) == ["A1_child1", "A2_child1", "A1_child2"]
+
+
 def test_unmanaged_native_add_and_expired_dispatch_do_not_change_ownership(scheduler):
-    bridge = scheduler._agentcache.program_admission
+    bridge = scheduler.program_admission
     unsigned = native("unsigned", {PROGRAM_ARG: "victim", "generation": 8})
     scheduler.add_request(unsigned)
     publish(scheduler, unsigned, b"unsigned")
@@ -165,9 +179,11 @@ def test_periodic_placement_and_retained_abort_use_real_pool_capacity(scheduler,
     core = SimpleNamespace(scheduler=scheduler)
     clock = SimpleNamespace(now=1.0)
     monkeypatch.setattr(runtime, "time", SimpleNamespace(monotonic=lambda: clock.now))
+    monkeypatch.setattr("agentinfer.agentcache.mori.bridge.monotonic", lambda: clock.now)
+    scheduler.log_stats = True
     config = EngineCore.agentinfer_mori_diagnostics(core, "metrics")["backends"]["vllm-local"]["cache_config"]
     assert config == {"total_tokens_capacity": 300, "cpu_total_tokens_capacity": 160}
-    bridge = scheduler._agentcache.program_admission
+    bridge = scheduler.program_admission
     scheduler.add_request(chat("first", "first", "A", 500))
     clock.now = 2.0
     bridge.finish("first", 160, 100, 0)
@@ -177,6 +193,7 @@ def test_periodic_placement_and_retained_abort_use_real_pool_capacity(scheduler,
     clock.now = 4.0
     assert bridge.tick()
     assert scheduler.requests["next"] is req
+    assert [(event.type, event.timestamp) for event in req.events] == [(EngineCoreEventType.QUEUED, 2.0)]
     assert scheduler.tree_cache.placement.type_for_id("A") is CacheClass.IDLE
     assert scheduler.tree_cache.placement.type_for_id("B") is CacheClass.BUSY
 
@@ -193,14 +210,14 @@ def test_periodic_placement_and_retained_abort_use_real_pool_capacity(scheduler,
 def test_partial_placement_retry_on_real_tree_and_release_after_cold_demotion(scheduler, monkeypatch):
     clock = SimpleNamespace(now=1.0)
     monkeypatch.setattr(runtime, "time", SimpleNamespace(monotonic=lambda: clock.now))
-    bridge = scheduler._agentcache.program_admission
+    bridge = scheduler.program_admission
     scheduler.add_request(chat("a", "a", "A", 500))
     clock.now = 2.0
     bridge.finish("a", 160, 100, 0)
     pending = chat("b", "b", "B", 500)
     scheduler.add_request(pending)
     assert "b" not in scheduler.requests
-    cache = scheduler.program_cache_adapter
+    cache = scheduler.program_admission.cache
     apply = cache.apply_program_ops
     applied = []
 
@@ -230,7 +247,7 @@ def test_partial_placement_retry_on_real_tree_and_release_after_cold_demotion(sc
 
 
 def test_shutdown_resolves_pending_admission_before_releasing_engine(scheduler, monkeypatch):
-    bridge = scheduler._agentcache.program_admission
+    bridge = scheduler.program_admission
     scheduler.add_request(chat("a", "a", "A", 500))
     waiting = chat("b", "b", "B", 10000)
     scheduler.add_request(waiting)
@@ -248,17 +265,12 @@ def test_shutdown_resolves_pending_admission_before_releasing_engine(scheduler, 
 
 
 def test_failed_admission_setup_closes_the_initialized_engine(scheduler, monkeypatch):
-    from agentinfer.agentcache.mori import bridge as bridge_module
-
     released = []
 
-    def fail(*args):
-        raise ValueError("invalid admission config")
-
-    monkeypatch.setattr(bridge_module, "_VllmAdmissionHooks", fail)
     monkeypatch.setattr(MoriScheduler, "shutdown", lambda owner: released.append(owner))
-    with pytest.raises(ValueError, match="invalid admission config"):
-        type(scheduler)(scheduler.vllm_config, scheduler.kv_cache_config)
+    config = SimpleNamespace(additional_config={"agentcache": {"strategy": "mori", "mori": {"interval_seconds": 0}}})
+    with pytest.raises(ValueError, match="finite and positive"):
+        type(scheduler)(config, scheduler.kv_cache_config)
     (owner,) = released
     assert owner is not scheduler
-    assert owner._agentcache is owner.program_cache_adapter is None
+    assert owner.program_admission is None

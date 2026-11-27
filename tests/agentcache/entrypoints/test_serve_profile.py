@@ -69,11 +69,11 @@ def _install_stub_vllm(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             recorded["namespace"] = args
 
     cli_args = types.ModuleType("vllm.entrypoints.openai.cli_args")
-    cli_args.make_arg_parser = make_arg_parser
+    vars(cli_args)["make_arg_parser"] = make_arg_parser
     entrypoints_utils = types.ModuleType("vllm.entrypoints.utils")
-    entrypoints_utils.cli_env_setup = cli_env_setup
+    vars(entrypoints_utils)["cli_env_setup"] = cli_env_setup
     serve_mod = types.ModuleType("vllm.entrypoints.cli.serve")
-    serve_mod.ServeSubcommand = ServeSubcommand
+    vars(serve_mod)["ServeSubcommand"] = ServeSubcommand
     for name, module in {
         "vllm": types.ModuleType("vllm"),
         "vllm.entrypoints": types.ModuleType("vllm.entrypoints"),
@@ -354,10 +354,8 @@ def test_public_mori_serve_uses_single_listener_and_embedded_policy(monkeypatch,
     served = recorded["namespace"]
     assert (served.host, served.port) == ("0.0.0.0", 8300)
     assert served.scheduler_cls.split(".")[-1] == ("MoriSyncSchedulerBridge" if sync else "MoriAsyncSchedulerBridge")
-    assert served.middleware == [
-        "agentinfer.agentcache.mori.api.MORIDirectUnseededTextChatMiddleware",
-        mori_serve.SSE_FRAMING_MIDDLEWARE,
-    ]
+    assert served.middleware == ["agentinfer.agentcache.mori.admission_api.MoriSchedulingMiddleware"]
+    assert served.agentinfer_mori_chat_mode == "sglang_unseeded_chat"
     assert served.kv_transfer_config.kv_connector == "MoriCPUOffloadConnector"
     assert served.additional_config["agentcache"]["mori"] == {"interval_seconds": 3}
     assert served.additional_config["agentcache"]["mori_joint_flashinfer_sampling"]
@@ -386,15 +384,38 @@ def test_conflicting_strategy_does_not_install_an_engine() -> None:
     assert namespace.scheduler_cls is None
 
 
-@pytest.mark.parametrize(("unseeded", "joint"), [(True, False), (False, True)])
-def test_mori_can_select_joint_sampling_independently(monkeypatch, unseeded, joint):
+@pytest.mark.parametrize(
+    ("text", "unseeded", "joint", "mode"),
+    [
+        (False, False, False, None),
+        (True, False, True, "sglang_text_chat"),
+        (False, True, False, "sglang_unseeded_chat"),
+        (True, True, True, "sglang_unseeded_chat"),
+    ],
+)
+def test_mori_can_select_joint_sampling_independently(monkeypatch, text, unseeded, joint, mode):
     from agentinfer.agentcache.entrypoints.cli import mori_serve
 
     monkeypatch.setattr(mori_serve, "_configure_kv", lambda namespace: None)
     namespace, _ = _parse(["MODEL", "--agentinfer", "--agentinfer-strategy", "mori"])
     namespace.additional_config = {
-        "agentcache": {"mori": {"sglang_unseeded_chat": unseeded, "joint_flashinfer_sampling": joint}}
+        "agentcache": {
+            "mori": {"sglang_text_chat": text, "sglang_unseeded_chat": unseeded, "joint_flashinfer_sampling": joint}
+        }
     }
     profile = mori_serve.configure_embedded(namespace)
     assert profile.agentcache_config["mori_joint_flashinfer_sampling"] is joint
-    assert ("Unseeded" in profile.middlewares[0]) is unseeded
+    assert namespace.agentinfer_mori_chat_mode == mode
+    assert profile.middlewares == ("agentinfer.agentcache.mori.admission_api.MoriSchedulingMiddleware",)
+
+
+def test_mori_response_framing_wraps_user_middlewares(monkeypatch):
+    from agentinfer.agentcache.entrypoints.cli import mori_serve
+
+    monkeypatch.setattr(mori_serve, "_configure_kv", lambda namespace: None)
+    path = "agentinfer.agentcache.mori.admission_api.MoriSchedulingMiddleware"
+    namespace, explicit = _parse(
+        ["MODEL", "--agentinfer", "--agentinfer-strategy", "mori", "--middleware", path, "--middleware", "example.GZip"]
+    )
+    serve_profile.inject_profile(namespace, explicit)
+    assert namespace.middleware == ["example.GZip", path]

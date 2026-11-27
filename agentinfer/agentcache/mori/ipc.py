@@ -96,7 +96,7 @@ def install_core_utility() -> None:
     from vllm.v1.engine.core import EngineCore
 
     def handle(self, name: str, args: list):
-        admission = self.scheduler._agentcache.program_admission
+        admission = getattr(self.scheduler, "program_admission", None)
         if admission is None:
             raise RuntimeError("EngineCore has no Program scheduling host")
         result = handle_event(admission, name, args)
@@ -105,8 +105,7 @@ def install_core_utility() -> None:
         return result
 
     def diagnostics(self, action):
-        scheduler = self.scheduler
-        admission = scheduler._agentcache.program_admission
+        admission = self.scheduler.program_admission
         if action == "programs":
             return {view.ref.program_id: view.state.value for view in admission.runtime.registry.views()}
         if action == "metrics":
@@ -117,7 +116,7 @@ def install_core_utility() -> None:
             }
             return {"backends": {admission.backend_id: {"cache_config": cache_config}}}
         if action == "cache":
-            return scheduler.program_cache_adapter.snapshot()
+            return admission.cache.snapshot()
         raise ValueError(f"Unknown MORI diagnostics request {action!r}")
 
     setattr(EngineCore, UTILITY_METHOD, handle)

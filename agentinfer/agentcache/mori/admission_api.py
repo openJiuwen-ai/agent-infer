@@ -15,13 +15,17 @@ from time import monotonic_ns
 from uuid import uuid4
 
 from pydantic import TypeAdapter
-from pydantic_core import to_json
 from starlette._utils import get_route_path
 from starlette.datastructures import Headers
 from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse
 
-from agentinfer.agentcache.core.api_adapter import _replay_receive, _scope_with_content_length
+from agentinfer.agentcache.mori.api import (
+    chat_input_error,
+    forward_parsed_json,
+    normalize_sglang_text_chat,
+    shape_chat_frames,
+)
 from agentinfer.agentcache.mori.ipc import (
     ATTEMPT_ARG,
     CHILD_COUNT_ARG,
@@ -34,10 +38,17 @@ from agentinfer.agentcache.mori.ipc import (
     Event,
     chat_facts,
 )
+from agentinfer.agentcache.mori.sse_framing import sse_framing_send
 
 logger = logging.getLogger(__name__)
 _CHAT_CHOICES = TypeAdapter(int | None)
 _CHAT_BOOL = TypeAdapter(bool | None)
+_DIAGNOSTICS = {
+    "/programs": "programs",
+    "/agentinfer/mori/metrics": "metrics",
+    "/agentinfer/mori/cache": "cache",
+}
+_LEGACY_CONTROL = frozenset(("/mark_program_type", "/release_program", "/batch_program_ops"))
 
 
 def program_id(payload: dict) -> str | None:
@@ -227,17 +238,6 @@ class MoriSchedulingMiddleware:
         if not task.cancelled() and (error := task.exception()) is not None:
             logger.error("MORI event delivery failed: %s", error)
 
-    async def _forward_chat(self, request: Request, payload: dict, receive, send) -> None:
-        """Deliver Chat JSON to the native server as UTF-8 bytes."""
-        body = to_json(payload)
-        message = {"type": "http.request", "body": body, "more_body": False}
-        scope = _scope_with_content_length(request.scope, len(body))
-        await self.app(scope, _replay_receive([message], receive), send)
-
-    def _chat_input_error(self, payload: dict) -> str | None:
-        """Let the engine reject unsupported Chat inputs before Program admission."""
-        return None
-
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] in ("http", "websocket"):
             client = getattr(scope["app"].state, "engine_client", None)
@@ -246,16 +246,29 @@ class MoriSchedulingMiddleware:
                 _bind_add(core)
                 self._bound_core = core
 
-        if scope["type"] != "http" or scope["method"] != "POST":
+        if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        path = get_route_path(scope)
-        if path not in ("/v1/chat/completions", "/programs/release"):
+        send = sse_framing_send(send)
+        path, method = get_route_path(scope), scope["method"]
+        if path.rstrip("/") in _LEGACY_CONTROL:
+            await JSONResponse({"detail": "Not Found"}, status_code=404)(scope, receive, send)
+            return
+        args = getattr(scope["app"].state, "args", None)
+        chat_mode = getattr(args, "agentinfer_mori_chat_mode", None)
+        tokenize = method == "POST" and path == "/tokenize" and chat_mode is not None
+        action = _DIAGNOSTICS.get(path) if method == "GET" else None
+        managed_post = method == "POST" and path in ("/v1/chat/completions", "/programs/release")
+        if not (managed_post or action or tokenize):
             await self.app(scope, receive, send)
             return
-
-        if not self._authorized(scope):
+        if not tokenize and not self._authorized(scope):
             await JSONResponse({"error": "Unauthorized"}, status_code=401)(scope, receive, send)
+            return
+        if action is not None:
+            core = scope["app"].state.engine_client.engine_core
+            result = await core.call_utility_async("agentinfer_mori_diagnostics", action)
+            await JSONResponse(result)(scope, receive, send)
             return
 
         request = Request(scope, receive)
@@ -267,6 +280,11 @@ class MoriSchedulingMiddleware:
             payload = None
         if not isinstance(payload, dict):
             await JSONResponse({"detail": "Expected a JSON object"}, status_code=400)(scope, receive, send)
+            return
+
+        if tokenize:
+            normalize_sglang_text_chat(payload)
+            await forward_parsed_json(self.app, request, payload, receive, send)
             return
 
         core = scope["app"].state.engine_client.engine_core
@@ -281,7 +299,7 @@ class MoriSchedulingMiddleware:
             return
 
         pid = pid or "default"
-        if input_error := self._chat_input_error(payload):
+        if input_error := chat_input_error(payload):
             await JSONResponse({"detail": input_error}, status_code=400)(scope, receive, send)
             return
         xargs = payload.get("vllm_xargs")
@@ -314,7 +332,11 @@ class MoriSchedulingMiddleware:
                     payload["stream_options"] = {"include_usage": True}
                 elif isinstance(options, dict):
                     options.setdefault("include_usage", True)
-            await self._forward_chat(request, payload, receive, observer)
+            if chat_mode is not None:
+                normalize_sglang_text_chat(payload)
+            if chat_mode == "sglang_unseeded_chat":
+                payload.pop("seed", None)
+            await forward_parsed_json(self.app, request, payload, receive, shape_chat_frames(observer, payload))
         finally:
             _current_chat.reset(token)
             if not observer.finished:

@@ -20,7 +20,7 @@ from agentinfer.agentcache.mori.ipc import (
 )
 from agentinfer.scheduling.backend import BackendInfo, BackendPoolInfo, DpRankInfo
 from agentinfer.scheduling.domain import ProgramRef
-from agentinfer.scheduling.identity import AgentIdentity
+from agentinfer.scheduling.identity import AgentIdentity, JsonMapping
 from agentinfer.scheduling.mori import MoriConfig, build_mori_strategy
 from agentinfer.scheduling.runtime import ProgramScheduler
 from agentinfer.scheduling.transitions import ProgramPlacement, TransitionKind, TransitionRequest
@@ -97,6 +97,22 @@ class MoriProgramAdmissionController:
         self.runtime = ProgramScheduler(
             components.strategy, components.initial_factors, self._backend, on_transition=self._on_transition
         )
+
+    @classmethod
+    def from_settings(
+        cls, cache: ProgramCacheAdapter, settings: JsonMapping, backend_id: str
+    ) -> MoriProgramAdmissionController:
+        options = settings.get("mori", {})
+        if not isinstance(options, dict) or set(options) - {"interval_seconds"}:
+            raise ValueError("agentcache.mori accepts only interval_seconds")
+        interval = options.get("interval_seconds", MoriConfig().interval_seconds)
+        if isinstance(interval, bool) or not isinstance(interval, (int, float)):
+            raise ValueError("mori.interval_seconds must be numeric")
+        try:
+            config = MoriConfig(float(interval))
+        except OverflowError as exc:
+            raise ValueError("mori.interval_seconds must be finite") from exc
+        return cls(cache, config, backend_id)
 
     def _backend_pool(self) -> BackendPoolInfo:
         facts = self.observation

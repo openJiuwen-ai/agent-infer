@@ -71,7 +71,7 @@ def install_mori_timer() -> None:
             timer = getattr(self, "_agentinfer_mori_timer", None)
             if timer is not None and self.is_running():
                 timer.on_deadline()
-                send_retained_aborts(self, self.scheduler._agentcache.program_admission)
+                send_retained_aborts(self, self.scheduler.program_admission)
             return None
         try:
             return handle(self, request_type, payload)
@@ -83,7 +83,7 @@ def install_mori_timer() -> None:
 
     @wraps(run_busy_loop)
     def run_with_timer(self, *args, **kwargs):
-        admission = getattr(getattr(self.scheduler, "_agentcache", None), "program_admission", None)
+        admission = getattr(self.scheduler, "program_admission", None)
         if admission is None:
             return run_busy_loop(self, *args, **kwargs)
 

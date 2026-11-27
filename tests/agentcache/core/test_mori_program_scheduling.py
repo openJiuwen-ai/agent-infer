@@ -301,7 +301,7 @@ def test_control_event_notifies_each_client_of_its_retained_children(event, argu
 
     admission = MoriProgramAdmissionController(RecordingHost(100, 0), MoriConfig())
     core = object.__new__(EngineCoreProc)
-    core.scheduler = SimpleNamespace(_agentcache=SimpleNamespace(program_admission=admission))
+    core.scheduler = SimpleNamespace(program_admission=admission)
     core.output_queue = Queue()
     install_core_utility()
     for i in range(2):
@@ -436,26 +436,20 @@ def test_inactive_generation_keeps_cache_ownership_until_release_ack(clock):
     assert controller.runtime.registry.current_ref("A") != ref
 
 
-def test_shared_vllm_hook_counts_one_arrival_and_dispatches_each_native_child_once():
-    from agentinfer.agentcache.core.scheduler import _VllmAdmissionHooks
-
-    host = RecordingHost(600, 200)
-    owner = SimpleNamespace(program_cache_adapter=host)
-    config = SimpleNamespace(additional_config={"agentcache": {"strategy": "mori"}})
-    hooks = _VllmAdmissionHooks(owner, config, SimpleNamespace(num_blocks=999), 16)
-    controller = hooks.program_admission
+def test_controller_counts_one_arrival_and_dispatches_each_native_child_once():
+    controller = MoriProgramAdmissionController(RecordingHost(600, 200), MoriConfig())
     assert controller.observation.hbm_capacity_tokens == 600
     children = [native(f"{i}_request", "attempt", "A", 100, 2) for i in range(2)]
     dispatched = []
     for child in children:
-        hooks.add_request(owner, child, dispatched.append)
+        controller.add_request(child, dispatched.append)
     controller.tick()
     assert dispatched == children
     ref = controller.runtime.registry.current_ref("A")
     assert all(child._mori_program_ref == ref for child in children)
     assert controller.runtime.strategy_factors.for_program(ref).steps == 1
     with pytest.raises(InvalidMoriAdmission):
-        hooks.add_request(owner, children[0], dispatched.append)
+        controller.add_request(children[0], dispatched.append)
     assert dispatched == children
 
 
@@ -565,7 +559,7 @@ def test_idle_owner_timer_dispatches_newly_admitted_work_and_closes_retained_req
     monkeypatch.setattr(EngineCoreProc, "_handle_client_request", lambda *_: pytest.fail("unexpected vLLM event"))
     install_mori_timer()
     core = object.__new__(EngineCoreProc)
-    core.scheduler = SimpleNamespace(_agentcache=SimpleNamespace(program_admission=admission))
+    core.scheduler = SimpleNamespace(program_admission=admission)
     core.input_queue = Queue()
     core.output_queue = Queue()
     core.is_running = lambda: True
@@ -579,11 +573,9 @@ def test_idle_owner_timer_dispatches_newly_admitted_work_and_closes_retained_req
 
 @pytest.mark.parametrize("interval", [0, -1, float("nan"), float("inf")])
 def test_controller_rejects_invalid_interval_before_installing_timer(interval):
-    from agentinfer.agentcache.core.controller import build_mori_controller
-
     with pytest.raises(ValueError, match="finite|positive"):
-        build_mori_controller(
-            SimpleNamespace(program_cache_adapter=RecordingHost(300, 10)),
+        MoriProgramAdmissionController.from_settings(
+            RecordingHost(300, 10),
             {"mori": {"interval_seconds": interval}},
             "local",
         )

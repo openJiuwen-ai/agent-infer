@@ -4,11 +4,12 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 from httpx._decoders import LineDecoder
 
-from agentinfer.agentcache.mori.sse_framing import SSEJsonFramingMiddleware
+from agentinfer.agentcache.mori.admission_api import MoriSchedulingMiddleware
 from tests.helpers.marks import test_marks
 
 pytestmark = test_marks(hardware="cpu", ci="ready")
@@ -29,7 +30,13 @@ def send_chunks(chunks, *, headers=None, scope_type="http"):
     async def capture(message):
         messages.append(message)
 
-    asyncio.run(SSEJsonFramingMiddleware(app)({"type": scope_type}, receive, capture))
+    scope = {
+        "type": scope_type,
+        "method": "GET",
+        "path": "/custom/events",
+        "app": SimpleNamespace(state=SimpleNamespace()),
+    }
+    asyncio.run(MoriSchedulingMiddleware(app)(scope, receive, capture))
     return messages
 
 

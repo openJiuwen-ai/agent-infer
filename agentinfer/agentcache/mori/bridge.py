@@ -2,41 +2,57 @@
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 """Install Program admission on the synchronous or asynchronous MORI engine."""
 
+from time import monotonic
+
 from vllm.v1.request import RequestStatus
 
-from agentinfer.agentcache.core.scheduler import _VllmAdmissionHooks
+from agentinfer.agentcache.core.scheduler import add_to_native_waiting, admission_settings
+from agentinfer.agentcache.core.vllm_logging import attach_agentinfer_to_vllm_logging
+from agentinfer.agentcache.mori.admission import MoriProgramAdmissionController
+from agentinfer.agentcache.mori.ipc import install_core_utility, native_finished_requests
 from agentinfer.agentcache.mori.program_cache import HiRadixProgramCache
 from agentinfer.agentcache.mori.scheduler import MoriAsyncScheduler, MoriScheduler
+from agentinfer.agentcache.mori.timer import install_mori_timer
 
 
 class _MoriProgramAdmissionMixin:
     def __init__(self, vllm_config, kv_cache_config, *args, **kwargs):
-        if vllm_config.additional_config.get("agentcache", {}).get("strategy") != "mori":
+        settings, backend_id, _, _ = admission_settings(vllm_config)
+        if settings.get("strategy") != "mori":
             raise ValueError("The MORI scheduler bridge requires the MORI Program strategy")
         super().__init__(vllm_config, kv_cache_config, *args, **kwargs)
-        self._agentcache = self.program_cache_adapter = None
+        self.program_admission = None
         try:
-            self.program_cache_adapter = HiRadixProgramCache(self.tree_cache)
-            self._agentcache = _VllmAdmissionHooks(self, vllm_config, kv_cache_config, self.block_size)
-            self.tree_cache.placement.current_ref = self._agentcache.program_admission.runtime.registry.current_ref
+            attach_agentinfer_to_vllm_logging()
+            tree = self.tree_cache
+            self.program_admission = MoriProgramAdmissionController.from_settings(
+                HiRadixProgramCache(tree), settings, backend_id
+            )
+            tree.placement.current_ref = self.program_admission.runtime.registry.current_ref
+            install_core_utility()
+            install_mori_timer()
         except BaseException:
             self.shutdown()
             raise
 
     def add_request(self, request):
-        self._agentcache.add_request(self, request, super().add_request)
+        queued_at = monotonic()
+        native_add = super().add_request
+        self.program_admission.add_request(request, lambda child: add_to_native_waiting(child, queued_at, native_add))
 
     def finish_requests(self, request_ids, finished_status):
-        return self._agentcache.finish_requests(self, request_ids, finished_status, super().finish_requests)
+        ids = request_ids if request_ids is None or isinstance(request_ids, str) else tuple(request_ids)
+        retained = self.program_admission.finish_requests(ids, finished_status)
+        return native_finished_requests(retained) + super().finish_requests(ids, finished_status)
 
     def shutdown(self):
         try:
-            if self._agentcache is not None:
-                self._agentcache.program_admission.finish_requests(None, RequestStatus.FINISHED_ABORTED)
+            if self.program_admission is not None:
+                self.program_admission.finish_requests(None, RequestStatus.FINISHED_ABORTED)
         finally:
-            if self.program_cache_adapter is not None:
-                self.program_cache_adapter.tree.placement.current_ref = None
-            self._agentcache = self.program_cache_adapter = None
+            if self.program_admission is not None:
+                self.tree_cache.placement.current_ref = None
+                self.program_admission = None
             super().shutdown()
 
 

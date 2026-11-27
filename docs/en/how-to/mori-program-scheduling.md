@@ -63,8 +63,10 @@ from `extra_body`. Null and blank values fall through to the next source. Chat u
 `{"program_id":"default"}` to release the default Program.
 
 The API derives the Program ID, character count and prefix group from the original Chat JSON.
-After templating and tokenization, the Bridge handles the first native ADD for that Chat as one
-Program arrival. All sampling children share the admission decision and Program generation.
+Each HTTP Chat triggers one admission check for its Program when its first native ADD
+reaches the Bridge. One Chat with `n=2` requests two choices and shares one admission
+decision across both native sampling children. Two concurrent HTTP Chats with the same
+`program_id` trigger two separate admission checks and share the Program generation and placement.
 The first ADD also carries the time the API spent preparing this Chat. MORI accounts
 for that interval when estimating Program idleness. A queued Program starts its
 reasoning interval on promotion. The vLLM queues keep their own timestamps.

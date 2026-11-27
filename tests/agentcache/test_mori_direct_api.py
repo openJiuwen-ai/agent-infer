@@ -11,12 +11,8 @@ from fastapi import FastAPI, Request
 from starlette.responses import PlainTextResponse, StreamingResponse
 from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
 
-from agentinfer.agentcache.mori.api import (
-    MORIDirectMiddleware,
-    MORIDirectTextChatMiddleware,
-    MORIDirectUnseededTextChatMiddleware,
-    mori_parsed_request_body,
-)
+from agentinfer.agentcache.mori.admission_api import MoriSchedulingMiddleware
+from agentinfer.agentcache.mori.api import mori_parsed_request_body
 from agentinfer.agentcache.mori.ipc import (
     ATTEMPT_ARG,
     CHILD_COUNT_ARG,
@@ -33,7 +29,7 @@ from tests.helpers.marks import test_marks
 pytestmark = test_marks(hardware="cpu")
 
 
-def _app_with_core(middleware=MORIDirectMiddleware):
+def _app_with_core(chat_mode=None):
     calls = []
 
     async def utility(method, *args):
@@ -47,7 +43,8 @@ def _app_with_core(middleware=MORIDirectMiddleware):
         calls.append(("add", child.sampling_params.extra_args))
 
     app = FastAPI()
-    app.add_middleware(middleware)
+    app.add_middleware(MoriSchedulingMiddleware)
+    app.state.args = SimpleNamespace(agentinfer_mori_chat_mode=chat_mode)
     app.state.engine_client = SimpleNamespace(
         engine_core=SimpleNamespace(call_utility_async=utility, add_request_async=add)
     )
@@ -55,16 +52,16 @@ def _app_with_core(middleware=MORIDirectMiddleware):
 
 
 @pytest.mark.parametrize(
-    ("middleware", "normalize", "seed"),
+    ("chat_mode", "normalize", "seed"),
     [
-        (MORIDirectMiddleware, False, 42),
-        (MORIDirectTextChatMiddleware, True, 42),
-        (MORIDirectUnseededTextChatMiddleware, True, None),
+        (None, False, 42),
+        ("sglang_text_chat", True, 42),
+        ("sglang_unseeded_chat", True, None),
     ],
 )
-def test_direct_chat_admits_original_facts_and_shares_the_native_json(monkeypatch, middleware, normalize, seed):
+def test_direct_chat_admits_original_facts_and_shares_the_native_json(monkeypatch, chat_mode, normalize, seed):
     monkeypatch.delenv("VLLM_API_KEY", raising=False)
-    app, calls = _app_with_core(middleware)
+    app, calls = _app_with_core(chat_mode)
     decodes = []
     original = Request.json
 
@@ -161,7 +158,7 @@ def test_direct_observer_counts_shaped_sse_and_reads_fragmented_cached_usage(mon
             yield b'data: {"choices":[]}\n\n' * fillers
             for _ in range(empties):
                 yield b'data: {"choices":[{"index":0,"delta":{"content":""},"finish_reason":null}]}\n\n'
-            yield b'data: {"choices":[{"index":0,"delta":{"content":"last"},"finish_reason":"length"}]}\n\n'
+            yield 'data: {"choices":[{"index":0,"delta":{"content":"last\u2028part"},"finish_reason":"length"}]}\n\n'.encode()
             yield b'data: {"usage":{"total_tokens":27,"prompt_tokens":7,"prompt_tokens_details":{"cached_tokens":5}}}'
             yield b"\n\ndata: [DONE]\n\n"
 
@@ -176,7 +173,10 @@ def test_direct_observer_counts_shaped_sse_and_reads_fragmented_cached_usage(mon
             frames = [line[6:] for line in response.text.splitlines() if line.startswith("data: ")]
             assert frames.pop() == "[DONE]"
             assert len(frames) == fillers + 3
-            assert [json.loads(frame)["choices"][0]["delta"] for frame in frames[-3:-1]] == [{"content": "last"}, {}]
+            assert [json.loads(frame)["choices"][0]["delta"] for frame in frames[-3:-1]] == [
+                {"content": "last\u2028part"},
+                {},
+            ]
 
     asyncio.run(run())
     (kind, facts) = calls[0]

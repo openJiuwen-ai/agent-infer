@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 
-"""Expose MORI scheduling and preserve the native vLLM Chat protocol."""
+"""Preserve native Chat JSON and SGLang text and streaming behavior."""
 
 from __future__ import annotations
 
@@ -9,20 +9,11 @@ import json
 from contextlib import contextmanager
 from functools import wraps
 
-from starlette._utils import get_route_path
-from starlette.requests import ClientDisconnect, Request
-from starlette.responses import JSONResponse
+from starlette.requests import Request
 
 from agentinfer.agentcache.core.api_adapter import _replay_receive, _scope_with_content_length
-from agentinfer.agentcache.mori.admission_api import MoriSchedulingMiddleware
 
 _PARSED_BODY = "agentinfer.mori.parsed_body"
-_DIAGNOSTICS = {
-    "/programs": "programs",
-    "/agentinfer/mori/metrics": "metrics",
-    "/agentinfer/mori/cache": "cache",
-}
-_LEGACY_CONTROL = frozenset(("/mark_program_type", "/release_program", "/batch_program_ops"))
 _MEDIA_PARTS = frozenset(
     (
         "input_image",
@@ -58,7 +49,7 @@ def mori_parsed_request_body():
         Request.json = native
 
 
-async def _forward_parsed_json(app, request, payload, receive, send) -> None:
+async def forward_parsed_json(app, request, payload, receive, send) -> None:
     """Replay the wire bytes while sharing the adapted object with FastAPI."""
     scope = request.scope
     if getattr(Request.json, "_agentinfer_mori_body", False):
@@ -99,7 +90,7 @@ def normalize_sglang_text_chat(payload: dict) -> None:
                 function.setdefault("strict", False)
 
 
-def _mori_chat_frames(send, payload):
+def shape_chat_frames(send, payload):
     """Mirror the original content/finish framing counted by ThunderAgent."""
     options = payload.get("stream_options")
     if (
@@ -141,78 +132,19 @@ def _mori_chat_frames(send, payload):
     return forward
 
 
-class MORIDirectMiddleware(MoriSchedulingMiddleware):
-    """Prepare native Chat for MORI ADD and adapt its wire format."""
-
-    sglang_text_chat = False
-    unseeded_chat = False
-
-    def _chat_input_error(self, payload: dict) -> str | None:
-        messages = payload.get("messages")
-        if not isinstance(messages, list):
-            return None
-        for message in messages:
-            content = message.get("content") if isinstance(message, dict) else None
-            if not isinstance(content, list):
-                continue
-            for part in content:
-                if not isinstance(part, dict):
-                    continue
-                kind = part.get("type")
-                inferred = kind is None or "uuid" in part
-                if (isinstance(kind, str) and kind in _MEDIA_PARTS) or (inferred and not _MEDIA_PARTS.isdisjoint(part)):
-                    return "MORI vLLM supports text inputs only"
+def chat_input_error(payload: dict) -> str | None:
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
         return None
-
-    async def __call__(self, scope, receive, send) -> None:
-        if scope["type"] != "http":
-            await super().__call__(scope, receive, send)
-            return
-        path, method = get_route_path(scope), scope["method"]
-        if path.rstrip("/") in _LEGACY_CONTROL:
-            await JSONResponse({"detail": "Not Found"}, status_code=404)(scope, receive, send)
-            return
-        action = _DIAGNOSTICS.get(path) if method == "GET" else None
-        if action and not self._authorized(scope):
-            await JSONResponse({"error": "Unauthorized"}, status_code=401)(scope, receive, send)
-            return
-        if action is not None:
-            core = scope["app"].state.engine_client.engine_core
-            result = await core.call_utility_async("agentinfer_mori_diagnostics", action)
-            await JSONResponse(result)(scope, receive, send)
-            return
-        if method == "POST" and self.sglang_text_chat and path == "/tokenize":
-            request = Request(scope, receive)
-            try:
-                payload = await request.json()
-            except ClientDisconnect:
-                return
-            except (ValueError, RecursionError):
-                payload = None
-            if not isinstance(payload, dict):
-                await JSONResponse({"detail": "Expected a JSON object"}, status_code=400)(scope, receive, send)
-                return
-            normalize_sglang_text_chat(payload)
-            await _forward_parsed_json(self.app, request, payload, receive, send)
-            return
-        await super().__call__(scope, receive, send)
-
-    async def _forward_chat(self, request: Request, payload: dict, receive, send) -> None:
-        # Admission facts describe the original request, before SGLang's text template normalization.
-        if self.sglang_text_chat:
-            normalize_sglang_text_chat(payload)
-        if self.unseeded_chat:
-            payload.pop("seed", None)
-        await _forward_parsed_json(self.app, request, payload, receive, _mori_chat_frames(send, payload))
-
-
-class MORIDirectTextChatMiddleware(MORIDirectMiddleware):
-    """Normalize the Chat and tokenize bodies for SGLang's string templates."""
-
-    sglang_text_chat = True
-
-
-class MORIDirectUnseededTextChatMiddleware(MORIDirectTextChatMiddleware):
-    """Use SGLang's default unseeded Chat sampling."""
-
-    unseeded_chat = True
+    for message in messages:
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            kind = part.get("type")
+            inferred = kind is None or "uuid" in part
+            if (isinstance(kind, str) and kind in _MEDIA_PARTS) or (inferred and not _MEDIA_PARTS.isdisjoint(part)):
+                return "MORI vLLM supports text inputs only"
+    return None

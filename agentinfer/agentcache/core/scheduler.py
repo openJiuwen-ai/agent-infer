@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the AgentCache project
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 """Explicit AgentCache admission bridges for vLLM.
 
 Progress-TTL uses the explicit async or sync bridge and a composed helper, while native waiting/running/KV state and
@@ -13,7 +13,7 @@ import math
 import os
 import time
 from collections.abc import Callable, Iterable, Mapping
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
 from vllm.v1.core.sched.async_scheduler import AsyncScheduler
 from vllm.v1.core.sched.scheduler import Scheduler
@@ -21,12 +21,17 @@ from vllm.v1.engine import EngineCoreEventType
 from vllm.v1.request import Request, RequestStatus
 
 from agentinfer.agentcache.core.api_adapter import LIFECYCLE_SOCKET_ENV, UnixLifecycleReceiver
-from agentinfer.agentcache.core.controller import build_mori_controller, build_progress_ttl_controller
+from agentinfer.agentcache.core.controller import build_progress_ttl_controller
 from agentinfer.agentcache.core.vllm_logging import attach_agentinfer_to_vllm_logging
 from agentinfer.scheduling.backend import BackendInfo, BackendPoolInfo, DispatchTarget, DpRankInfo
 from agentinfer.scheduling.identity import AgentIdentity, JsonMapping, JsonObject, parse_agent_identity
 from agentinfer.scheduling.lifecycle import ProgramLifecycle
-from agentinfer.scheduling.request_pool import RequestPoolEntry, RetainedRequestT
+from agentinfer.scheduling.request_pool import RequestPoolEntry
+
+if TYPE_CHECKING:
+    from vllm.v1.kv_cache_interface import KVCacheConfig
+
+RetainedRequestT = TypeVar("RetainedRequestT")
 
 logger = logging.getLogger(__name__)
 
@@ -92,34 +97,55 @@ class EmbeddedSchedulerController(Protocol[RetainedRequestT]):
         """Remove and return a request retained before native admission."""
 
 
+def admission_settings(vllm_config: object) -> tuple[JsonMapping, str, int, int | None]:
+    """Read the AgentInfer options and native rank shared by the vLLM bridges."""
+    additional = getattr(vllm_config, "additional_config", {})
+    settings = additional.get("agentcache", {}) if isinstance(additional, dict) else {}
+    if not isinstance(settings, dict):
+        raise ValueError("additional_config.agentcache must be an object")
+    settings = cast(JsonMapping, settings)
+    if "num_ranks" in settings:
+        raise ValueError("additional_config.agentcache.num_ranks is obsolete; rank identity comes from EngineCore")
+    backend_id = settings.get("backend_id", "vllm-local")
+    if not isinstance(backend_id, str) or not backend_id:
+        raise ValueError("agentcache.backend_id must be a non-empty string")
+    parallel_config = getattr(vllm_config, "parallel_config", None)
+    rank = getattr(parallel_config, "data_parallel_index", None)
+    dp_rank = int(rank if rank is not None else getattr(parallel_config, "data_parallel_rank", 0))
+    if dp_rank < 0:
+        raise ValueError("EngineCore data_parallel_index must be non-negative")
+    expected = settings.get("expected_reasoning_agent_nums")
+    if expected is not None and (isinstance(expected, bool) or not isinstance(expected, int) or expected < 0):
+        raise ValueError("agentcache.expected_reasoning_agent_nums must be a non-negative integer")
+    return settings, backend_id, dp_rank, expected
+
+
+def add_to_native_waiting(
+    request: Request,
+    queued_at_monotonic_s: float,
+    native_add: Callable[[Request], None],
+) -> None:
+    """Insert a request natively while preserving its original EngineCore queue start.
+
+    vLLM records ``QUEUED`` inside ``Scheduler.add_request``. Requests retained by AgentInfer reach that call
+    later, so the native queue metric would otherwise omit RequestPool residence. Retimestamping only the newly
+    emitted event keeps vLLM's scheduling state and ``SCHEDULED - QUEUED`` metric calculation unchanged.
+    """
+    existing_event_count = len(request.events)
+    native_add(request)
+    for event in request.events[existing_event_count:]:
+        if event.type == EngineCoreEventType.QUEUED:
+            event.timestamp = min(event.timestamp, queued_at_monotonic_s)
+            return
+
+
 class _VllmAdmissionHooks:
     """Composition helper shared by the two single-inheritance native bridges."""
 
-    program_admission = None
-
-    def __init__(self, owner: Scheduler, vllm_config: object, kv_cache_config: object, block_size: int) -> None:
+    def __init__(self, owner: Scheduler, vllm_config: object, kv_cache_config: KVCacheConfig, block_size: int) -> None:
         attach_agentinfer_to_vllm_logging()
         self._owner = owner
-        additional = getattr(vllm_config, "additional_config", {})
-        settings = additional.get("agentcache", {}) if isinstance(additional, dict) else {}
-        if not isinstance(settings, dict):
-            raise ValueError("additional_config.agentcache must be an object")
-        settings = cast(JsonMapping, settings)
-        if "num_ranks" in settings:
-            raise ValueError("additional_config.agentcache.num_ranks is obsolete; rank identity comes from EngineCore")
-        backend_id = settings.get("backend_id", "vllm-local")
-        if not isinstance(backend_id, str) or not backend_id:
-            raise ValueError("agentcache.backend_id must be a non-empty string")
-        self.backend_id = backend_id
-        parallel_config = getattr(vllm_config, "parallel_config", None)
-        rank = getattr(parallel_config, "data_parallel_index", None)
-        self.dp_rank = int(rank if rank is not None else getattr(parallel_config, "data_parallel_rank", 0))
-        if self.dp_rank < 0:
-            raise ValueError("EngineCore data_parallel_index must be non-negative")
-        expected = settings.get("expected_reasoning_agent_nums")
-        if expected is not None and (isinstance(expected, bool) or not isinstance(expected, int) or expected < 0):
-            raise ValueError("agentcache.expected_reasoning_agent_nums must be a non-negative integer")
-        self.expected_agents = expected
+        settings, self.backend_id, self.dp_rank, self.expected_agents = admission_settings(vllm_config)
         # EngineCore passes resolve_kv_cache_block_sizes() as block_size, which already includes DCP and PCP.
         self.local_hbm_kv_tokens = int(kv_cache_config.num_blocks) * int(block_size)
         self.tracked_native: set[str] = set()
@@ -127,17 +153,6 @@ class _VllmAdmissionHooks:
         self._prefix_refresh_pending = False
         self.lifecycle_receiver: UnixLifecycleReceiver | None = None
         strategy = settings.get("strategy", "progress_ttl")
-        if strategy == "mori":
-            from agentinfer.agentcache.mori.ipc import install_core_utility
-            from agentinfer.agentcache.mori.timer import install_mori_timer
-
-            if getattr(parallel_config, "data_parallel_size", 1) != 1:
-                raise ValueError("Embedded MORI requires one data-parallel rank")
-            self.program_admission = build_mori_controller(owner, settings, self.backend_id)
-            self.controller = self.program_admission.runtime
-            install_core_utility()
-            install_mori_timer()
-            return
         if strategy != "progress_ttl":
             raise ValueError(f"Unknown AgentInfer scheduling strategy {strategy!r}")
         self.controller = build_progress_ttl_controller(self.backend_pool_info(owner), settings)
@@ -150,12 +165,6 @@ class _VllmAdmissionHooks:
 
     def add_request(self, owner: Scheduler, request: Request, native_add: Callable[[Request], None]) -> None:
         """Retain agentic work or pass compatibility traffic directly to vLLM."""
-        if self.program_admission is not None:
-            queued_at = time.monotonic()
-            self.program_admission.add_request(
-                request, lambda child: self._add_to_native_waiting(child, queued_at, native_add)
-            )
-            return
         self._drain_lifecycle_signals()
         metadata = _metadata_from_request(request)
         if metadata is None:
@@ -171,12 +180,10 @@ class _VllmAdmissionHooks:
         )
         if dispatch_now:
             self.tracked_native.add(request.request_id)
-            self._add_to_native_waiting(request, retained_at_monotonic_s, native_add)
+            add_to_native_waiting(request, retained_at_monotonic_s, native_add)
 
     def before_schedule(self, owner: Scheduler, native_add: Callable[[Request], None]) -> None:
         """Run one AgentCache cycle and transfer admitted requests to native waiting."""
-        if self.program_admission is not None:
-            return
         self._drain_lifecycle_signals()
         now = time.monotonic()
         self.controller.run_due_lightweight_checks(now)
@@ -193,26 +200,7 @@ class _VllmAdmissionHooks:
             if target != DispatchTarget(self.backend_id, self.dp_rank):
                 raise RuntimeError("embedded vLLM bridge received a target for another backend or DP rank")
             self.tracked_native.add(entry.request_id)
-            self._add_to_native_waiting(entry.retained_request, entry.arrived_at_monotonic_s, native_add)
-
-    @staticmethod
-    def _add_to_native_waiting(
-        request: Request,
-        queued_at_monotonic_s: float,
-        native_add: Callable[[Request], None],
-    ) -> None:
-        """Insert a request natively while preserving its original EngineCore queue start.
-
-        vLLM records ``QUEUED`` inside ``Scheduler.add_request``. Requests retained by AgentInfer reach that call
-        later, so the native queue metric would otherwise omit RequestPool residence. Retimestamping only the newly
-        emitted event keeps vLLM's scheduling state and ``SCHEDULED - QUEUED`` metric calculation unchanged.
-        """
-        existing_event_count = len(request.events)
-        native_add(request)
-        for event in request.events[existing_event_count:]:
-            if event.type == EngineCoreEventType.QUEUED:
-                event.timestamp = min(event.timestamp, queued_at_monotonic_s)
-                return
+            add_to_native_waiting(entry.retained_request, entry.arrived_at_monotonic_s, native_add)
 
     def _observe_retained_prefix_cache(self, owner: Scheduler) -> None:
         """Refresh retained paused reasoning requests after a completion-triggered deferred observation.
@@ -319,11 +307,6 @@ class _VllmAdmissionHooks:
         normalized_request_ids = (
             request_ids if request_ids is None or isinstance(request_ids, str) else tuple(request_ids)
         )
-        if self.program_admission is not None:
-            from agentinfer.agentcache.mori.ipc import native_finished_requests
-
-            retained_children = self.program_admission.finish_requests(normalized_request_ids, finished_status)
-            return native_finished_requests(retained_children) + native_finish(normalized_request_ids, finished_status)
         retained = self.cancel_retained(normalized_request_ids)
         token_counts = {
             request_id: request.num_tokens
@@ -359,7 +342,7 @@ class _VllmAdmissionHooks:
                 )
             return computed
 
-        observed_get_computed_blocks._agentinfer_prefix_lookup_observer = True
+        vars(observed_get_computed_blocks)["_agentinfer_prefix_lookup_observer"] = True
         kv_cache_manager.get_computed_blocks = observed_get_computed_blocks
 
     @staticmethod
@@ -378,8 +361,6 @@ class _VllmAdmissionHooks:
 
     def unfinished_count(self, native_count: int) -> int:
         """Merge retained and native liveness without exposing request objects to EngineCore."""
-        if self.program_admission is not None:
-            return native_count
         return native_count + self.controller.retained_request_count
 
     def backend_pool_info(self, owner: Scheduler) -> BackendPoolInfo:

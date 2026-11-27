@@ -46,7 +46,10 @@ vllm serve "$MODEL" --agentinfer --agentinfer-strategy mori \
 API 把 Program ID、原始字符数、前缀组、Chat 标识和采样子请求数随原生 ADD 交给 Bridge。
 首个 ADD 还记录 API 在本进程内测得的准备时长。策略用它修正 Program 的活跃与空闲时长，
 排队 Program 从实际唤醒开始计 reasoning，各原生队列继续使用自己的时间戳。
-同一 Chat 的所有采样子请求共用一个 Program 代次。排队期间请求保留在 Bridge，
+每次 HTTP Chat 的首个原生 ADD 触发一次准入检查，策略根据该 Program 的状态判断能否放行。
+一条 Chat 的 `n=2` 表示请求两个候选输出，两个原生采样子请求共享一次准入决定。
+同一个 `program_id` 的两条并发 HTTP Chat 各自触发一次准入，共享 Program 代次和放置状态。
+排队期间请求保留在 Bridge，
 缓存确认放置后才进入引擎的 waiting 队列。并发 Chat 的模板处理时间不同，
 所以到达 Core 的顺序可能与到达 HTTP 的顺序不同。生成进度、响应结束和显式释放通过 vLLM utility IPC 上报。
 周期检查和 HBM／DRAM 容量全部留在 Core 内。

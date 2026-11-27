@@ -18,7 +18,7 @@ from agentinfer.agentcache.entrypoints.cli.serve_profile import (
 
 _MORI_BRIDGE = "agentinfer.agentcache.mori.bridge"
 _MORI_CONNECTOR = "agentinfer.agentcache.mori.connector"
-SSE_FRAMING_MIDDLEWARE = "agentinfer.agentcache.mori.sse_framing.SSEJsonFramingMiddleware"
+_MORI_MIDDLEWARE = "agentinfer.agentcache.mori.admission_api.MoriSchedulingMiddleware"
 
 
 def _settings(namespace: Namespace) -> tuple[dict, dict]:
@@ -80,20 +80,17 @@ def configure_embedded(namespace: Namespace) -> ServeProfile:
     if type(interval) not in (float, int) or not math.isfinite(interval) or interval <= 0:
         raise AgentInferServeError("agentcache.mori.interval_seconds must be positive and finite")
     _configure_kv(namespace)
-    source = "agentinfer.agentcache.mori.api"
-    if settings.get("sglang_unseeded_chat", False):
-        middleware = f"{source}.MORIDirectUnseededTextChatMiddleware"
-    elif settings.get("sglang_text_chat", False):
-        middleware = f"{source}.MORIDirectTextChatMiddleware"
-    else:
-        middleware = f"{source}.MORIDirectMiddleware"
+    # vLLM exposes this parsed Namespace to its API workers as app.state.args.
+    namespace.agentinfer_mori_chat_mode = next(
+        (key for key in ("sglang_unseeded_chat", "sglang_text_chat") if settings.get(key)), None
+    )
     if "joint_flashinfer_sampling" in settings or settings.get("sglang_unseeded_chat"):
         agentcache = {**agentcache, "mori_joint_flashinfer_sampling": settings.get("joint_flashinfer_sampling", True)}
     if "max_prefill_tokens" in settings:
         agentcache = {**agentcache, "mori_max_prefill_tokens": settings["max_prefill_tokens"]}
-    for configured in getattr(namespace, "middleware", None) or ():
-        if configured.startswith(f"{source}.") and configured != middleware:
-            raise AgentInferServeError("Select the MORI Chat mode with agentcache.mori instead of --middleware")
+    # vLLM installs --middleware entries in order; the last wraps the response wire.
+    if _MORI_MIDDLEWARE in (getattr(namespace, "middleware", None) or ()):
+        namespace.middleware = [name for name in namespace.middleware if name != _MORI_MIDDLEWARE]
     # The Program scheduler consumes only the scheduling interval.
     agentcache = {
         **agentcache,
@@ -105,6 +102,6 @@ def configure_embedded(namespace: Namespace) -> ServeProfile:
     return ServeProfile(
         async_scheduler_cls=f"{_MORI_BRIDGE}.MoriAsyncSchedulerBridge",
         sync_scheduler_cls=f"{_MORI_BRIDGE}.MoriSyncSchedulerBridge",
-        middlewares=(middleware, SSE_FRAMING_MIDDLEWARE),
+        middlewares=(_MORI_MIDDLEWARE,),
         agentcache_config=agentcache,
     )
