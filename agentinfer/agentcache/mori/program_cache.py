@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
 """EngineCore-local Program cache operations on the scheduler's two HiRadix tiers."""
 
-from agentinfer.agentcache.core.program_scheduling import BackendObservation, ProgramOperation
+from agentinfer.agentcache.mori.admission import BackendObservation, ProgramOperation
 from agentinfer.agentcache.mori.hiradix import HiRadix
 from agentinfer.scheduling.domain import ProgramRef
 

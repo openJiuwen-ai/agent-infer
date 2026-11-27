@@ -18,11 +18,11 @@ from vllm.v1.engine import EngineCoreRequestType
 from vllm.v1.engine.core import EngineCore, EngineCoreProc
 from vllm.v1.request import Request, RequestStatus
 
-from agentinfer.agentcache.core.program_scheduling import ATTEMPT_ARG, InvalidMoriAdmission, ProgramOperation
-from agentinfer.agentcache.core.scheduling_ipc import UTILITY_METHOD
+from agentinfer.agentcache.mori.admission import ATTEMPT_ARG, InvalidMoriAdmission, ProgramOperation
 from agentinfer.agentcache.mori.block_pool import MoriBlockPool
 from agentinfer.agentcache.mori.bridge import MoriAsyncSchedulerBridge, MoriSyncSchedulerBridge
 from agentinfer.agentcache.mori.hiradix import HiRadix
+from agentinfer.agentcache.mori.ipc import UTILITY_METHOD
 from agentinfer.agentcache.mori.kv_cache_manager import MoriKVCacheManager
 from agentinfer.agentcache.mori.programs import PROGRAM_ARG, CacheClass, request_program
 from agentinfer.agentcache.mori.scheduler import MoriScheduler

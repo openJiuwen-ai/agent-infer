@@ -14,7 +14,7 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse
 
 from agentinfer.agentcache.core.api_adapter import _replay_receive, _scope_with_content_length
-from agentinfer.agentcache.core.mori_api import MoriSchedulingMiddleware
+from agentinfer.agentcache.mori.admission_api import MoriSchedulingMiddleware
 
 _PARSED_BODY = "agentinfer.mori.parsed_body"
 _DIAGNOSTICS = {

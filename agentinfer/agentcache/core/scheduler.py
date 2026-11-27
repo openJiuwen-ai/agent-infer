@@ -128,8 +128,8 @@ class _VllmAdmissionHooks:
         self.lifecycle_receiver: UnixLifecycleReceiver | None = None
         strategy = settings.get("strategy", "progress_ttl")
         if strategy == "mori":
-            from agentinfer.agentcache.core.mori_timer import install_mori_timer
-            from agentinfer.agentcache.core.scheduling_ipc import install_core_utility
+            from agentinfer.agentcache.mori.ipc import install_core_utility
+            from agentinfer.agentcache.mori.timer import install_mori_timer
 
             if getattr(parallel_config, "data_parallel_size", 1) != 1:
                 raise ValueError("Embedded MORI requires one data-parallel rank")
@@ -151,7 +151,7 @@ class _VllmAdmissionHooks:
     def add_request(self, owner: Scheduler, request: Request, native_add: Callable[[Request], None]) -> None:
         """Retain agentic work or pass compatibility traffic directly to vLLM."""
         if self.program_admission is not None:
-            from agentinfer.agentcache.core.program_scheduling import ATTEMPT_ARG, InvalidMoriAdmission
+            from agentinfer.agentcache.mori.admission import ATTEMPT_ARG, InvalidMoriAdmission
             from agentinfer.agentcache.mori.programs import PROGRAM_ARG
 
             params = request.sampling_params

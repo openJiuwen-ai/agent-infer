@@ -11,14 +11,14 @@ from fastapi import FastAPI, Request
 from starlette.responses import PlainTextResponse, StreamingResponse
 from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
 
-from agentinfer.agentcache.core.program_scheduling import ATTEMPT_ARG
-from agentinfer.agentcache.core.scheduling_ipc import UTILITY_METHOD, chat_facts
+from agentinfer.agentcache.mori.admission import ATTEMPT_ARG
 from agentinfer.agentcache.mori.api import (
     MORIDirectMiddleware,
     MORIDirectTextChatMiddleware,
     MORIDirectUnseededTextChatMiddleware,
     mori_parsed_request_body,
 )
+from agentinfer.agentcache.mori.ipc import UTILITY_METHOD, chat_facts
 from agentinfer.agentcache.mori.programs import PROGRAM_ARG
 from tests.helpers.marks import test_marks
 

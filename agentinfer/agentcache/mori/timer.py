@@ -10,7 +10,7 @@ from collections.abc import Callable
 from functools import wraps
 from threading import Timer
 
-from agentinfer.agentcache.core.program_scheduling import InvalidMoriAdmission, MoriProgramAdmissionController
+from agentinfer.agentcache.mori.admission import InvalidMoriAdmission, MoriProgramAdmissionController
 
 logger = logging.getLogger(__name__)
 _DEADLINE = "agentinfer.mori.deadline"

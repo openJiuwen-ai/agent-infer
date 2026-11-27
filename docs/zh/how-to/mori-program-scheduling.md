@@ -67,8 +67,8 @@ adapter 应允许按同一 Program 代次重放操作。
 
 原版规则的对应方法标在 [策略](../../../agentinfer/scheduling/mori/strategy.py)、
 [预算](../../../agentinfer/scheduling/mori/ledger.py)、
-[API 观察](../../../agentinfer/agentcache/core/mori_api.py) 和
-[IPC](../../../agentinfer/agentcache/core/scheduling_ipc.py) 的函数注释中。
+[API 观察](../../../agentinfer/agentcache/mori/admission_api.py) 和
+[IPC](../../../agentinfer/agentcache/mori/ipc.py) 的函数注释中。
 
 `MoriProgramAdmissionController` 管理 Program 许可。Chat 和 `POST /programs/release`
 在向 EngineCore 发送事件前校验服务配置的 Bearer 凭据。两个接口都先读顶层 `program_id`，

@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from agentinfer.agentcache.core.program_scheduling import BackendObservation, MoriProgramAdmissionController
-from agentinfer.agentcache.core.scheduling_ipc import chat_facts
+from agentinfer.agentcache.mori.admission import BackendObservation, MoriProgramAdmissionController
+from agentinfer.agentcache.mori.ipc import chat_facts
 from agentinfer.scheduling import runtime
 from agentinfer.scheduling.mori import MoriConfig
 from tests.helpers.marks import test_marks
@@ -242,7 +242,7 @@ def test_shared_vllm_hook_consumes_the_pre_admission_permit():
     from vllm.v1.engine.core import EngineCore
 
     from agentinfer.agentcache.core.scheduler import _VllmAdmissionHooks
-    from agentinfer.agentcache.core.scheduling_ipc import UTILITY_METHOD
+    from agentinfer.agentcache.mori.ipc import UTILITY_METHOD
 
     host = RecordingHost(600, 200)
     owner = SimpleNamespace(program_cache_adapter=host)
@@ -270,9 +270,9 @@ def test_api_preserves_begin_progress_end_and_release_order():
     from starlette.responses import StreamingResponse
     from starlette.routing import Route
 
-    from agentinfer.agentcache.core.mori_api import MoriSchedulingMiddleware
-    from agentinfer.agentcache.core.program_scheduling import ATTEMPT_ARG
-    from agentinfer.agentcache.core.scheduling_ipc import UTILITY_METHOD, handle_event
+    from agentinfer.agentcache.mori.admission import ATTEMPT_ARG
+    from agentinfer.agentcache.mori.admission_api import MoriSchedulingMiddleware
+    from agentinfer.agentcache.mori.ipc import UTILITY_METHOD, handle_event
 
     host = RecordingHost(300, 10)
     bridge = MoriProgramAdmissionController(host, MoriConfig())
@@ -335,7 +335,7 @@ def test_core_timer_wakes_idle_input_queue_and_executes_on_owner(monkeypatch):
 
     from vllm.v1.engine.core import EngineCoreProc
 
-    from agentinfer.agentcache.core.mori_timer import install_mori_timer
+    from agentinfer.agentcache.mori.timer import install_mori_timer
 
     called = []
     owner = get_ident()
@@ -423,7 +423,7 @@ def test_authenticated_program_routes_share_id_resolution_before_core(configured
     from starlette.responses import JSONResponse
     from starlette.routing import Route
 
-    from agentinfer.agentcache.core.mori_api import MoriSchedulingMiddleware
+    from agentinfer.agentcache.mori.admission_api import MoriSchedulingMiddleware
 
     events = []
 
