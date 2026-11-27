@@ -15,7 +15,10 @@ PROGRAM_ARG = "mori_program_id"
 CONTEXT_CHARS_ARG = "agentinfer_mori_context_chars"
 PREFIX_ARG = "agentinfer_mori_prefix_key"
 CHILD_COUNT_ARG = "agentinfer_mori_child_count"
-RESERVED_ARGS = frozenset((ATTEMPT_ARG, PROGRAM_ARG, CONTEXT_CHARS_ARG, PREFIX_ARG, CHILD_COUNT_ARG))
+PREPARATION_NS_ARG = "agentinfer_mori_preparation_ns"
+RESERVED_ARGS = frozenset(
+    (ATTEMPT_ARG, PROGRAM_ARG, CONTEXT_CHARS_ARG, PREFIX_ARG, CHILD_COUNT_ARG, PREPARATION_NS_ARG)
+)
 UTILITY_METHOD = "agentinfer_program_scheduling"
 
 

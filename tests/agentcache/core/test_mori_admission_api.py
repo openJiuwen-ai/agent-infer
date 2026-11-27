@@ -131,3 +131,36 @@ def test_disconnected_chat_does_not_submit_late_children(monkeypatch, submit_fir
         assert (add[0], cancel[0]) == ("add", "cancel") and add[1] == cancel[1]
     else:
         assert operations == []
+
+
+def test_beam_children_share_chat_facts_and_transfer_cleanup_bypasses_admission():
+    seen = []
+
+    async def add(request):
+        seen.append(request.sampling_params.extra_args)
+
+    async def utility(method, name, args):
+        assert name == "finish"
+
+    core = SimpleNamespace(add_request_async=add, call_utility_async=utility)
+
+    async def endpoint(request):
+        for cleanup in (True, False, False):
+            params = SimpleNamespace(extra_args={"keep": 1, ATTEMPT_ARG: "supplied"})
+            await core.add_request_async(SimpleNamespace(sampling_params=params, abort_immediately=cleanup))
+        return JSONResponse({})
+
+    app = Starlette(routes=[Route("/v1/chat/completions", endpoint, methods=["POST"])])
+    app.add_middleware(MoriSchedulingMiddleware)
+    app.state.engine_client = SimpleNamespace(engine_core=core)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/v1/chat/completions", json={"use_beam_search": True, "n": 1})
+            assert response.status_code == 200
+
+    asyncio.run(run())
+    cleanup, first, second = seen
+    assert cleanup == {"keep": 1}
+    assert first == second and first[ATTEMPT_ARG] != "supplied"
+    assert CHILD_COUNT_ARG not in first

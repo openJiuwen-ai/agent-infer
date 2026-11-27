@@ -38,7 +38,21 @@ class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
             if context_chars is not None
             else max(0, int(event.field("prompt_tokens")))
         )
-        program.start_reasoning(event.occurred_at_monotonic_s)
+        now = event.occurred_at_monotonic_s
+        preparation_ns = event.field("frontend_preparation_ns")
+        since = program.acting_since
+        if program.steps == 1:
+            # The first ADD of a reused name has no earlier boundary in this generation.
+            since = None if ref.generation else 0.0
+        if preparation_ns is None:
+            # Hosts without ingress timing start the latest arrival's reasoning at dispatch.
+            program.reasoning_since = None
+        elif since is not None:
+            ingress = now - int(preparation_ns) / 1e9
+            if since <= ingress <= now:
+                now = ingress
+                program.reasoning_since = ingress
+        program.start_reasoning(now)
 
     def on_request_progress(self, factors: MoriFactors, event: SchedulingEvent) -> None:
         """Port ThunderAgent update_program_tokens_streaming to the shared event stream."""
@@ -80,7 +94,8 @@ class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
             state.active[ref] = None
             state.warm.pop(ref, None)
             state.waiting.pop(ref, None)
-        program.reasoning_since = event.occurred_at_monotonic_s
+        if program.reasoning_since is None:
+            program.reasoning_since = event.occurred_at_monotonic_s
 
     on_program_resumed = on_program_admitted
 
@@ -123,7 +138,8 @@ class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
         program = factors.for_program(candidate)
         required = ledger.required(candidate)
         if candidate in state.active:
-            program.reasoning_since = snapshot.observed_at_monotonic_s
+            if program.reasoning_since is None:
+                program.reasoning_since = snapshot.observed_at_monotonic_s
             return AdmissionOutcome(AdmissionDisposition.ADMITTED, "mori_active", required)
         if candidate in state.warm and snapshot.total_kv_tokens is not None and ledger.hbm_room >= required:
             self._resume(ledger, transitions, candidate, "mori_warm_arrival")
@@ -145,6 +161,8 @@ class MoriStrategy(SchedulingStrategy[MoriGlobalFactors, MoriProgramFactors]):
         ):
             self._apply(transitions, TransitionKind.ADMIT, candidate, "mori_new", snapshot.backend_id)
             return AdmissionOutcome(AdmissionDisposition.ADMITTED, "mori_new", required)
+        # Parked time ends ACTING, then the actual promotion starts REASONING.
+        program.reasoning_since = None
         if candidate not in state.warm:
             state.waiting.setdefault(candidate, None)
         self._apply(transitions, TransitionKind.QUEUE, candidate, "mori_queued")
