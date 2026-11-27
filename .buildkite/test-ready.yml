@@ -91,8 +91,18 @@ steps:
                 - HOME=/tmp/ci-home
                 - PYTEST_ADDOPTS
         artifact_paths:
-          - "tests/run/acc/jiuwenswarm-*/**/*"
-          - "tests/result/acc/jiuwenswarm-*/**/*"
+          - "tests/run/acc/jiuwenswarm-*/pytest.log"
+          - "tests/run/acc/jiuwenswarm-*/*/*-requirements.txt"
+          - "tests/run/acc/jiuwenswarm-*/*/vllm-logs/*.log"
+          - "tests/run/acc/jiuwenswarm-agentinfer-*/{manifest,summary,task_index}.json"
+          - "tests/run/acc/jiuwenswarm-agentinfer-*/proxy.*.log"
+          - "tests/run/acc/jiuwenswarm-agentinfer-*/tasks/*/*.{json,jsonl,patch}"
+          - "tests/run/acc/jiuwenswarm-agentinfer-*/tasks/*/{*.stderr,*.stdout,*-error,terminal-final}.log"
+          - "tests/run/acc/jiuwenswarm-agentinfer-*/tasks/*/jiuwenswarm-instance/{data/agent/.logs,data/logs,home/.jiuwenswarm/logs}/**/*.log"
+          - "tests/run/acc/jiuwenswarm-agentinfer-*/tasks/*/jiuwenbox-audit/*.log"
+          - "tests/run/acc/jiuwenswarm-agentinfer-*/evaluations/*/*.{json,jsonl,log}"
+          - "tests/run/acc/jiuwenswarm-agentinfer-*/evaluations/*/raw/**/*.{json,log,txt}"
+          - "tests/result/acc/jiuwenswarm-agentinfer-*/correctness.json"
         commands:
           - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k jiuwenswarm
 

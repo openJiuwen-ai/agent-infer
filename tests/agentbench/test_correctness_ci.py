@@ -378,7 +378,7 @@ def test_generated_artifacts_are_not_collected_as_tests(pytester):
 
 
 @pytest.mark.parametrize("pipeline", ["test-ready.yml", "test-nightly.yml"])
-def test_ci_uploads_every_accuracy_artifact(report_config, pipeline):
+def test_ci_uploads_accuracy_results_and_diagnostics_only(report_config, pipeline):
     import shlex
 
     import yaml
@@ -393,6 +393,14 @@ def test_ci_uploads_every_accuracy_artifact(report_config, pipeline):
                     yield from jobs(step["steps"])
                 else:
                     yield step
+
+    def expand_braces(pattern):
+        match = re.search(r"\{([^{}]+)\}", pattern)
+        if match is None:
+            yield pattern
+            return
+        for choice in match[1].split(","):
+            yield from expand_braces(pattern[: match.start()] + choice + pattern[match.end() :])
 
     checked = 0
     for job in jobs(document["steps"]):
@@ -411,17 +419,64 @@ def test_ci_uploads_every_accuracy_artifact(report_config, pipeline):
         paths = [
             artifacts / "pytest.log",
             artifacts / agent / "bench-requirements.txt",
+            artifacts / agent / "evaluation-requirements.txt",
             artifacts / scenario / "vllm-logs/worker.log",
             run_dir / "manifest.json",
+            run_dir / "summary.json",
+            run_dir / "task_index.json",
+            run_dir / "proxy.stderr.log",
+            run_dir / "tasks/task-example/result.json",
+            run_dir / "tasks/task-example/model.patch",
+            run_dir / "tasks/task-example/transcript.jsonl",
+            run_dir / "tasks/task-example/jiuwenswarm.jsonl",
+            run_dir / "tasks/task-example/dsh-run-status.json",
+            run_dir / "tasks/task-example/terminal-final.log",
+            run_dir / "tasks/task-example/jiuwenbox-server.stderr.log",
+            run_dir / "tasks/task-example/dsh.stdout.log",
+            run_dir / "tasks/task-example/zcode-error.log",
+            run_dir / "tasks/task-example/jiuwenswarm-instance/home/.jiuwenswarm/logs/server.log",
+            run_dir / "tasks/task-example/jiuwenswarm-instance/data/agent/.logs/agent_server.log",
+            run_dir / "tasks/task-example/jiuwenswarm-instance/data/logs/logs/run/jiuwen.log",
+            run_dir / "tasks/task-example/jiuwenbox-audit/example.audit.log",
+            run_dir / "evaluations/eval-example/correctness.json",
+            run_dir / "evaluations/eval-example/evaluation_manifest.json",
             run_dir / "evaluations/eval-example/task_results.jsonl",
-            run_dir / "evaluations/eval-example/raw/logs/run_evaluation/task.log",
+            run_dir / "evaluations/eval-example/harness.stdout.log",
+            run_dir / "evaluations/eval-example/harness.stderr.log",
+            run_dir / "evaluations/eval-example/raw/model.eval-example.json",
+            run_dir
+            / "evaluations/eval-example/raw/logs/run_evaluation/eval-example/model/task-example/run_instance.log",
+            run_dir / "evaluations/eval-example/raw/logs/run_evaluation/eval-example/model/task-example/report.json",
+            run_dir
+            / "evaluations/eval-example/raw/logs/run_evaluation/eval-example/model/task-example/test_output.txt",
             result_dir / "correctness.json",
         ]
-        for path in paths:
+        excluded = [
+            run_dir / "workspaces/task-example/source.py",
+            run_dir / "workspaces/task-example/report.json",
+            run_dir / "workspaces/task-example/.git/config",
+            run_dir / "tasks/task-example/claude_state/cache/cached.json",
+            run_dir / "tasks/task-example/dsh-home/.git/config",
+            run_dir / "tasks/task-example/zcode-home/node_modules/package/package.json",
+            run_dir / "tasks/task-example/jiuwenswarm-instance/data/agent/workspace/skills/example.py",
+            run_dir / "tasks/task-example/jiuwenswarm-instance/home/.npm/_logs/install.log",
+            run_dir / "tasks/task-example/terminal-1.log",
+            run_dir / "evaluations/eval-example/inputs/dataset.json",
+            run_dir / "requests.jsonl",
+            result_dir / "unrelated.txt",
+            checkout / "tests/run/acc/unselected-example/pytest.log",
+        ]
+        for path in paths + excluded:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.touch()
-        uploaded = {path for pattern in job["artifact_paths"] for path in checkout.glob(pattern)}
-        assert set(paths) <= uploaded
+        uploaded = {
+            path
+            for pattern in job["artifact_paths"]
+            for expanded in expand_braces(pattern)
+            for path in checkout.glob(expanded)
+            if path.is_file()
+        }
+        assert set(paths) == uploaded
         assert "--log-file" not in job["env"]["PYTEST_ADDOPTS"]
         checked += 1
     assert checked

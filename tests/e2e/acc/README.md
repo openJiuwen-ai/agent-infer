@@ -191,8 +191,11 @@ Replace `baseline` with `agentinfer` for the other group. Use `-k dsh` to run ju
 the shared model cache, and dependency records. The requested benchmark user is prepared for `plan-subagent`.
 Manual runs omit `--correctness-ci`.
 The evaluation config overrides the loaded case in memory; the JSON files are preserved.
-The pipeline uploads shared invocation logs, complete benchmark/scoring artifacts per agent and scenario,
-and the corresponding exported score summaries.
+The pipeline uploads score summaries and diagnostic evidence: pytest/worker logs, dependency versions,
+run manifests and task indexes, task results/patches/transcripts, agent runtime/error logs, evaluation manifests,
+per-task scoring results, and raw harness reports/test logs. It excludes task workspaces, Git data,
+agent caches and bundled resources, repeated terminal snapshots, request traces, and copied evaluation datasets.
+Complete benchmark artifacts remain in the local `run` directory; CI uploads only this diagnostic subset.
 Both jobs use the `l20_2` hardware preset. Each job declares its accuracy `PYTEST_ADDOPTS` and Compose plugin
 configuration in `test-nightly.yml`; job-level plugins override the hardware preset's defaults.
 The pytest command names its test target and group selector. Each job automatically saves `pytest.log` under

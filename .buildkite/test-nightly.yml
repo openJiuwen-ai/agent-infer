@@ -35,9 +35,18 @@ steps:
         concurrency_group: agentinfer/nightly-accuracy-l20
         timeout_in_minutes: 90
         artifact_paths:
-          - "tests/run/acc/baseline-*/**/*"
-          - "tests/run/acc/*-baseline-*/**/*"
-          - "tests/result/acc/*-baseline-*/**/*"
+          - "tests/run/acc/baseline-*/pytest.log"
+          - "tests/run/acc/baseline-*/*/*-requirements.txt"
+          - "tests/run/acc/baseline-*/*/vllm-logs/*.log"
+          - "tests/run/acc/*-baseline-*/{manifest,summary,task_index}.json"
+          - "tests/run/acc/*-baseline-*/proxy.*.log"
+          - "tests/run/acc/*-baseline-*/tasks/*/*.{json,jsonl,patch}"
+          - "tests/run/acc/*-baseline-*/tasks/*/{*.stderr,*.stdout,*-error,terminal-final}.log"
+          - "tests/run/acc/*-baseline-*/tasks/*/jiuwenswarm-instance/{data/agent/.logs,data/logs,home/.jiuwenswarm/logs}/**/*.log"
+          - "tests/run/acc/*-baseline-*/tasks/*/jiuwenbox-audit/*.log"
+          - "tests/run/acc/*-baseline-*/evaluations/*/*.{json,jsonl,log}"
+          - "tests/run/acc/*-baseline-*/evaluations/*/raw/**/*.{json,log,txt}"
+          - "tests/result/acc/*-baseline-*/correctness.json"
         commands:
           - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k baseline
 
@@ -67,8 +76,17 @@ steps:
         concurrency_group: agentinfer/nightly-accuracy-l20
         timeout_in_minutes: 90
         artifact_paths:
-          - "tests/run/acc/agentinfer-*/**/*"
-          - "tests/run/acc/*-agentinfer-*/**/*"
-          - "tests/result/acc/*-agentinfer-*/**/*"
+          - "tests/run/acc/agentinfer-*/pytest.log"
+          - "tests/run/acc/agentinfer-*/*/*-requirements.txt"
+          - "tests/run/acc/agentinfer-*/*/vllm-logs/*.log"
+          - "tests/run/acc/*-agentinfer-*/{manifest,summary,task_index}.json"
+          - "tests/run/acc/*-agentinfer-*/proxy.*.log"
+          - "tests/run/acc/*-agentinfer-*/tasks/*/*.{json,jsonl,patch}"
+          - "tests/run/acc/*-agentinfer-*/tasks/*/{*.stderr,*.stdout,*-error,terminal-final}.log"
+          - "tests/run/acc/*-agentinfer-*/tasks/*/jiuwenswarm-instance/{data/agent/.logs,data/logs,home/.jiuwenswarm/logs}/**/*.log"
+          - "tests/run/acc/*-agentinfer-*/tasks/*/jiuwenbox-audit/*.log"
+          - "tests/run/acc/*-agentinfer-*/evaluations/*/*.{json,jsonl,log}"
+          - "tests/run/acc/*-agentinfer-*/evaluations/*/raw/**/*.{json,log,txt}"
+          - "tests/result/acc/*-agentinfer-*/correctness.json"
         commands:
           - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k agentinfer
