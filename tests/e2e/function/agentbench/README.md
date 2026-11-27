@@ -116,7 +116,7 @@ use pytest-xdist for this suite if only one model instance is desired.
 
 The ready CI pipeline runs all profiles in one functional job and one pytest
 invocation. It uses the existing l20_2 preset and the shared CI runtime image.
-Before loading vLLM, the same job runs nine ready-marked native WorkSwarm checks
+Before loading vLLM, the same job runs all 15 ready-marked native WorkSwarm checks
 with a simulated HTTP model in the isolated agent environment:
 
 ```bash
@@ -130,9 +130,9 @@ and two real instances with identical initial ports. Both instances must remain
 alive with distinct gateways owned by the correct service processes.
 Run them in the environment containing WorkSwarm and AgentInfer;
 the `AGENTBENCH_JIUWEN_NATIVE=1` opt-in is required.
-Omit `-m "cpu and ready"` to run all 15 native checks, including full CLI rounds,
-quota denial, service shutdown, and cancellation. The ready selection avoids
-repeating the full CLI workflows before the real-model smoke cases.
+All tests in this module inherit `cpu` and `ready` marks, including full CLI
+rounds, quota denial, service shutdown, and cancellation. The existing ready CI
+command selects all 15 native checks.
 Performance and replay suites retain their previous service lifecycle.
 
 Initial CI image builds and builds triggered by retried test jobs share the
