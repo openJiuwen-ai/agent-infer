@@ -268,10 +268,9 @@ def _adapt_identity_request_body(
 def _install_anthropic_identity_bridge() -> None:
     """Copy middleware-owned Anthropic metadata into vLLM's internal Chat request.
 
-    vLLM's public Anthropic request schema has no ``vllm_xargs`` field, but its
-    implementation converts every Messages request into a ``ChatCompletionRequest``
-    before creating ``SamplingParams``. The explicit API middleware installs this
-    process-local hook only when Anthropic identity adaptation is requested.
+    vLLM converts Messages requests into ``ChatCompletionRequest`` objects
+    before creating ``SamplingParams``. The middleware installs this process-local
+    hook to carry canonical identity and sampling metadata across that conversion.
     """
     from vllm.entrypoints.anthropic.serving import AnthropicServingMessages
 
@@ -597,13 +596,20 @@ def _response_lifecycle(endpoint: ApiEndpoint, payload: object) -> ProgramLifecy
         reasons = [item.get("stop_reason") for item in candidates if isinstance(item, Mapping)]
         if "tool_use" in reasons:
             return ProgramLifecycle.CONTINUE
-        if "end_turn" in reasons:
-            return ProgramLifecycle.TERMINAL
+        content_block = payload.get("content_block")
+        if (
+            payload.get("type") == "content_block_start"
+            and isinstance(content_block, Mapping)
+            and content_block.get("type") == "tool_use"
+        ):
+            return ProgramLifecycle.CONTINUE
         content = payload.get("content")
         if isinstance(content, list) and any(
             isinstance(block, Mapping) and block.get("type") == "tool_use" for block in content
         ):
             return ProgramLifecycle.CONTINUE
+        if "end_turn" in reasons:
+            return ProgramLifecycle.TERMINAL
         return ProgramLifecycle.UNKNOWN
     choices = payload.get("choices")
     if not isinstance(choices, list):

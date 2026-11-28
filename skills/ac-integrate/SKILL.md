@@ -36,7 +36,7 @@ Do NOT invoke for: adding a cache backend (use `ac-bootstrap`), benchmarking
 
    If vLLM is not importable, stop and report the missing environment instead of
    continuing with guessed APIs. Read the current checkout's requirements and
-   runbook for its supported version (currently `0.23.0`). If the installed
+   runbook for its supported version. If the installed
    version differs, stop and resolve or explicitly approve the mismatch before
    relying on scheduler, middleware, or Prefix Cache APIs.
 

@@ -72,7 +72,7 @@ def test_anthropic_bridge_without_replay_sampling_keeps_vllm_defaults() -> None:
         }
     )
 
-    chat_request = AnthropicServingMessages._convert_anthropic_to_openai_request(anthropic_request)
+    chat_request = AnthropicServingMessages.to_chat_completion_request(anthropic_request)
 
     assert chat_request.seed is None
     assert chat_request.min_tokens == 0
@@ -125,6 +125,22 @@ def test_anthropic_lifecycle_distinguishes_end_turn_and_tool_use() -> None:
         )
         is ProgramLifecycle.CONTINUE
     )
+    assert (
+        _response_lifecycle(
+            ApiEndpoint.ANTHROPIC_MESSAGES,
+            {"stop_reason": "end_turn", "content": [{"type": "tool_use", "name": "search"}]},
+        )
+        is ProgramLifecycle.CONTINUE
+    )
+
+
+def test_anthropic_streamed_tool_call_is_not_overwritten_by_end_turn() -> None:
+    observer = _LifecycleResponseObserver(ApiEndpoint.ANTHROPIC_MESSAGES)
+    observer.start({"status": 200, "headers": [(b"content-type", b"text/event-stream")]})
+    observer.feed(b'data: {"type":"content_block_start","content_block":{"type":"tool_use","name":"search"}}\n')
+    observer.feed(b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n')
+
+    assert observer.finish() is ProgramLifecycle.CONTINUE
 
 
 def test_streamed_tool_call_is_not_overwritten_by_later_stop_reason() -> None:
@@ -301,7 +317,7 @@ def test_identity_middleware_carries_anthropic_headers_to_internal_vllm_xargs() 
     assert adapted_payload["metadata"]["caller"] == "benchkit"
     assert "vllm_xargs" not in adapted_payload
     anthropic_request = AnthropicMessagesRequest.model_validate(adapted_payload)
-    chat_request = AnthropicServingMessages._convert_anthropic_to_openai_request(anthropic_request)
+    chat_request = AnthropicServingMessages.to_chat_completion_request(anthropic_request)
     assert chat_request.seed == 7
     assert chat_request.min_tokens == 8
     assert chat_request.ignore_eos is True

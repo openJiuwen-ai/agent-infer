@@ -210,10 +210,10 @@ class _VllmAdmissionHooks:
                 self.controller.on_prefix_cache_observation(request_id, 0)
                 continue
             try:
-                _, cached_prefix_tokens = find_longest_cache_hit(
+                cached_prefix_tokens = find_longest_cache_hit(
                     request.block_hashes,
                     max(0, int(request.num_tokens) - 1),
-                )
+                )[1]
             except (AttributeError, TypeError, ValueError):
                 logger.warning("AgentInfer prefix-cache observation failed request=%s", request_id, exc_info=True)
                 continue
@@ -270,41 +270,39 @@ class _VllmAdmissionHooks:
                         max(0, local_observation[0] - local_observation[1]),
                     )
 
-    def cancel_retained(self, request_ids: str | Iterable[str] | None) -> list[tuple[str, int]]:
+    def _cancel_retained(
+        self, request_ids: str | tuple[str, ...] | None, finished_status: RequestStatus
+    ) -> list[Request]:
         """Cancel attempts that have not entered native vLLM yet."""
-        normalized = (
-            self.controller.retained_request_ids
-            if request_ids is None
-            else ((request_ids,) if isinstance(request_ids, str) else tuple(request_ids))
-        )
-        cancelled: list[tuple[str, int]] = []
-        for request_id in normalized:
+        retained_ids = self.controller.retained_request_ids
+        if request_ids is not None:
+            requested = {request_ids} if isinstance(request_ids, str) else set(request_ids)
+            retained_ids = tuple(request_id for request_id in retained_ids if request_id in requested)
+        cancelled: list[Request] = []
+        for request_id in retained_ids:
             entry = self.controller.cancel_request(request_id)
             if entry is not None:
-                cancelled.append((request_id, entry.retained_request.client_index))
+                request = entry.retained_request
+                request.status = finished_status
+                cancelled.append(request)
         return cancelled
 
     def finish_requests(
         self,
-        owner: Scheduler,
         request_ids: str | Iterable[str] | None,
         finished_status: RequestStatus,
-        native_finish: Callable[[str | Iterable[str] | None, RequestStatus], list[tuple[str, int]]],
-    ) -> list[tuple[str, int]]:
+        native_finish: Callable[[str | Iterable[str] | None, RequestStatus], list[Request]],
+    ) -> list[Request]:
         """Finish retained and native attempts while reporting only terminal lifecycle facts."""
         normalized_request_ids = (
             request_ids if request_ids is None or isinstance(request_ids, str) else tuple(request_ids)
         )
-        retained = self.cancel_retained(normalized_request_ids)
-        token_counts = {
-            request_id: request.num_tokens
-            for request_id, request in owner.requests.items()
-            if request_id in self.tracked_native
-        }
+        retained = self._cancel_retained(normalized_request_ids, finished_status)
         native = native_finish(normalized_request_ids, finished_status)
-        for request_id, _ in native:
+        for request in native:
+            request_id = request.request_id
             if request_id in self.tracked_native:
-                self.controller.on_request_completion(request_id, token_counts.get(request_id, 0))
+                self.controller.on_request_completion(request_id, request.num_tokens)
                 self.tracked_native.discard(request_id)
                 self._local_prefix_observations.pop(request_id, None)
         return retained + native
@@ -397,7 +395,7 @@ class _VllmAdmissionHooks:
         """Estimate native waiting demand from its queued request contexts without Program-level share attribution."""
         waiting_queues = tuple(
             queue
-            for queue in (getattr(owner, "waiting", None), getattr(owner, "skipped_waiting", None))
+            for queue in (getattr(owner, "waiting", None), getattr(owner, "kv_holding_waiting", None))
             if queue is not None
         )
         if not waiting_queues:
@@ -453,7 +451,7 @@ class AgentCacheAsyncSchedulerBridge(AsyncScheduler):
         return outputs
 
     def finish_requests(self, request_ids, finished_status: RequestStatus):
-        return self._agentcache.finish_requests(self, request_ids, finished_status, super().finish_requests)
+        return self._agentcache.finish_requests(request_ids, finished_status, super().finish_requests)
 
     def get_num_unfinished_requests(self) -> int:
         return self._agentcache.unfinished_count(super().get_num_unfinished_requests())
@@ -491,7 +489,7 @@ class AgentCacheSyncSchedulerBridge(Scheduler):
         return outputs
 
     def finish_requests(self, request_ids, finished_status: RequestStatus):
-        return self._agentcache.finish_requests(self, request_ids, finished_status, super().finish_requests)
+        return self._agentcache.finish_requests(request_ids, finished_status, super().finish_requests)
 
     def get_num_unfinished_requests(self) -> int:
         return self._agentcache.unfinished_count(super().get_num_unfinished_requests())

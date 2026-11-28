@@ -67,18 +67,20 @@ def _install_stub_vllm(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         def cmd(self, args: argparse.Namespace) -> None:
             recorded["namespace"] = args
 
-    cli_args = types.ModuleType("vllm.entrypoints.openai.cli_args")
+    cli_args = types.ModuleType("vllm.entrypoints.launchers.cli_args")
     cli_args.make_arg_parser = make_arg_parser
-    entrypoints_utils = types.ModuleType("vllm.entrypoints.utils")
+    entrypoints_utils = types.ModuleType("vllm.entrypoints.serve.utils.api_utils")
     entrypoints_utils.cli_env_setup = cli_env_setup
     serve_mod = types.ModuleType("vllm.entrypoints.cli.serve")
     serve_mod.ServeSubcommand = ServeSubcommand
     for name, module in {
         "vllm": types.ModuleType("vllm"),
         "vllm.entrypoints": types.ModuleType("vllm.entrypoints"),
-        "vllm.entrypoints.openai": types.ModuleType("vllm.entrypoints.openai"),
-        "vllm.entrypoints.openai.cli_args": cli_args,
-        "vllm.entrypoints.utils": entrypoints_utils,
+        "vllm.entrypoints.launchers": types.ModuleType("vllm.entrypoints.launchers"),
+        "vllm.entrypoints.launchers.cli_args": cli_args,
+        "vllm.entrypoints.serve": types.ModuleType("vllm.entrypoints.serve"),
+        "vllm.entrypoints.serve.utils": types.ModuleType("vllm.entrypoints.serve.utils"),
+        "vllm.entrypoints.serve.utils.api_utils": entrypoints_utils,
         "vllm.entrypoints.cli": types.ModuleType("vllm.entrypoints.cli"),
         "vllm.entrypoints.cli.serve": serve_mod,
     }.items():

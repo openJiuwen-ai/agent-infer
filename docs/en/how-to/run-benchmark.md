@@ -8,7 +8,7 @@ It also covers SWE-bench Verified correctness evaluation, including automatic sc
 
 The workflow requires:
 
-- Linux, Python 3.10 or later, and vLLM 0.23.0.
+- Linux, Python 3.10 or later, and vLLM 0.31.0.
 - CUDA GPUs capable of running the target model; the script defaults to two tensor-parallel workers.
 - Claude Code, tmux, and Git, with Claude Code authentication completed.
 - A model that supports Anthropic `POST /v1/messages`.
@@ -33,7 +33,7 @@ Create an environment and install AgentInfer from the repository root:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install "vllm==0.23.0"
+python -m pip install "vllm==0.31.0"
 python -m pip install -e .
 ```
 

@@ -95,6 +95,7 @@ steps:
       - label: "ut"
         commands:
           - pytest tests -sv -m "cpu and ready"
+          - pytest tests/agentcache/core -sv -m cpu
         timeout_in_minutes: 20
         mirror_hardwares: cpu_small
 

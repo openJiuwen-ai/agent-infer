@@ -17,7 +17,7 @@ pre-commit install
 ```
 
 On Windows PowerShell, activate the environment with `.venv\Scripts\Activate.ps1`. To run vLLM integration tests,
-use Linux or WSL 2 and install the supported vLLM 0.23.0 release in the same environment as AgentInfer.
+use Linux or WSL 2 and install the supported vLLM 0.31.0 release in the same environment as AgentInfer.
 
 ## Change Requirements
 

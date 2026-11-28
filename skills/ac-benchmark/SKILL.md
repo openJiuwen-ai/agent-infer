@@ -49,8 +49,8 @@ Do NOT invoke for: unit-testing a function, profiling unrelated code, or compari
      --output-dir agentinfer/agentbench/data/swebench
    ```
 
-   Confirm the supported vLLM version declared by the current checkout (currently
-   `0.23.0`), branch/commit, host alias, working directory, virtualenv, service
+   Confirm the supported vLLM version declared by the current checkout,
+   branch/commit, host alias, working directory, virtualenv, service
    port, dataset/config paths, result directories, session/process names, stop
    conditions, and exact launch commands. Result directories must not already
    exist.

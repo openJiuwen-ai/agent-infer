@@ -1,6 +1,6 @@
 # Python API
 
-This document describes AgentInfer's public integration surface for vLLM 0.23.0. Refer to the matching vLLM
+This document describes AgentInfer's public integration surface for vLLM 0.31.0. Refer to the matching vLLM
 documentation for the full upstream API.
 
 The current serving path uses an explicit agent-aware scheduler, API middleware, and the embedded Progress-TTL controller.

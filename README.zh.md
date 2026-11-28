@@ -30,7 +30,7 @@ AgentInfer 为智能体工作流提供缓存管理和请求调度能力，可集
 
 - 操作系统：Linux，或安装了 WSL 2 的 Windows。
 - Python：3.10 或更高版本，与 `pyproject.toml` 中的 `requires-python` 保持一致。
-- 推理运行时：vLLM 0.23.0。
+- 推理运行时：vLLM 0.31.0。
 - 硬件：与 vLLM 兼容且能够运行所选模型的 CUDA GPU。
 
 AgentInfer 必须与 vLLM 安装在同一 Python 环境中。
@@ -49,7 +49,7 @@ python -m pip install -e .
 
 ### 安装发布包
 
-下载 [AgentInfer 0.2.0 wheel][release-wheel]，然后在目标 vLLM 环境中安装：
+vLLM 0.31.0 请按上文从源码安装。已发布的 [AgentInfer 0.2.0 wheel][release-wheel] 对应 vLLM 0.23.0：
 
 ```bash
 python -m pip install agentinfer-0.2.0-py3-none-any.whl

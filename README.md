@@ -30,7 +30,7 @@ AgentInfer manages caches and schedules agent workflow requests in or in front o
 
 - Operating system: Linux, or Windows with WSL 2.
 - Python: 3.10 or later, matching `requires-python` in `pyproject.toml`.
-- Inference runtime: vLLM 0.23.0.
+- Inference runtime: vLLM 0.31.0.
 - Hardware: a CUDA GPU supported by vLLM and large enough for the selected model.
 
 Install AgentInfer in the same Python environment as vLLM.
@@ -49,7 +49,8 @@ python -m pip install -e .
 
 ### Install a release package
 
-Download the [AgentInfer 0.2.0 wheel][release-wheel], then install it in the target vLLM environment:
+For vLLM 0.31.0, use the source installation above. The published [AgentInfer 0.2.0 wheel][release-wheel]
+targets vLLM 0.23.0:
 
 ```bash
 python -m pip install agentinfer-0.2.0-py3-none-any.whl
