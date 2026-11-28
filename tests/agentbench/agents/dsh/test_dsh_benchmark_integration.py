@@ -94,6 +94,9 @@ def test_real_dsh_benchmark_two_concurrent_tasks(tmp_path, dsh_executable, profi
     facts = [json.loads(line) for line in (run_dir / "requests.jsonl").read_text().splitlines()]
     assert len(facts) == len(server.requests)
     assert all(row["status"] == "success" for row in facts)
+    if profile == "single":
+        for row in server.requests:
+            assert "exit_plan_mode" not in {tool["function"]["name"] for tool in row["body"]["tools"]}
     for task_dir in sorted((run_dir / "tasks").iterdir()):
         result = json.loads((task_dir / "result.json").read_text())
         assert result["outcome"] == "completed", (result, (task_dir / "dsh-run-status.json").read_text())
