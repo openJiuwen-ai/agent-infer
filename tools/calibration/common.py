@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import shutil
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -198,17 +197,6 @@ def parse_unit_fraction(value: str) -> float:
     if parsed > 1:
         raise argparse.ArgumentTypeError("expected a fraction in (0, 1]")
     return parsed
-
-
-def prepare_stage_directory(root: Path, stage: str, overwrite: bool) -> Path:
-    """Create one stage directory without deleting the other stage."""
-    path = root / stage
-    if path.exists() and any(path.iterdir()):
-        if not overwrite:
-            raise FileExistsError(f"stage directory is not empty: {path}")
-        shutil.rmtree(path)
-    path.mkdir(parents=True, exist_ok=True)
-    return path
 
 
 def write_json(path: Path, value: object) -> None:

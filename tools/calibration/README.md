@@ -85,25 +85,33 @@ of every request context and does not subtract shared physical prefix blocks.
 `kv-capacity-tokens` is intentionally not a user parameter. The tool derives one EngineCore rank's capacity from the
 common `vllm:cache_config_info` exposed by `/metrics`, in this order:
 
-1. `AGENTINFER_KV_CAPACITY_TOKENS`, an explicit operator override;
-2. `kv_cache_size_tokens`, the backend-reported logical capacity of one EngineCore, used as-is;
+1. `AGENTINFER_KV_CAPACITY_TOKENS`, an explicit per-EngineCore override.
+2. `kv_cache_size_tokens`, when the backend publishes this per-EngineCore label (upstream vLLM 0.24.0 and later).
+   vLLM derives it from concurrency at `max_model_len`. On sliding-window layouts it can overestimate the tokens
+   that shorter concurrent requests can use without preemption.
 3. `num_gpu_blocks * block_size`, divided by the homogeneous `engine_count` for internal DP, where `/metrics` repeats
- the deployment-wide block count under every engine label.
+   the deployment-wide block count under every engine label.
 
-An override must be a positive integer. An explicitly set empty, nonpositive, non-finite, or malformed value fails with
-a `ValueError` naming the variable and its value; unset the variable to use backend metadata. Placeholder or non-finite
-backend logical-size labels fall back to block arithmetic. Both stages capture the resolved capacity and its source
-in `metadata.deployment.kv_capacity` (`tokens` and `source`), which participates in the metadata hash. Changing the
-override or capacity source between stages therefore requires a separate results directory.
+The repository's supported upstream vLLM 0.23.0 omits the step 2 label, so automatic discovery uses step 3.
+On compressed or sparse attention layouts, block arithmetic can underestimate capacity and skip long-context cases.
+For these deployments, read the per-engine count from the startup log (`GPU KV cache size: N tokens`, or
+`NPU KV cache size` on Ascend backends that use the device prefix). Export the count as plain digits before running
+either stage. For example, for a log value of `1,457,130` tokens, run `export AGENTINFER_KV_CAPACITY_TOKENS=1457130`.
+The logged count already applies to one engine.
 
-Step 2 exists because `block_size` is not always a count of logical tokens. Compressed or sparse attention layouts can
-report a per-block token count that makes step 3 an order of magnitude too small; because cases with
-`batch * context > max_kv_fraction * capacity` are skipped, that error silently truncates the decode matrix to short
-contexts and the fitted context coefficient collapses towards zero. Record the resolved value as
-`observed_kv_capacity_tokens` and verify it against the engine's own `GPU KV cache size` log line before trusting the
-Profile. Requiring a second manually entered capacity would duplicate an authoritative backend value and could silently
-filter cases with a stale or TP/DP-confused number. The command fails explicitly if the backend exposes none of the
-supported fields.
+When set, the override must be a positive integer. Both stages validate it before replacing any stage output.
+An invalid value raises a `ValueError` naming the variable and its value. Unset it to restore automatic discovery.
+Missing or unusable logical-size labels fall back to block arithmetic. If neither source yields a positive capacity,
+both stages fail. Both stages hash the resolved count and source in `metadata.deployment.kv_capacity`. Changing
+either requires a separate results directory.
+
+Decode records the capacity used for case selection in `decode/run_config.json` as `observed_kv_capacity_tokens`.
+On backends that publish the label, the startup log prints the same estimate. To check whether the chosen matrix
+actually ran without preemption, inspect `calibration.throughput_counter_delta["vllm:num_preemptions_total"]` in
+`decode/result.json`. A positive delta on the calibrated engine includes preemptions during warmup or measurement.
+Reduce the matrix or `--max-kv-fraction` and rerun on an idle deployment before using that fit. A zero delta means
+no preemptions were observed. An absent delta means the counter was unavailable in a snapshot or decreased during
+the stage, so the run cannot establish whether preemption occurred.
 
 The default `2/1` Prefill/Decode repeat counts with 128 Decode tokens target a complete run in roughly ten minutes on
 the reference deployment. Use a reduced matrix with `1/1` repeats for functional smoke validation. Use `3/2` repeats
@@ -131,9 +139,9 @@ Metadata Hash, the tools atomically create `calibration.json` with exactly three
 }
 ```
 
-The first version's Hash describes only facts observable from the three HTTP endpoints. It is not a complete hardware
-or launch-configuration identity. A future backend middleware may calculate and return a full deployment Hash without
-exposing raw configuration or credentials.
+The hash covers stable metadata from the three HTTP endpoints and the resolved KV capacity and its source.
+A future backend middleware may calculate and return a full deployment Hash without exposing raw configuration or
+credentials.
 
 ## Smoke validation
 
