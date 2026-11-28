@@ -6,7 +6,7 @@ pyyaml>=6.0
 
 # Data processing (build_tasks, split_evalset, convert_eval_to_bench)
 pandas>=2.0
-pyarrow>=12.0
+pyarrow>=14.0.1
 
 # Model evaluation (run_eval calls multi_benchmark_eval.py)
 openai>=1.0

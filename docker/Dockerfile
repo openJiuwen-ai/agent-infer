@@ -51,7 +51,7 @@ ARG PIP_INDEX_URL=https://mirrors.huaweicloud.com/repository/pypi/simple/
 # Install deps before COPY so unchanged deps hit layer cache across PRs (vllm-omni deps-cache pattern).
 RUN pip install --no-cache-dir \
       'huggingface-hub>=1.5.0,<2.0' \
-      datasets matplotlib zstandard \
+      datasets 'pyarrow>=14.0.1' matplotlib 'psutil>=6' zstandard \
       pytest pytest-timeout pytest-html pytest-xdist \
       'setuptools>=68,<85' wheel \
  && pip install --no-cache-dir \
