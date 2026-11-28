@@ -26,18 +26,18 @@ from tools.calibration.common import (
     parse_positive_int,
     parse_positive_int_list,
     parse_unit_fraction,
-    prepare_stage_directory,
     stream_completion,
     utc_now,
     write_json,
 )
 from tools.calibration.metadata import (
+    PREEMPTIONS_COUNTER,
     assemble_profile,
     collect_metadata,
     collect_throughput_counters,
     counter_delta,
     infer_kv_capacity_tokens,
-    persist_metadata,
+    prepare_stage,
     resolve_calibration_engine,
 )
 
@@ -185,8 +185,6 @@ async def run_case(
 
 async def calibrate(args: argparse.Namespace) -> None:
     """Run decode cases on one DP rank and assemble the shared profile."""
-    stage_dir = prepare_stage_directory(args.output_dir, "decode", args.overwrite)
-    recorder = JsonlRecorder(stage_dir / "requests.jsonl")
     timeout = httpx.Timeout(args.timeout)
     raw_points: list[dict[str, object]] = []
     async with httpx.AsyncClient(base_url=args.base_url, timeout=timeout) as client:
@@ -203,6 +201,8 @@ async def calibrate(args: argparse.Namespace) -> None:
         random.Random(args.shuffle_seed).shuffle(cases)
         if not cases:
             raise ValueError("no decode cases fit the observed KV capacity")
+        stage_dir, digest = prepare_stage(args.output_dir, "decode", args.overwrite, metadata)
+        recorder = JsonlRecorder(stage_dir / "requests.jsonl")
         write_json(
             stage_dir / "run_config.json",
             {
@@ -222,7 +222,6 @@ async def calibrate(args: argparse.Namespace) -> None:
                 "created_at_utc": utc_now(),
             },
         )
-        digest = persist_metadata(args.output_dir, metadata)
         print(
             f"[decode] engines={engine_ids}; calibrating engine={target_engine}; "
             f"request rank header={request_rank}; KV capacity={kv_capacity_tokens} tokens",
@@ -249,6 +248,18 @@ async def calibrate(args: argparse.Namespace) -> None:
         # Request timestamps are authoritative for the surface. Endpoint counters
         # cross-check the complete stage, including its prefix-warmup requests.
         counters_after = await collect_throughput_counters(client, target_engine)
+    deltas = counter_delta(counters_before, counters_after)
+    preemptions = deltas.get(PREEMPTIONS_COUNTER)
+    if preemptions is None:
+        print(
+            f"[decode] Cannot verify preemptions for engine {target_engine}: counter unavailable or reset.", flush=True
+        )
+    elif preemptions > 0:
+        print(
+            f"[decode] WARNING: {preemptions:g} preemptions on engine {target_engine}. "
+            "Reduce the decode matrix or --max-kv-fraction and rerun before using the fit.",
+            flush=True,
+        )
     aggregated = []
     for context in sorted(args.context_lengths):
         for batch in sorted(args.batch_sizes):
@@ -280,7 +291,7 @@ async def calibrate(args: argparse.Namespace) -> None:
         "calibration": {
             **fit_decode(aggregated),
             "throughput_counters_after": counters_after,
-            "throughput_counter_delta": counter_delta(counters_before, counters_after),
+            "throughput_counter_delta": deltas,
         },
     }
     write_json(stage_dir / "result.json", result)

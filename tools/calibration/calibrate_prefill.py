@@ -23,7 +23,6 @@ from tools.calibration.common import (
     parse_positive_float,
     parse_positive_int,
     parse_positive_int_list,
-    prepare_stage_directory,
     stream_completion,
     utc_now,
     write_json,
@@ -33,7 +32,7 @@ from tools.calibration.metadata import (
     collect_metadata,
     collect_throughput_counters,
     counter_delta,
-    persist_metadata,
+    prepare_stage,
     resolve_calibration_engine,
 )
 
@@ -76,12 +75,12 @@ def fit_prefill(points: list[dict[str, object]]) -> dict[str, object]:
 
 async def calibrate(args: argparse.Namespace) -> None:
     """Run cold-prefill cases on one DP rank and assemble the shared profile."""
-    stage_dir = prepare_stage_directory(args.output_dir, "prefill", args.overwrite)
-    recorder = JsonlRecorder(stage_dir / "requests.jsonl")
     timeout = httpx.Timeout(args.timeout)
     async with httpx.AsyncClient(base_url=args.base_url, timeout=timeout) as client:
         metadata, engine_ids = await collect_metadata(client, args.model)
         target_engine, request_rank = resolve_calibration_engine(args.data_parallel_rank, engine_ids)
+        stage_dir, digest = prepare_stage(args.output_dir, "prefill", args.overwrite, metadata)
+        recorder = JsonlRecorder(stage_dir / "requests.jsonl")
         write_json(
             stage_dir / "run_config.json",
             {
@@ -96,7 +95,6 @@ async def calibrate(args: argparse.Namespace) -> None:
                 "created_at_utc": utc_now(),
             },
         )
-        digest = persist_metadata(args.output_dir, metadata)
         print(
             f"[prefill] engines={engine_ids}; calibrating engine={target_engine}; request rank header={request_rank}",
             flush=True,
