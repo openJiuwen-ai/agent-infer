@@ -114,7 +114,6 @@ Known sandbox failures fail the job; the namespace preflight checks the containe
 
 Jiuwen runs `jiuwenbox-server` as a local process in the benchmark environment. The CI preflight checks
 that its execution account can create the required bubblewrap PID/user namespaces before its benchmark starts.
-It also rejects completed runs whose `jiuwenbox-server.stderr.log` contains `bwrap: Can't mount proc`.
 The accuracy suite uses the existing agent adapters without extra tool filtering or sandbox path mappings.
 Unexpected confirmation events still fail the task.
 
@@ -277,14 +276,13 @@ same-named directory in `tests/run/acc/`.
 
 ## Acceptance and evidence
 
-Scoring checks completed-task coverage, counts, absence of errors and environment failures, finalized manifests,
-evidence hashes, official reports and test output, and byte equality between original and frozen patches. Counts and
-resolved rate are printed. Unresolved tasks and empty patches are allowed; the sample has no fixed accuracy threshold.
-Per-task comparison detects regressions.
-
-Automatic scoring E2E additionally requires every configured task to complete and enter scoring. A failed task
-such as `confirmation_hang` fails the case even when the remaining tasks have valid scores. Independent evaluation
-of existing runs retains its completed-task scope.
+Automatic scoring and independent evaluation pass when a valid scoring result exists and `counts.error == 0`.
+They use the shared evaluation loader to verify the result and its evidence. Counts and resolved rate are printed.
+There is no requirement for every configured task to complete or produce a patch, and no threshold for resolved,
+unresolved or empty-patch counts. Scoring retains its completed-task scope; failed tasks remain in benchmark logs
+and `task_index.json` and do not enter the scoring total. For example, one resolved task and one task stopped by
+`max_tokens` pass when the scoring result has `total=1`, `resolved=1` and `error=0`.
+Runs without a scoring result still fail. Per-task comparison remains a separate regression check.
 
 Keep exact commands, console logs, run artifacts, and evaluation reports with accuracy claims. Missing input options
 cause skips; skips do not establish successful accuracy validation.

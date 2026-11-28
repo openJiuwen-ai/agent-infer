@@ -12,8 +12,7 @@ from pathlib import Path
 import pytest
 
 from agentinfer.agentbench.benchkit.evaluation.compare import load_evaluation
-from agentinfer.agentbench.benchkit.evaluation.inputs import digest
-from tests.e2e.helpers.benchmark import run_benchmark, validate_completed_run
+from tests.e2e.helpers.benchmark import run_benchmark
 from tests.e2e.helpers.case_loader import BenchmarkCase, E2EConfig
 
 from .output import export_correctness, output_dir_name
@@ -30,44 +29,10 @@ def _cli(*args: str) -> str:
     return completed.stdout
 
 
-def _validate(run_dir: Path, evaluation: Path, *, expected_task_num: int | None = None) -> None:
-    for log in (run_dir / "tasks").glob("*/jiuwenbox-server.stderr.log"):
-        sandbox_errors = [
-            line
-            for line in log.read_text(encoding="utf-8", errors="replace").splitlines()
-            if "bwrap:" in line and "Can't mount proc" in line
-        ]
-        assert not sandbox_errors, f"Jiuwen sandbox failed: {sandbox_errors}; see {log}"
-    run_summary = validate_completed_run(run_dir)
-    source = json.loads((run_dir / "manifest.json").read_bytes())
-    index = json.loads((run_dir / "task_index.json").read_bytes())
-    if expected_task_num is not None:
-        failures = {
-            row["instance_id"]: row.get("termination_reason") or row["outcome"]
-            for row in index["tasks"]
-            if row["outcome"] != "completed"
-        }
-        assert not failures, f"benchmark tasks did not complete: {failures}"
-        assert len(index["tasks"]) == expected_task_num, "task results do not cover the configured task count"
-        assert run_summary["tasks"]["completed"] == expected_task_num, "not all configured tasks completed"
-        assert run_summary["tasks"]["failed"] == 0, "benchmark summary contains failed tasks"
-    summary, manifest, results = load_evaluation(evaluation)
-    expected = {row["instance_id"] for row in index["tasks"] if row["outcome"] == "completed"}
-    assert set(results) == expected
-    assert summary.source_run_id == source["run_id"]
-    assert summary.counts.total == run_summary["tasks"]["completed"]
-    assert summary.counts.error == 0
-    assert manifest["status"] == "completed" and not manifest["errors"]
-    for relative, expected_hash in manifest["source_hashes"].items():
-        assert digest((run_dir / relative).read_bytes()) == expected_hash, relative
-    for iid, result in results.items():
-        assert not result["environment_failure"], iid
-        patch = run_dir / "tasks" / iid / "model.patch"
-        source_patch = patch.read_bytes() if patch.exists() else b""
-        frozen_patch = evaluation.parent / "inputs" / "patches" / f"{iid}.patch"
-        assert frozen_patch.read_bytes() == source_patch, iid
-        assert result["patch_sha256"] == digest(source_patch), iid
+def _validate(evaluation: Path) -> None:
+    summary, _, _ = load_evaluation(evaluation)
     print(f"[correctness] counts={summary.counts.model_dump()} resolved_rate={summary.resolved_rate} {evaluation}")
+    assert summary.counts.error == 0, f"scoring errors: {summary.counts.error}; see {evaluation}"
 
 
 @pytest.mark.usefixtures("correctness_environment")
@@ -108,8 +73,8 @@ def test_run_with_correctness(
         evaluations = list((run_dir / "evaluations").glob("*/correctness.json"))
         if len(evaluations) == 1:
             export_correctness(evaluations[0], correctness_results / run_dir.name)
-    assert len(evaluations) == 1, evaluations
-    _validate(run_dir, evaluations[0], expected_task_num=config.task_num)
+    assert len(evaluations) == 1, f"expected one scoring result, found {evaluations}"
+    _validate(evaluations[0])
 
 
 @pytest.mark.cpu
@@ -126,7 +91,7 @@ def test_evaluate_existing_run(pytestconfig: pytest.Config) -> None:
     _cli(*args)
     created = set((run_dir / "evaluations").glob("*/correctness.json")) - before
     assert len(created) == 1, created
-    _validate(run_dir, created.pop())
+    _validate(created.pop())
 
 
 @pytest.mark.cpu

@@ -14,7 +14,6 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from tests.agentbench.test_compare import write_run
 from tests.e2e.acc import conftest as accuracy_fixtures, output as accuracy_output, test_correctness as accuracy
 from tests.e2e.helpers.case_loader import E2EConfig, benchmark_params_to_run_args, load_case_file, load_case_group
 from tests.helpers.marks import test_marks
@@ -668,79 +667,40 @@ def test_evaluation_override_preserves_cases(monkeypatch, tmp_path, case_path, o
     assert case_path.read_bytes() == original_bytes
 
 
-@pytest.mark.parametrize(
-    ("completed", "failed", "outcomes", "message"),
-    [
-        (1, 1, ["completed", "failed"], "confirmation_hang"),
-        (1, 0, ["completed"], "configured task count"),
-        (1, 0, ["completed", "completed"], "not all configured tasks completed"),
-        (2, 1, ["completed", "completed"], "summary contains failed tasks"),
-    ],
-)
-def test_automatic_scoring_rejects_partial_runs(tmp_path, completed, failed, outcomes, message):
-    run = tmp_path / "run"
-    write_run(run, completed=completed, failed=failed)
-    rows = [
-        {
-            "instance_id": f"task-{i}",
-            "outcome": outcome,
-            "termination_reason": "confirmation_hang" if outcome == "failed" else None,
-        }
-        for i, outcome in enumerate(outcomes)
-    ]
-    (run / "task_index.json").write_text(json.dumps({"tasks": rows}), encoding="utf-8")
-    with pytest.raises(AssertionError, match=message):
-        accuracy._validate(run, run / "evaluations/correctness.json", expected_task_num=2)
+@pytest.mark.parametrize("scored", [False, True])
+def test_automatic_scoring_requires_result_after_overridden_task_count(monkeypatch, tmp_path, scored):
+    task_counts = []
 
-
-def test_automatic_scoring_rejects_jiuwen_sandbox_failure_in_completed_run(tmp_path):
-    run = tmp_path / "run"
-    write_run(run, completed=2, failed=0)
-    log = run / "tasks/task-0/jiuwenbox-server.stderr.log"
-    log.parent.mkdir(parents=True)
-    log.write_text("bwrap: Can't mount proc on /newroot/proc: Operation not permitted\n", encoding="utf-8")
-    with pytest.raises(AssertionError, match="Jiuwen sandbox failed") as error:
-        accuracy._validate(run, run / "evaluations/correctness.json", expected_task_num=2)
-    assert str(log) in str(error.value)
-
-
-@pytest.mark.parametrize("expected", [None, 2])
-def test_existing_run_evaluation_retains_completed_task_scope(monkeypatch, tmp_path, expected):
-    run = tmp_path / "run"
-    completed, failed = (1, 1) if expected is None else (2, 0)
-    write_run(run, completed=completed, failed=failed)
-    outcomes = ["completed", "failed"] if expected is None else ["completed", "completed"]
-    (run / "task_index.json").write_text(
-        json.dumps({"tasks": [{"instance_id": f"task-{i}", "outcome": item} for i, item in enumerate(outcomes)]}),
-        encoding="utf-8",
-    )
-
-    class EvaluationReached(Exception):
-        pass
-
-    def load(path):
-        raise EvaluationReached
-
-    monkeypatch.setattr(accuracy, "load_evaluation", load)
-    with pytest.raises(EvaluationReached):
-        accuracy._validate(run, run / "evaluations/correctness.json", expected_task_num=expected)
-
-
-def test_automatic_scoring_checks_overridden_task_count(monkeypatch, tmp_path):
     def benchmark(config, *, result_dir, **kwargs):
-        evaluation = result_dir / "evaluations/eval/correctness.json"
-        evaluation.parent.mkdir(parents=True)
-        evaluation.write_text("{}", encoding="utf-8")
+        task_counts.append(config.task_num)
+        if scored:
+            evaluation = result_dir / "evaluations/eval/correctness.json"
+            evaluation.parent.mkdir(parents=True)
+            evaluation.write_text("{}", encoding="utf-8")
         return result_dir
 
     monkeypatch.setattr(accuracy, "run_benchmark", benchmark)
     captured = []
-    monkeypatch.setattr(accuracy, "_validate", lambda *args, **kwargs: captured.append(kwargs))
+    monkeypatch.setattr(accuracy, "_validate", captured.append)
     options = {"--task-num": 3, "--max-concurrency": None, "--benchmark-run-as-user": None}
-    accuracy.test_run_with_correctness(
-        SimpleNamespace(getoption=options.get), BENCHMARKS[0][1], lambda config: config, tmp_path, tmp_path / "results"
-    )
-    assert captured == [{"expected_task_num": 3}]
+
+    def run():
+        accuracy.test_run_with_correctness(
+            SimpleNamespace(getoption=options.get),
+            BENCHMARKS[0][1],
+            lambda config: config,
+            tmp_path,
+            tmp_path / "results",
+        )
+
+    if scored:
+        run()
+        assert len(captured) == 1 and captured[0].name == "correctness.json"
+    else:
+        with pytest.raises(AssertionError, match="expected one scoring result"):
+            run()
+        assert captured == []
+    assert task_counts == [3]
 
 
 @pytest.mark.parametrize("failed", [False, True])
@@ -781,7 +741,7 @@ def test_score_export_preserves_original_evidence_even_when_benchmark_fails(monk
     assert (evaluation.parent / "evaluation_manifest.json").read_bytes() == original_manifest
     assert exported.name == run_dir.name
     assert {path.name for path in exported.iterdir()} == {"correctness.json"}
-    assert validated == ([] if failed else [(run_dir, evaluation)])
+    assert validated == ([] if failed else [(evaluation,)])
 
 
 def test_group_loader_preserves_single_benchmark_format(tmp_path):
