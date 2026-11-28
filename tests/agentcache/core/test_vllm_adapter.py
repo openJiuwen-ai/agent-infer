@@ -370,6 +370,7 @@ def test_async_bridge_reports_native_abort_as_completion_without_failure_semanti
 
     def initialize(scheduler, *args, **kwargs) -> None:
         scheduler.waiting = []
+        scheduler.kv_holding_waiting = []
         scheduler.running = []
         scheduler.skipped_waiting = []
         scheduler.requests = {"request-1": native_request}

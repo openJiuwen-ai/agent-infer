@@ -65,9 +65,14 @@ def add_agentinfer_arguments(parser: argparse.ArgumentParser) -> None:
         "--agentinfer",
         action="store_true",
         default=False,
-        help="Enable the AgentInfer Progress-TTL serving path: injects the AgentCache scheduler bridge "
+        help="Enable the AgentInfer serving path with the AgentCache scheduler bridge "
         "(async or sync, following --async-scheduling/--no-async-scheduling), the identity and lifecycle "
-        "middleware, and the embedded Progress-TTL controller.",
+        "middleware, and the selected Program scheduling strategy.",
+    )
+    group.add_argument(
+        "--agentinfer-strategy",
+        choices=("progress_ttl", "mori"),
+        help="Program scheduling strategy for --agentinfer (default: progress_ttl).",
     )
 
 
@@ -162,14 +167,28 @@ def inject_profile(
     :class:`AgentInferServeError` on conflicting explicit options.
     """
 
-    resolved = profile if profile is not None else DEFAULT_SERVE_PROFILE
-    injected: dict[str, Any] = {}
-
     if SCHEDULER_CLS_DEST in explicit_dests:
         raise AgentInferServeError(
             "--agentinfer cannot be combined with --scheduler-cls; remove --scheduler-cls or use the "
             "explicit long-form command documented in docs/en/how-to/integrate-vllm.md."
         )
+
+    resolved = profile if profile is not None else DEFAULT_SERVE_PROFILE
+    injected: dict[str, Any] = {}
+    current = _coerce_additional_config(getattr(namespace, ADDITIONAL_CONFIG_DEST, None))
+    agentcache = current.get("agentcache") or {}
+    selected = getattr(namespace, "agentinfer_strategy", None)
+    if isinstance(agentcache, dict):
+        configured = agentcache.get("strategy")
+        if selected is not None and configured is not None and selected != configured:
+            raise AgentInferServeError("Conflicting AgentInfer strategy settings")
+        selected = selected or configured
+    if selected == "mori":
+        from agentinfer.agentcache.entrypoints.cli.mori_serve import configure_embedded
+
+        resolved = configure_embedded(namespace)
+    elif selected not in (None, "progress_ttl"):
+        raise AgentInferServeError(f"Unknown AgentInfer scheduling strategy {selected!r}")
 
     if ASYNC_SCHEDULING_DEST in explicit_dests:
         async_enabled = bool(getattr(namespace, ASYNC_SCHEDULING_DEST, None))
@@ -316,6 +335,13 @@ def run_agentinfer_serve(serve_argv: list[str]) -> int:
         raise AgentInferServeError("--agentinfer is required for the AgentInfer serve takeover")
 
     injected = inject_profile(namespace, explicit_dests)
+    if (namespace.additional_config.get("agentcache") or {}).get("strategy") == "mori":
+        from agentinfer.agentcache.entrypoints.cli.mori_serve import embedded_runtime
+
+        _print_transparency(injected, False, "", False)
+        with embedded_runtime():
+            _dispatch_serve(namespace)
+        return 0
     socket_defaulted, socket_value, socket_from_config = _apply_lifecycle_socket_env(namespace)
     _print_transparency(injected, socket_defaulted, socket_value, socket_from_config)
     _dispatch_serve(namespace)

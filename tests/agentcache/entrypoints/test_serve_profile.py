@@ -46,6 +46,7 @@ def _install_stub_vllm(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     def make_arg_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         parser.add_argument("model_tag", nargs="?", default=None)
         parser.add_argument("--port", type=int, default=None)
+        parser.add_argument("--host")
         parser.add_argument("--scheduler-cls", dest="scheduler_cls", default=None)
         parser.add_argument("--middleware", dest="middleware", action="append", type=str, default=[])
         parser.add_argument("--additional-config", dest="additional_config", type=json.loads, default={})
@@ -68,11 +69,11 @@ def _install_stub_vllm(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             recorded["namespace"] = args
 
     cli_args = types.ModuleType("vllm.entrypoints.openai.cli_args")
-    cli_args.make_arg_parser = make_arg_parser
+    vars(cli_args)["make_arg_parser"] = make_arg_parser
     entrypoints_utils = types.ModuleType("vllm.entrypoints.utils")
-    entrypoints_utils.cli_env_setup = cli_env_setup
+    vars(entrypoints_utils)["cli_env_setup"] = cli_env_setup
     serve_mod = types.ModuleType("vllm.entrypoints.cli.serve")
-    serve_mod.ServeSubcommand = ServeSubcommand
+    vars(serve_mod)["ServeSubcommand"] = ServeSubcommand
     for name, module in {
         "vllm": types.ModuleType("vllm"),
         "vllm.entrypoints": types.ModuleType("vllm.entrypoints"),
@@ -309,3 +310,112 @@ def test_transparency_line_omits_user_config_secrets(
     err = capsys.readouterr().err
     assert "sk-super-secret" not in err
     assert "secret_backend" not in err
+
+
+@pytest.mark.parametrize("sync", [True, False])
+@pytest.mark.parametrize("use_flag", [False, True])
+def test_public_mori_serve_uses_single_listener_and_embedded_policy(monkeypatch, sync, use_flag):
+    from contextlib import nullcontext
+    from dataclasses import dataclass, field
+
+    from agentinfer.agentcache.entrypoints.cli import mori_serve
+
+    @dataclass
+    class Transfer:
+        kv_role: str = "kv_both"
+        kv_connector: str = "SimpleCPUOffloadConnector"
+        kv_connector_module_path: str | None = None
+        kv_connector_extra_config: dict = field(default_factory=lambda: {"cpu_bytes_to_use": 4096})
+
+    recorded = _install_stub_vllm(monkeypatch)
+    configure = mori_serve.configure_embedded
+
+    def configure_with_transfer(namespace):
+        namespace.kv_transfer_config = Transfer()
+        return configure(namespace)
+
+    monkeypatch.setattr(mori_serve, "configure_embedded", configure_with_transfer)
+    monkeypatch.setattr(mori_serve, "embedded_runtime", nullcontext)
+    argv = [
+        "MODEL",
+        "--agentinfer",
+        "--port",
+        "8300",
+        "--host",
+        "0.0.0.0",
+        "--additional-config",
+        '{"agentcache":{"strategy":"mori","mori":{"interval_seconds":3,"sglang_unseeded_chat":true}}}',
+    ]
+    if use_flag:
+        argv.extend(["--agentinfer-strategy", "mori"])
+    if sync:
+        argv.append("--no-async-scheduling")
+    assert serve_profile.run_agentinfer_serve(argv) == 0
+    served = recorded["namespace"]
+    assert (served.host, served.port) == ("0.0.0.0", 8300)
+    assert served.scheduler_cls.split(".")[-1] == ("MoriSyncSchedulerBridge" if sync else "MoriAsyncSchedulerBridge")
+    assert served.middleware == ["agentinfer.agentcache.mori.admission_api.MoriSchedulingMiddleware"]
+    assert served.agentinfer_mori_chat_mode == "sglang_unseeded_chat"
+    assert served.kv_transfer_config.kv_connector == "MoriCPUOffloadConnector"
+    assert served.additional_config["agentcache"]["mori"] == {"interval_seconds": 3}
+    assert served.additional_config["agentcache"]["mori_joint_flashinfer_sampling"]
+    assert served.additional_config["agentcache"]["strategy"] == "mori"
+
+
+def test_mori_requires_a_two_way_offload_connector() -> None:
+    namespace, explicit = _parse(["MODEL", "--agentinfer", "--agentinfer-strategy", "mori"])
+    with pytest.raises(serve_profile.AgentInferServeError, match="kv_role=kv_both"):
+        serve_profile.inject_profile(namespace, explicit)
+
+
+def test_conflicting_strategy_does_not_install_an_engine() -> None:
+    namespace, explicit = _parse(
+        [
+            "MODEL",
+            "--agentinfer",
+            "--agentinfer-strategy",
+            "progress_ttl",
+            "--additional-config",
+            '{"agentcache":{"strategy":"mori"}}',
+        ]
+    )
+    with pytest.raises(serve_profile.AgentInferServeError, match="Conflicting AgentInfer strategy"):
+        serve_profile.inject_profile(namespace, explicit)
+    assert namespace.scheduler_cls is None
+
+
+@pytest.mark.parametrize(
+    ("text", "unseeded", "joint", "mode"),
+    [
+        (False, False, False, None),
+        (True, False, True, "sglang_text_chat"),
+        (False, True, False, "sglang_unseeded_chat"),
+        (True, True, True, "sglang_unseeded_chat"),
+    ],
+)
+def test_mori_can_select_joint_sampling_independently(monkeypatch, text, unseeded, joint, mode):
+    from agentinfer.agentcache.entrypoints.cli import mori_serve
+
+    monkeypatch.setattr(mori_serve, "_configure_kv", lambda namespace: None)
+    namespace, _ = _parse(["MODEL", "--agentinfer", "--agentinfer-strategy", "mori"])
+    namespace.additional_config = {
+        "agentcache": {
+            "mori": {"sglang_text_chat": text, "sglang_unseeded_chat": unseeded, "joint_flashinfer_sampling": joint}
+        }
+    }
+    profile = mori_serve.configure_embedded(namespace)
+    assert profile.agentcache_config["mori_joint_flashinfer_sampling"] is joint
+    assert namespace.agentinfer_mori_chat_mode == mode
+    assert profile.middlewares == ("agentinfer.agentcache.mori.admission_api.MoriSchedulingMiddleware",)
+
+
+def test_mori_response_framing_wraps_user_middlewares(monkeypatch):
+    from agentinfer.agentcache.entrypoints.cli import mori_serve
+
+    monkeypatch.setattr(mori_serve, "_configure_kv", lambda namespace: None)
+    path = "agentinfer.agentcache.mori.admission_api.MoriSchedulingMiddleware"
+    namespace, explicit = _parse(
+        ["MODEL", "--agentinfer", "--agentinfer-strategy", "mori", "--middleware", path, "--middleware", "example.GZip"]
+    )
+    serve_profile.inject_profile(namespace, explicit)
+    assert namespace.middleware == ["example.GZip", path]

@@ -25,6 +25,8 @@ DiagnosticFields = tuple[tuple[str, DiagnosticValue], ...]
 class SchedulingEventKind(str, Enum):
     """Logical boundaries emitted by the unified Scheduler runtime."""
 
+    REQUEST_ARRIVED = "request_arrived"
+    REQUEST_PROGRESS = "request_progress"
     REQUEST_PENDING = "request_pending"
     REQUEST_ADMITTED = "request_admitted"
     REQUEST_FINISHED = "request_finished"
@@ -39,6 +41,8 @@ class SchedulingEventKind(str, Enum):
 
 PROGRAM_SCOPED_EVENT_KINDS = frozenset(
     {
+        SchedulingEventKind.REQUEST_ARRIVED,
+        SchedulingEventKind.REQUEST_PROGRESS,
         SchedulingEventKind.REQUEST_PENDING,
         SchedulingEventKind.REQUEST_ADMITTED,
         SchedulingEventKind.REQUEST_FINISHED,

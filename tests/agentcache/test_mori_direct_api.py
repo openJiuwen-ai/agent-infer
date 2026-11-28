@@ -1,0 +1,250 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AgentInfer project
+
+import asyncio
+import json
+from types import SimpleNamespace
+
+import httpx
+import pytest
+from fastapi import FastAPI, Request
+from starlette.responses import PlainTextResponse, StreamingResponse
+from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
+
+from agentinfer.agentcache.mori.admission_api import MoriSchedulingMiddleware
+from agentinfer.agentcache.mori.api import mori_parsed_request_body
+from agentinfer.agentcache.mori.ipc import (
+    ATTEMPT_ARG,
+    CHILD_COUNT_ARG,
+    CONTEXT_CHARS_ARG,
+    PREFIX_ARG,
+    PREPARATION_NS_ARG,
+    PROGRAM_ARG,
+    RESERVED_ARGS,
+    UTILITY_METHOD,
+    chat_facts,
+)
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu")
+
+
+def _app_with_core(chat_mode=None):
+    calls = []
+
+    async def utility(method, *args):
+        calls.append((method, *args))
+        if method == "agentinfer_mori_diagnostics":
+            return {"action": args[0]}
+        assert method == UTILITY_METHOD
+        return True
+
+    async def add(child):
+        calls.append(("add", child.sampling_params.extra_args))
+
+    app = FastAPI()
+    app.add_middleware(MoriSchedulingMiddleware)
+    app.state.args = SimpleNamespace(agentinfer_mori_chat_mode=chat_mode)
+    app.state.engine_client = SimpleNamespace(
+        engine_core=SimpleNamespace(call_utility_async=utility, add_request_async=add)
+    )
+    return app, calls
+
+
+@pytest.mark.parametrize(
+    ("chat_mode", "normalize", "seed"),
+    [
+        (None, False, 42),
+        ("sglang_text_chat", True, 42),
+        ("sglang_unseeded_chat", True, None),
+    ],
+)
+def test_direct_chat_admits_original_facts_and_shares_the_native_json(monkeypatch, chat_mode, normalize, seed):
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    app, calls = _app_with_core(chat_mode)
+    decodes = []
+    original = Request.json
+
+    async def record_decode(request):
+        decodes.append(request.url.path)
+        return await original(request)
+
+    monkeypatch.setattr(Request, "json", record_decode)
+
+    @app.post("/v1/chat/completions")
+    async def chat(body: ChatCompletionRequest, request: Request):
+        sampling = body.to_sampling_params(8, {})
+        native = await request.json()
+        await request.app.state.engine_client.engine_core.add_request_async(SimpleNamespace(sampling_params=sampling))
+        return {
+            "messages": native["messages"],
+            "tools": native["tools"],
+            "extra_args": sampling.extra_args,
+            "seed": sampling.seed,
+            "usage": {"total_tokens": 11, "prompt_tokens": 8, "prompt_tokens_details": {"cached_tokens": 3}},
+        }
+
+    @app.post("/tokenize")
+    async def tokenize(request: Request):
+        return await request.json()
+
+    parts = [{"type": "text", "text": "程序"}, {"type": "text", "text": "resume"}]
+    messages = [{"role": "system", "content": parts}]
+    tools = [{"type": "function", "function": {"name": "example"}}]
+    payload = {
+        "model": "qwen",
+        "messages": messages,
+        "tools": tools,
+        "seed": 42,
+        "n": "2",
+        "stream": "false",
+        "program_id": "official",
+        "extra_body": {"program_id": "ignored"},
+        PROGRAM_ARG: "forged-at-top-level",
+        ATTEMPT_ARG: "forged-at-top-level",
+        "vllm_xargs": {**dict.fromkeys(RESERVED_ARGS, "forged"), "program_id": "forged", "keep": 7},
+    }
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
+            response = await client.post("/v1/chat/completions", json=payload)
+            assert response.status_code == 200, response.text
+            data = response.json()
+            assert data["messages"][0]["content"] == ("程序 resume" if normalize else parts)
+            assert data["tools"][0]["function"] == (
+                {"name": "example", "strict": False} if normalize else {"name": "example"}
+            )
+            assert data["seed"] == seed
+            attempt = data["extra_args"][ATTEMPT_ARG]
+            assert attempt not in ("forged", "forged-at-top-level")
+            chars, prefix = chat_facts(payload)
+            preparation_ns = data["extra_args"][PREPARATION_NS_ARG]
+            assert isinstance(preparation_ns, int) and preparation_ns >= 0
+            assert data["extra_args"] == {
+                PREPARATION_NS_ARG: preparation_ns,
+                PROGRAM_ARG: "official",
+                ATTEMPT_ARG: attempt,
+                CONTEXT_CHARS_ARG: chars,
+                PREFIX_ARG: prefix,
+                CHILD_COUNT_ARG: 2,
+                "keep": 7,
+            }
+            assert calls == [
+                ("add", data["extra_args"]),
+                (UTILITY_METHOD, "finish", [attempt, 11, 8, 3]),
+            ]
+            tokenized = (await client.post("/tokenize", json={"messages": messages, "tools": tools, "seed": 42})).json()
+            assert tokenized == {"messages": data["messages"], "tools": data["tools"], "seed": 42}
+            assert len(calls) == 2
+
+    with mori_parsed_request_body():
+        asyncio.run(run())
+    assert decodes == ["/v1/chat/completions", "/tokenize"]
+
+
+@pytest.mark.parametrize(("fillers", "empties", "progress"), [(17, 0, True), (16, 2, False)])
+def test_direct_observer_counts_shaped_sse_and_reads_fragmented_cached_usage(monkeypatch, fillers, empties, progress):
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    app, calls = _app_with_core()
+
+    @app.post("/v1/chat/completions")
+    async def chat(request: Request):
+        payload = await request.json()
+        assert payload["stream_options"] == {"include_usage": True}
+
+        async def frames():
+            child = SimpleNamespace(sampling_params=SimpleNamespace(extra_args=None))
+            await request.app.state.engine_client.engine_core.add_request_async(child)
+            yield b'data: {"choices":[]}\n\n' * fillers
+            for _ in range(empties):
+                yield b'data: {"choices":[{"index":0,"delta":{"content":""},"finish_reason":null}]}\n\n'
+            yield 'data: {"choices":[{"index":0,"delta":{"content":"last\u2028part"},"finish_reason":"length"}]}\n\n'.encode()
+            yield b'data: {"usage":{"total_tokens":27,"prompt_tokens":7,"prompt_tokens_details":{"cached_tokens":5}}}'
+            yield b"\n\ndata: [DONE]\n\n"
+
+        return StreamingResponse(frames(), media_type="text/event-stream")
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
+            response = await client.post(
+                "/v1/chat/completions", json={"stream": True, "extra_body": {"program_id": "nested"}}
+            )
+            assert response.status_code == 200
+            frames = [line[6:] for line in response.text.splitlines() if line.startswith("data: ")]
+            assert frames.pop() == "[DONE]"
+            assert len(frames) == fillers + 3
+            assert [json.loads(frame)["choices"][0]["delta"] for frame in frames[-3:-1]] == [
+                {"content": "last\u2028part"},
+                {},
+            ]
+
+    asyncio.run(run())
+    (kind, facts) = calls[0]
+    assert kind == "add" and facts[PROGRAM_ARG] == "nested"
+    attempt = facts[ATTEMPT_ARG]
+    assert calls[1:-1] == ([(UTILITY_METHOD, "progress", [attempt, 20])] if progress else [])
+    assert calls[-1] == (UTILITY_METHOD, "finish", [attempt, 27, 7, 5])
+
+
+def test_direct_diagnostics_and_release_require_native_auth(monkeypatch):
+    monkeypatch.setenv("VLLM_API_KEY", "ignored-environment-key")
+    app, calls = _app_with_core()
+    app.state.args = SimpleNamespace(api_key=["cli-key"])
+
+    @app.get("/metrics")
+    async def metrics():
+        return PlainTextResponse("native_metric 4\n")
+
+    @app.post("/mark_program_type")
+    @app.post("/release_program")
+    @app.post("/batch_program_ops")
+    async def old_control():
+        pytest.fail("The public adapter forwarded a legacy control route")
+
+    async def run():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, root_path="/proxy"), base_url="http://engine"
+        ) as client:
+            headers = {"Authorization": "Bearer cli-key"}
+            for path, action in {
+                "/programs": "programs",
+                "/agentinfer/mori/metrics": "metrics",
+                "/agentinfer/mori/cache": "cache",
+            }.items():
+                assert (await client.get(f"/proxy{path}")).status_code == 401
+                proxy_key = {"Authorization": "Bearer ignored-environment-key"}
+                assert (await client.get(f"/proxy{path}", headers=proxy_key)).status_code == 401
+                response = await client.get(f"/proxy{path}", headers=headers)
+                assert response.json() == {"action": action}
+            assert (await client.post("/proxy/v1/chat/completions", json={})).status_code == 401
+            assert (await client.post("/proxy/programs/release", json={"program_id": "p"})).status_code == 401
+            release = await client.post("/proxy/programs/release", json={"program_id": "p"}, headers=headers)
+            assert release.json() == {"program_id": "p", "released": True}
+            assert (await client.get("/proxy/metrics")).text == "native_metric 4\n"
+            for path in ("/mark_program_type", "/release_program", "/batch_program_ops"):
+                assert (await client.post(f"/proxy{path}", json={}, headers=headers)).status_code == 404
+
+    asyncio.run(run())
+    assert calls == [
+        ("agentinfer_mori_diagnostics", "programs"),
+        ("agentinfer_mori_diagnostics", "metrics"),
+        ("agentinfer_mori_diagnostics", "cache"),
+        (UTILITY_METHOD, "release", ["p"]),
+    ]
+
+
+@pytest.mark.parametrize("part", [{"type": "image_url"}, {"input_audio": {}}, {"type": "video_embeds", "uuid": "v"}])
+def test_media_chat_is_rejected_before_program_admission(monkeypatch, part):
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    app, events = _app_with_core()
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
+            response = await client.post(
+                "/v1/chat/completions", json={"messages": [{"role": "user", "content": [part]}]}
+            )
+            assert response.status_code == 400
+            assert response.json()["detail"] == "MORI vLLM supports text inputs only"
+
+    asyncio.run(run())
+    assert events == []
