@@ -703,3 +703,119 @@ def test_tracelab_rejects_context_limit_before_warmup(tmp_path: Path, monkeypatc
     assert requests[-1] == "/v1/models"
     assert "/v1/completions" not in requests
     assert json.loads((config.experiment.result_dir / "manifest.json").read_text())["status"] == "failed"
+
+
+def test_tracelab_reads_max_model_len_from_the_tokenizer_url_when_the_router_omits_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "rounds.jsonl"
+    _write_source(source)
+    requests: list[tuple[str, str]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append((request.url.host, request.url.path))
+        if request.url.path == "/metrics":
+            return httpx.Response(503)
+        if request.url.path == "/tokenize":
+            body = json.loads(request.content)
+            if "prompt" in body:
+                return httpx.Response(200, json={"tokens": [ord(c) for c in body["prompt"]]})
+            count = 3 + sum(4 + len(message["content"]) for message in body["messages"])
+            return httpx.Response(200, json={"count": count})
+        if request.url.path == "/detokenize":
+            return httpx.Response(200, json={"prompt": "".join(chr(t) for t in json.loads(request.content)["tokens"])})
+        if request.url.path == "/v1/models" and request.url.host == "router":
+            # vLLM Router builds /v1/models from gRPC GetModelInfo, which carries no max_model_len.
+            return httpx.Response(
+                200, json={"data": [{"id": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8", "object": "model"}]}
+            )
+        if request.url.path == "/v1/models":
+            return httpx.Response(
+                200, json={"data": [{"id": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8", "max_model_len": 1000}]}
+            )
+        body = json.loads(request.content)
+        assert request.url.path == "/v1/completions"
+        if not body.get("stream"):
+            return httpx.Response(200, json={"usage": {"prompt_tokens": len(body["prompt"]), "completion_tokens": 1}})
+        output_ids = list(range(400, 400 + body["max_tokens"]))
+        chunk = {
+            "choices": [{"text": "A" * len(output_ids), "token_ids": output_ids}],
+            "usage": {"prompt_tokens": len(body["prompt"]), "completion_tokens": len(output_ids)},
+        }
+        return httpx.Response(200, text=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n")
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs))
+    config = ReplayBenchConfig.model_validate(
+        {
+            "experiment": {"task_num": 1, "max_concurrency": 4, "result_dir": tmp_path / "router"},
+            "backend": {"base_url": "http://router", "tokenizer_base_url": "http://worker"},
+            "replay": {"trace_type": "tracelab", "trace_path": source},
+        }
+    )
+    run_replay(config)
+    assert ("router", "/v1/models") in requests
+    assert ("worker", "/v1/models") in requests
+    # Every completion goes to the Router: only /v1/models is read from the tokenizer URL.
+    completions = [host for host, path in requests if path == "/v1/completions"]
+    assert completions
+    assert set(completions) == {"router"}
+    assert json.loads((config.experiment.result_dir / "manifest.json").read_text())["status"] == "completed"
+
+
+@pytest.mark.parametrize(
+    ("worker_models", "expected"),
+    [
+        pytest.param(
+            {"data": [{"id": "other/model", "max_model_len": 1000}]},
+            "did not report a positive max_model_len",
+            id="worker-omits-the-model",
+        ),
+        pytest.param(
+            {"data": [{"id": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8", "max_model_len": 4}]},
+            "TraceLab warmup needs",
+            id="worker-limit-below-the-plan",
+        ),
+    ],
+)
+def test_tracelab_fails_before_any_completion_when_the_tokenizer_url_cannot_supply_the_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, worker_models: dict[str, object], expected: str
+) -> None:
+    source = tmp_path / "rounds.jsonl"
+    _write_source(source)
+    requests: list[tuple[str, str]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append((request.url.host, request.url.path))
+        if request.url.path == "/metrics":
+            return httpx.Response(503)
+        if request.url.path == "/tokenize":
+            body = json.loads(request.content)
+            if "prompt" in body:
+                return httpx.Response(200, json={"tokens": [ord(c) for c in body["prompt"]]})
+            count = 3 + sum(4 + len(message["content"]) for message in body["messages"])
+            return httpx.Response(200, json={"count": count})
+        if request.url.path == "/detokenize":
+            return httpx.Response(200, json={"prompt": "".join(chr(t) for t in json.loads(request.content)["tokens"])})
+        if request.url.path == "/v1/models" and request.url.host == "router":
+            return httpx.Response(
+                200, json={"data": [{"id": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8", "object": "model"}]}
+            )
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json=worker_models)
+        raise AssertionError(f"unexpected request {request.url.host}{request.url.path}")
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs))
+    config = ReplayBenchConfig.model_validate(
+        {
+            "experiment": {"task_num": 1, "max_concurrency": 4, "result_dir": tmp_path / "router-backend"},
+            "backend": {"base_url": "http://router", "tokenizer_base_url": "http://worker"},
+            "replay": {"trace_type": "tracelab", "trace_path": source},
+        }
+    )
+    with pytest.raises(ValueError, match=expected):
+        run_replay(config)
+    # The limit is resolved before the warmup and every measured request.
+    assert not [path for _, path in requests if path == "/v1/completions"]
+    assert json.loads((config.experiment.result_dir / "manifest.json").read_text())["status"] == "failed"
