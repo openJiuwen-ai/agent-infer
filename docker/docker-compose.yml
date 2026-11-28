@@ -13,10 +13,12 @@ x-ci-base: &ci-base
   build:
     context: ..
     dockerfile: docker/Dockerfile
+    target: ci
     # Share host source settings with explicit and plugin-triggered builds.
     args:
       - PIP_INDEX_URL
       - ZCODE_REPOSITORY
+      - GITHUB_GIT_BASE_URL
   # Runs as root, then ci-entrypoint.sh switches to the UID that owns the
   # checkout (the working directory). Do not set `user:` here.
   entrypoint: ["/usr/local/bin/ci-entrypoint.sh"]
@@ -96,3 +98,13 @@ services:
   agentinfer-cpu:
     <<: *ci-base
     image: agentinfer-ci:${BUILDKITE_BUILD_ID:-local}-cpu
+
+  # Reuse the GPU CI image; accuracy alone needs root and the scoring Docker socket.
+  agentinfer-accuracy:
+    extends:
+      service: agentinfer-ci
+    profiles: [accuracy]
+    environment:
+      AGENTINFER_CI_AS_ROOT: "1"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

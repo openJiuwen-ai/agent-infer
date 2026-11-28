@@ -4,9 +4,10 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import time
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from agentinfer.agentbench.benchkit.compare import load_summary
 
 from .case_loader import (
     E2EConfig,
+    _chown_tree,
     build_benchmark_argv,
     build_benchmark_env,
     build_prepare_argv,
@@ -31,24 +33,46 @@ def run_benchmark(
     result_dir: Path | None = None,
     manage_server: bool = True,
 ) -> Path:
-    """Execute one benchmark case and return the finalized run directory."""
+    """Execute a benchmark; set manage_server=False when a fixture owns serve."""
 
     blockers = config.validate_prerequisites()
     if blockers:
         raise RuntimeError("; ".join(blockers))
 
-    ensure_benchmark_inputs_prepared(config)
-    hardware_slug = config.resolve_run_hardware_slug()
-    print(f"[benchmark:{config.scenario.value}] hardware slug: {hardware_slug}", flush=True)
-    output_dir = result_dir or config.make_result_dir(hardware_slug=hardware_slug)
-    if output_dir.exists():
-        raise FileExistsError(f"result directory already exists: {output_dir}")
+    with _repo_cache_owner(config):
+        ensure_benchmark_inputs_prepared(config)
+        hardware_slug = config.resolve_run_hardware_slug()
+        print(f"[benchmark:{config.scenario.value}] hardware slug: {hardware_slug}", flush=True)
+        output_dir = result_dir or config.make_result_dir(hardware_slug=hardware_slug)
+        if result_dir is not None:
+            ensure_directory(output_dir.parent, run_as_user=config.effective_benchmark_run_as_user())
+        if output_dir.exists():
+            raise FileExistsError(f"result directory already exists: {output_dir}")
 
-    argv = build_benchmark_argv(config, output_dir)
-    with managed_vllm(config) if manage_server else nullcontext():
-        _invoke_benchmark(config, argv)
+        argv = build_benchmark_argv(config, output_dir)
+        with managed_vllm(config) if manage_server else nullcontext():
+            _invoke_benchmark(config, argv)
 
     return output_dir
+
+
+@contextmanager
+def _repo_cache_owner(config: E2EConfig):
+    """Return the cache to root after each case, including failed benchmarks."""
+    if os.name == "nt" or os.geteuid() != 0:
+        yield
+        return
+
+    from agentinfer.agentbench.benchkit.config import load_config
+
+    cache = load_config(config.bench_config).dataset.cache_dir
+    uid, gid = os.geteuid(), os.getegid()
+    try:
+        # Also recover a cache left to the benchmark user by an interrupted run.
+        _chown_tree(cache, uid, gid)
+        yield
+    finally:
+        _chown_tree(cache, uid, gid)
 
 
 def _invoke_benchmark(config: E2EConfig, argv: list[str]) -> None:
@@ -161,7 +185,8 @@ def ensure_repo_cache_prepared(config: E2EConfig) -> Path | None:
 
     prefix = f"[benchmark:{config.scenario.value}] "
     print(f"{prefix}warming repo-cache as root ({len(tasks)} tasks)", flush=True)
-    owner = WorkspaceProcessOwner(time.monotonic() + config.task_timeout_seconds * max(len(tasks), 1))
+    deadline = time.monotonic() + config.task_timeout_seconds * max(len(tasks), 1)
+    owner = WorkspaceProcessOwner(deadline)
     for task in tasks:
         try:
             ensure_repo_cache(task, cache_dir, owner)

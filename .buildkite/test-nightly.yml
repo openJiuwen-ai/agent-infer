@@ -1,0 +1,92 @@
+# Uploaded by pipeline.yml for the `nightly-test` PR label or NIGHTLY=1.
+# Buildkite Schedule setup: tests/e2e/acc/README.md (Nightly triggers).
+# The schedule sets NIGHTLY=1; this step YAML does not register a timer.
+# Accuracy coverage follows PR #64 / RFC #54. Use an x86_64 L20 agent.
+# pipeline.yml builds and cleans up the shared GPU image for both CI lanes.
+
+steps:
+  - group: ":full_moon: Nightly accuracy"
+    key: nightly-accuracy
+    if: build.env("NIGHTLY") == "1" || build.pull_request.labels includes "nightly-test"
+    steps:
+      - label: "accuracy: baseline"
+        key: nightly-accuracy-baseline
+        depends_on: ci-image
+        secrets:
+          - HF_TOKEN
+        mirror_hardwares: l20_2
+        env:
+          PYTEST_ADDOPTS: >-
+            -o cache_dir=/tmp/pytest-cache --capture=tee-sys -m "L20 and cards_2 and nightly"
+            --correctness-ci --benchmark-run-as-user test-user
+            --correctness-evaluation-config /opt/agentbench/evaluation.yaml
+        plugins:
+          - docker-compose#v4.9.0:
+              config: docker/docker-compose.yml
+              cli-version: 2
+              run: agentinfer-accuracy
+              skip-pull: true
+              require-prebuild: true
+              environment:
+                - HF_TOKEN
+                - HOME=/tmp/ci-home
+                - PYTEST_ADDOPTS
+        concurrency: 1
+        concurrency_group: agentinfer/nightly-accuracy-l20
+        timeout_in_minutes: 90
+        artifact_paths:
+          - "tests/run/acc/baseline-*/pytest.log"
+          - "tests/run/acc/baseline-*/*/*-requirements.txt"
+          - "tests/run/acc/baseline-*/*/vllm-logs/*.log"
+          - "tests/run/acc/*-baseline-*/{manifest,summary,task_index}.json"
+          - "tests/run/acc/*-baseline-*/proxy.*.log"
+          - "tests/run/acc/*-baseline-*/tasks/*/*.{json,jsonl,patch}"
+          - "tests/run/acc/*-baseline-*/tasks/*/{*.stderr,*.stdout,*-error,terminal-final}.log"
+          - "tests/run/acc/*-baseline-*/tasks/*/jiuwenswarm-instance/{data/agent/.logs,data/logs,home/.jiuwenswarm/logs}/**/*.log"
+          - "tests/run/acc/*-baseline-*/tasks/*/jiuwenbox-audit/*.log"
+          - "tests/run/acc/*-baseline-*/evaluations/*/*.{json,jsonl,log}"
+          - "tests/run/acc/*-baseline-*/evaluations/*/raw/**/*.{json,log,txt}"
+          - "tests/result/acc/*-baseline-*/correctness.json"
+        commands:
+          - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k baseline
+
+      - label: "accuracy: AgentInfer"
+        key: nightly-accuracy-agentinfer
+        depends_on: ci-image
+        secrets:
+          - HF_TOKEN
+        mirror_hardwares: l20_2
+        env:
+          PYTEST_ADDOPTS: >-
+            -o cache_dir=/tmp/pytest-cache --capture=tee-sys -m "L20 and cards_2 and nightly"
+            --correctness-ci --benchmark-run-as-user test-user
+            --correctness-evaluation-config /opt/agentbench/evaluation.yaml
+        plugins:
+          - docker-compose#v4.9.0:
+              config: docker/docker-compose.yml
+              cli-version: 2
+              run: agentinfer-accuracy
+              skip-pull: true
+              require-prebuild: true
+              environment:
+                - HF_TOKEN
+                - HOME=/tmp/ci-home
+                - PYTEST_ADDOPTS
+        concurrency: 1
+        concurrency_group: agentinfer/nightly-accuracy-l20
+        timeout_in_minutes: 90
+        artifact_paths:
+          - "tests/run/acc/agentinfer-*/pytest.log"
+          - "tests/run/acc/agentinfer-*/*/*-requirements.txt"
+          - "tests/run/acc/agentinfer-*/*/vllm-logs/*.log"
+          - "tests/run/acc/*-agentinfer-*/{manifest,summary,task_index}.json"
+          - "tests/run/acc/*-agentinfer-*/proxy.*.log"
+          - "tests/run/acc/*-agentinfer-*/tasks/*/*.{json,jsonl,patch}"
+          - "tests/run/acc/*-agentinfer-*/tasks/*/{*.stderr,*.stdout,*-error,terminal-final}.log"
+          - "tests/run/acc/*-agentinfer-*/tasks/*/jiuwenswarm-instance/{data/agent/.logs,data/logs,home/.jiuwenswarm/logs}/**/*.log"
+          - "tests/run/acc/*-agentinfer-*/tasks/*/jiuwenbox-audit/*.log"
+          - "tests/run/acc/*-agentinfer-*/evaluations/*/*.{json,jsonl,log}"
+          - "tests/run/acc/*-agentinfer-*/evaluations/*/raw/**/*.{json,log,txt}"
+          - "tests/result/acc/*-agentinfer-*/correctness.json"
+        commands:
+          - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k agentinfer

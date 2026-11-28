@@ -2,20 +2,7 @@
 # upload_pipeline.py expands it from hardware.yml.
 
 steps:
-  # The compose plugin reuses an image only when meta-data names it. There is no
-  # registry, so this step builds on the host and records the local tag. Later
-  # steps on this queue must share this machine's Docker daemon.
-  - label: ":docker: Build CI image"
-    key: ci-image
-    mirror_hardwares: l20_1
-    host_only: true
-    commands:
-      - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu" || true
-      - |
-        COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 \
-          docker compose -f docker/docker-compose.yml build --pull agentinfer-ci
-      - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-ci-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu"
-
+  # pipeline.yml builds the shared GPU image and records both Compose services.
   # GPU smoke for the AgentInfer serve flag. Not the tests/e2e suite.
   - label: "smoke: agentinfer serve"
     depends_on: ci-image
@@ -23,11 +10,10 @@ steps:
       - HF_TOKEN
     commands:
       - AGENTINFER_E2E_MODEL=Qwen/Qwen3-0.6B pytest -sv -m "L20 and cards_1 and ready" tests/agentcache/entrypoints/test_serve_flag_e2e.py
-    timeout_in_minutes: 25
+    timeout_in_minutes: 15
     mirror_hardwares: l20_1
 
   # Functional E2E reuses ci-image and reserves two L20s per job.
-  # e2e accuracy has no ready step yet, so that group is omitted.
   - group: ":card_index_dividers: e2e function"
     depends_on: ci-image
     steps:
@@ -39,7 +25,7 @@ steps:
           - HF_TOKEN
         env:
           AGENTINFER_CI_AS_ROOT: "1"
-        timeout_in_minutes: 90
+        timeout_in_minutes: 30
         # Keep existing diagnostics from every profile, including failed runs.
         # Narrow paths exclude repo caches, full workspaces, and agent installs.
         artifact_paths:
@@ -77,6 +63,49 @@ steps:
           - bwrap --unshare-user --unshare-pid --ro-bind / / --proc /proc -- /bin/true
           - pytest -s -v -m "L20 and cards_2 and ready" tests/e2e/function/agentbench/test_smoke_task.py --benchmark-run-as-user test-user
 
+  - group: ":card_index_dividers: e2e accuracy"
+    depends_on: ci-image
+    steps:
+      - label: "accuracy: JiuwenSwarm AgentInfer"
+        key: ready-accuracy-jiuwenswarm
+        depends_on: ci-image
+        secrets:
+          - HF_TOKEN
+        mirror_hardwares: l20_2
+        timeout_in_minutes: 30
+        concurrency: 1
+        concurrency_group: agentinfer/nightly-accuracy-l20
+        env:
+          PYTEST_ADDOPTS: >-
+            -o cache_dir=/tmp/pytest-cache --capture=tee-sys -m "L20 and cards_2 and ready"
+            --correctness-ci --correctness-evaluation-config /opt/agentbench/evaluation.yaml
+        plugins:
+          - docker-compose#v4.9.0:
+              config: docker/docker-compose.yml
+              cli-version: 2
+              run: agentinfer-accuracy
+              skip-pull: true
+              require-prebuild: true
+              environment:
+                - HF_TOKEN
+                - HOME=/tmp/ci-home
+                - PYTEST_ADDOPTS
+        artifact_paths:
+          - "tests/run/acc/jiuwenswarm-*/pytest.log"
+          - "tests/run/acc/jiuwenswarm-*/*/*-requirements.txt"
+          - "tests/run/acc/jiuwenswarm-*/*/vllm-logs/*.log"
+          - "tests/run/acc/jiuwenswarm-agentinfer-*/{manifest,summary,task_index}.json"
+          - "tests/run/acc/jiuwenswarm-agentinfer-*/proxy.*.log"
+          - "tests/run/acc/jiuwenswarm-agentinfer-*/tasks/*/*.{json,jsonl,patch}"
+          - "tests/run/acc/jiuwenswarm-agentinfer-*/tasks/*/{*.stderr,*.stdout,*-error,terminal-final}.log"
+          - "tests/run/acc/jiuwenswarm-agentinfer-*/tasks/*/jiuwenswarm-instance/{data/agent/.logs,data/logs,home/.jiuwenswarm/logs}/**/*.log"
+          - "tests/run/acc/jiuwenswarm-agentinfer-*/tasks/*/jiuwenbox-audit/*.log"
+          - "tests/run/acc/jiuwenswarm-agentinfer-*/evaluations/*/*.{json,jsonl,log}"
+          - "tests/run/acc/jiuwenswarm-agentinfer-*/evaluations/*/raw/**/*.{json,log,txt}"
+          - "tests/result/acc/jiuwenswarm-agentinfer-*/correctness.json"
+        commands:
+          - pytest -v tests/e2e/acc/test_correctness.py::test_run_with_correctness -k jiuwenswarm
+
   # cpu_small is another machine, so it builds the same Dockerfile itself.
   - label: ":docker: Build CI image (cpu)"
     key: ci-image-cpu
@@ -93,26 +122,17 @@ steps:
     depends_on: ci-image-cpu
     steps:
       - label: "ut"
+        key: unit-tests
         commands:
           - pytest tests -sv -m "cpu and ready"
-        timeout_in_minutes: 20
+        timeout_in_minutes: 10
         mirror_hardwares: cpu_small
 
-  # A plain wait skips every later step when an earlier step failed, which
-  # leaves this build's tagged images on the agent. Continue so cleanup still
-  # runs; the build stays failed.
-  - wait: ~
-    continue_on_failure: true
-  - label: ":broom: Cleanup GPU agent"
-    mirror_hardwares: l20_1
-    # Host docker prune. Do not wrap this step in the CI container.
-    host_only: true
-    commands:
-      - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu" || true
-      - docker image prune -f
   - label: ":broom: Cleanup CPU agent"
+    depends_on: unit-tests
+    allow_dependency_failure: true
     mirror_hardwares: cpu_small
     host_only: true
+    timeout_in_minutes: 5
     commands:
       - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-cpu" || true
-      - docker image prune -f

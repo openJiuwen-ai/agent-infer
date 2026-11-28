@@ -50,12 +50,18 @@ vllm bench serve --agentinfer run --config PATH [OVERRIDES]
 | `--agent-type {claude,jiuwenswarm,dsh}` | 枚举 | `agent.type` |
 | `--agent-profile PROFILE` | 枚举 | `agent.profile` |
 | `--agent-executable PATH` | 路径或命令名 | `agent.executable` |
+| `--context-window INT` | `>= 1` | `agent.context_window` |
+| `--max-tokens INT` | `>= 1` | `agent.max_tokens` |
 | `--base-url URL` | HTTP URL | `backend.base_url` |
 | `--model NAME` | 字符串 | `backend.model` |
 | `--endpoint PATH` | API 路径 | `backend.endpoint` |
 
 配置优先级为内置默认值、YAML、显式 CLI 覆盖。YAML 中的相对路径以 YAML 文件目录为基准；CLI 路径以当前
 工作目录为基准。未知 YAML 字段会被拒绝。Router 使用 `--base-url` 指向透明转发端点，`--metrics-url` 指向 vLLM 指标端点。
+
+DSH 和 ZCode 会使用这些 agent token 预算。`--context-window` 应与模型服务的上下文上限一致；
+未传入参数时沿用 YAML 值或内置默认值。Claude Code 通过自身环境变量配置 token 预算，
+这两个参数不改变其适配器行为。
 
 开启 `--with-correctness` 后，评测配置在运行前校验，默认使用当前 Python 环境和标准评测参数。
 运行配置与评测配置独立；运行正常结束后，将实际产物目录交给评测器，结果写入 `evaluations/` 下的唯一目录。

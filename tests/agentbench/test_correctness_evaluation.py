@@ -200,6 +200,33 @@ def test_evaluation_preserves_patch_bytes_through_harness(source, fake_harness):
         assert manifest["output_hashes"][harness_patch] == expected
 
 
+@pytest.mark.parametrize("status", ["resolved", "unresolved", "empty_patch", "error"])
+def test_accuracy_acceptance_checks_scoring_errors_for_partial_runs(source, fake_harness, status, capsys):
+    from tests.e2e.acc.test_correctness import _validate
+
+    # The source includes a failed task, which does not need to produce a patch.
+    failed = source / "tasks/astropy__astropy-2"
+    (failed / "model.patch").unlink()
+    update(failed / "result.json", lambda d: d.update(has_patch=False, patch_bytes=0, termination_reason="max_tokens"))
+    for iid in fake_harness:
+        fake_harness[iid] = True if status == "resolved" else "missing" if status == "error" else False
+        if status == "empty_patch":
+            task = source / "tasks" / iid
+            (task / "model.patch").unlink()
+            update(task / "result.json", lambda d: d.update(has_patch=False, patch_bytes=0))
+            atomic_write_json(task / "dsh-run-status.json", {"patch": "no_changes"})
+    output, _ = runner.evaluate(source, config())
+    evaluation = output / "correctness.json"
+    if status == "error":
+        with pytest.raises(AssertionError, match="scoring errors: 2"):
+            _validate(evaluation)
+    else:
+        _validate(evaluation)
+    printed = capsys.readouterr().out
+    assert f"'{status}': 2" in printed
+    assert "'total': 2" in printed and "resolved_rate=" in printed
+
+
 @pytest.mark.parametrize("change", ["count", "duplicate", "status", "base_commit", "running", "directory"])
 def test_inconsistent_source_rejected(source, change):
     if change == "count":

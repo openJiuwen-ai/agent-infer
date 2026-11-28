@@ -6,6 +6,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -106,6 +108,96 @@ def test_ensure_repo_cache_fetches_commit_missing_from_existing_cache(
 
     assert ensure_repo_cache(task, tmp_path / "repo-cache") == cache
     assert calls.count(["git", "fetch", "--depth", "1", "origin", "abc123"]) == 1
+
+
+@pytest.fixture
+def repo_cache_fetch(tmp_path, monkeypatch):
+    from agentinfer.agentbench.benchkit import workspace
+
+    task = Task(instance_id="task-a", repo="owner/repo", base_commit="abc123", problem_statement="p")
+    cache = tmp_path / "owner__repo"
+    (cache / ".git").mkdir(parents=True)
+    clock, sleeps = [100.0], []
+    fetch = Mock()
+    monkeypatch.setattr(workspace, "_commit_available", lambda *_: False)
+    monkeypatch.setattr(workspace, "_run_git", fetch)
+    monkeypatch.setattr(workspace, "time", SimpleNamespace(monotonic=lambda: clock[0], sleep=sleeps.append))
+    return SimpleNamespace(
+        module=workspace, task=task, root=tmp_path, cache=cache, fetch=fetch, clock=clock, sleeps=sleeps
+    )
+
+
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("owned", [False, True])
+def test_repo_cache_retries_network_failures_for_all_callers(repo_cache_fetch, monkeypatch, caplog, existing, owned):
+    setup = repo_cache_fetch
+    if not existing:
+        (setup.cache / ".git").rmdir()
+    failure = RuntimeError("Failed to connect to github.com port 443: Connection timed out")
+    setup.fetch.side_effect = [failure, failure, None]
+    commands = []
+
+    def git(args, **kwargs):
+        commands.append(args)
+        if args[0] == "fetch":
+            return setup.fetch(args, **kwargs)
+
+    monkeypatch.setattr(setup.module, "_run_git", git)
+    # A newly initialized cache already contains the commit after its first fetch.
+    monkeypatch.setattr(setup.module, "_commit_available", lambda *_: not existing)
+    owner = WorkspaceProcessOwner(150.0) if owned else None
+    assert ensure_repo_cache(setup.task, setup.root, owner) == setup.cache
+    assert setup.fetch.call_count == 3 and setup.sleeps == [5, 5]
+    assert all(call.kwargs["owner"] is owner for call in setup.fetch.call_args_list)
+    assert commands.count(["init"]) == int(not existing)
+    assert "attempt 2/3" in caplog.text
+    if owner is not None:
+        assert owner.deadline == 150.0
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        RuntimeError("Authentication failed"),
+        RuntimeError("detected dubious ownership"),
+        RuntimeError("remote error: not our ref commit"),
+        ValueError("HTTP/2 stream error"),
+        TimeoutError("Workspace command timed out"),
+    ],
+)
+def test_repo_cache_does_not_retry_permanent_errors(repo_cache_fetch, failure):
+    setup = repo_cache_fetch
+    setup.fetch.side_effect = failure
+    with pytest.raises(type(failure)) as caught:
+        ensure_repo_cache(setup.task, setup.root)
+    assert caught.value is failure
+    assert setup.fetch.call_count == 1 and setup.sleeps == []
+
+
+def test_repo_cache_stops_after_three_network_failures(repo_cache_fetch):
+    setup = repo_cache_fetch
+    setup.fetch.side_effect = RuntimeError("HTTP/2 stream error")
+    with pytest.raises(RuntimeError, match="HTTP/2 stream error"):
+        ensure_repo_cache(setup.task, setup.root)
+    assert setup.fetch.call_count == 3 and setup.sleeps == [5, 5]
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_repo_cache_retry_respects_deadline_and_cancellation(repo_cache_fetch, cancelled):
+    setup = repo_cache_fetch
+    owner = WorkspaceProcessOwner(150.0)
+
+    def fail(*args, **kwargs):
+        if cancelled:
+            owner.terminate_all()
+        else:
+            setup.clock[0] = 149.0
+        raise RuntimeError("Connection reset by peer")
+
+    setup.fetch.side_effect = fail
+    with pytest.raises(TimeoutError):
+        ensure_repo_cache(setup.task, setup.root, owner)
+    assert setup.fetch.call_count == 1 and setup.sleeps == []
 
 
 def test_prepare_workspace_reuses_existing_destination_without_git(

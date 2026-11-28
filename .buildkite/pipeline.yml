@@ -1,5 +1,8 @@
-# Bootstrap. Buildkite runs this file directly. test-ready.yml is uploaded only
-# when the pull request has the `ready` label.
+# Bootstrap. Buildkite runs this file directly.
+# PR labels: `ready` uploads test-ready.yml; `nightly-test` uploads test-nightly.yml.
+# Labels are independent: both child pipelines run when both labels are present.
+# A Buildkite Schedule on main with NIGHTLY=1 also uploads test-nightly.yml.
+# Example schedule: 0 2 * * * Asia/Shanghai. Schedule setup is in tests/e2e/acc/README.md.
 #
 # Adding the label starts a build only when both GitHub settings are set on
 # this pipeline:
@@ -7,9 +10,51 @@
 #   - Skip when pull request has existing build for commit and branch: disabled
 # The second one is on by default, and it drops the label event when that
 # commit was already built.
+env:
+  # Match the public GitHub route already used by the CI host checkout.
+  GITHUB_GIT_BASE_URL: "https://ghfast.top/https://github.com/"
+
 steps:
+  # GPU queues share a Docker daemon. Build once for both uploaded pipelines.
+  - label: ":docker: Build CI image"
+    key: ci-image
+    if: build.pull_request.labels includes "ready" || build.pull_request.labels includes "nightly-test" || build.env("NIGHTLY") == "1"
+    agents:
+      queue: L20-1-small
+    commands:
+      - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu" || true
+      - |
+        COMPOSE_BAKE=false BUILDX_NO_DEFAULT_ATTESTATIONS=1 \
+          docker compose -f docker/docker-compose.yml build --pull agentinfer-ci
+      - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-ci-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu"
+      - buildkite-agent meta-data set "docker-compose-plugin-built-image-tag-agentinfer-accuracy-docker/docker-compose.yml" "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu"
+
   - label: ":pipeline: Upload ready pipeline"
+    key: upload-ready-pipeline
     if: build.pull_request.labels includes "ready"
     command: python3 .buildkite/upload_pipeline.py .buildkite/test-ready.yml
     agents:
       queue: L20-cpu-small
+
+  - label: ":pipeline: Upload nightly pipeline"
+    key: upload-nightly-pipeline
+    if: build.env("NIGHTLY") == "1" || build.pull_request.labels includes "nightly-test"
+    command: python3 .buildkite/upload_pipeline.py .buildkite/test-nightly.yml
+    agents:
+      queue: L20-cpu-small
+
+  # Upload dependencies include their dynamically uploaded jobs. Keep the shared
+  # image until ready and nightly consumers finish, including after test failures.
+  - label: ":broom: Cleanup GPU image"
+    key: cleanup-gpu-image
+    if: build.pull_request.labels includes "ready" || build.pull_request.labels includes "nightly-test" || build.env("NIGHTLY") == "1"
+    depends_on:
+      - ci-image
+      - upload-ready-pipeline
+      - upload-nightly-pipeline
+    allow_dependency_failure: true
+    agents:
+      queue: L20-1-small
+    timeout_in_minutes: 5
+    commands:
+      - docker rmi -f "agentinfer-ci:$$BUILDKITE_BUILD_ID-gpu" || true

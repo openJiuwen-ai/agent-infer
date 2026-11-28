@@ -44,6 +44,8 @@ _PRESERVED_ENV_KEYS = (
     "LD_PRELOAD",
     "TQDM_DISABLE",
     "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
     "VIRTUAL_ENV",
     "PYTHONPATH",
     "TORCH_DEVICE_BACKEND_AUTOLOAD",
@@ -231,7 +233,7 @@ class E2EConfig:
         return self.base_url.rstrip("/") == DEFAULT_BASE_URL
 
     def with_benchmark_load(self, *, task_num: int | None = None, max_concurrency: int | None = None) -> E2EConfig:
-        updates: dict[str, int] = {}
+        updates: dict[str, Any] = {}
         if task_num is not None:
             updates["task_num"] = task_num
         if max_concurrency is not None:
@@ -353,19 +355,19 @@ def _infer_scenario(payload: dict[str, Any], case_path: Path) -> PerfScenario:
     raise ValueError(f'cannot infer scenario for {case_path}; set "scenario": "baseline" or "agentinfer" in the JSON')
 
 
-def load_case_file(case_file: Path, *, benchmark_index: int | None = None) -> BenchmarkCase:
-    """Load a JSON case, selecting an explicit index for benchmark parameter arrays.
-
-    Object-shaped benchmark_params keep the existing single-case behavior.
-    An array shares the top-level deployment and requires benchmark_index.
-    """
-
+def _load_case_payload(case_file: Path) -> tuple[Path, dict[str, Any]]:
     path = case_file.expanduser()
     if not path.is_file() or path.suffix != ".json":
         raise ValueError(f"--test-config-file must point to a .json file: {case_file}")
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"case JSON root must be an object: {case_file}")
+    return path, payload
+
+
+def load_case_file(case_file: Path, *, benchmark_index: int | None = None) -> BenchmarkCase:
+    """Load one benchmark, requiring an explicit index for parameter arrays."""
+    path, payload = _load_case_payload(case_file)
     variants = benchmark_param_variants(payload)
     if benchmark_index is None:
         if isinstance(payload.get("benchmark_params"), list):
@@ -373,9 +375,36 @@ def load_case_file(case_file: Path, *, benchmark_index: int | None = None) -> Be
         benchmark_index = 0
     if type(benchmark_index) is not int or not 0 <= benchmark_index < len(variants):
         raise ValueError(f"benchmark_index must be an integer between 0 and {len(variants) - 1}")
-    payload = {**payload, "benchmark_params": variants[benchmark_index]}
+    return _parse_case(
+        payload | {"benchmark_params": variants[benchmark_index]},
+        scenario=_infer_scenario(payload, path),
+    )
+
+
+def load_case_group(case_file: Path) -> tuple[BenchmarkCase, ...]:
+    """Expand one benchmark per agent while preserving the shared serve configuration."""
+    path, payload = _load_case_payload(case_file)
     scenario = _infer_scenario(payload, path)
-    return _parse_case(payload, scenario=scenario)
+    benchmarks = payload.get("benchmark_params")
+    if isinstance(benchmarks, dict):
+        return (_parse_case(payload, scenario=scenario),)
+    variants = benchmark_param_variants(payload)
+    cases = []
+    agents: set[str] = set()
+    server_targets = set()
+    for params in variants:
+        agent = params.get("agent-type")
+        if not isinstance(agent, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", agent):
+            raise ValueError("each grouped benchmark requires a valid agent-type")
+        if agent in agents:
+            raise ValueError(f"duplicate agent-type in benchmark_params: {agent}")
+        agents.add(agent)
+        case = _parse_case(payload | {"benchmark_params": params}, scenario=scenario)
+        cases.append(replace(case, test_name=f"{case.test_name}-{agent}"))
+        server_targets.add((params.get("host", DEFAULT_HOST), params.get("port"), params.get("model")))
+    if len(server_targets) != 1:
+        raise ValueError("grouped benchmarks must share host, port and model")
+    return tuple(cases)
 
 
 def benchmark_param_variants(payload: dict[str, Any]) -> tuple[dict[str, Any], ...]:
@@ -396,6 +425,10 @@ def _parse_case(payload: dict[str, Any], *, scenario: PerfScenario) -> Benchmark
     benchmark_params = payload.get("benchmark_params")
     if not isinstance(benchmark_params, dict):
         raise ValueError(f"{scenario.value} case {test_name!r} missing benchmark_params object")
+    benchmark_params = dict(benchmark_params)
+    mark_override = benchmark_params.pop("mark", {})
+    if not isinstance(mark_override, dict) or not set(mark_override) <= {"ci"}:
+        raise ValueError("benchmark_params.mark may only override ci")
 
     serve_env_raw = payload.get("serve_env", {})
     if not isinstance(serve_env_raw, dict):
@@ -424,7 +457,7 @@ def _parse_case(payload: dict[str, Any], *, scenario: PerfScenario) -> Benchmark
         test_name=test_name,
         scenario=scenario,
         description=str(payload.get("description", "")),
-        mark=dict(mark_raw),
+        mark=dict(mark_raw) | mark_override,
         deploy=deploy,
         benchmark_params=dict(benchmark_params),
         wait_for_vllm_ready=wait_for_vllm_ready,
@@ -480,6 +513,7 @@ def _parse_deploy_case(name: str, spec: dict[str, Any], *, case_label: str) -> V
     if not isinstance(serve_args, dict):
         raise ValueError(f"{case_label} serve_args must be an object")
     middleware_raw = server_params.get("middleware", [])
+    middleware: tuple[str, ...]
     if isinstance(middleware_raw, str):
         middleware = (middleware_raw,)
     elif isinstance(middleware_raw, list):
@@ -540,23 +574,29 @@ def benchmark_params_to_run_args(params: dict[str, Any], result_dir: Path, repo:
         "agent-type": "--agent-type",
         "agent-executable": "--agent-executable",
         "agent-profile": "--agent-profile",
+        "context-window": "--context-window",
+        "max-tokens": "--max-tokens",
         "endpoint": "--endpoint",
         "metrics-url": "--metrics-url",
         "task-num": "--task-num",
         "max-concurrency": "--max-concurrency",
         "timeout": "--timeout",
+        "evaluation-config": "--evaluation-config",
     }
     for key, flag in flag_map.items():
         if key not in params:
             continue
         value = params[key]
-        if key == "config":
+        if key in {"config", "evaluation-config"}:
             path = Path(str(value)).expanduser()
             if not path.is_absolute():
                 path = (repo / path).resolve()
             argv.extend([flag, str(path)])
         else:
             argv.extend([flag, str(value)])
+
+    if params.get("with-correctness", False):
+        argv.append("--with-correctness")
 
     host = params.get("host", "127.0.0.1")
     port = int(params.get("port", 8000))
@@ -597,16 +637,18 @@ def _chown_for_user(path: Path, run_as_user: str) -> None:
 
 
 def _chown_tree_for_user(path: Path, run_as_user: str) -> None:
+    import pwd
+
+    pw = pwd.getpwnam(run_as_user)
+    _chown_tree(path, pw.pw_uid, pw.pw_gid)
+
+
+def _chown_tree(path: Path, uid: int, gid: int) -> None:
     """Recursively chown a directory tree for benchmark data handoff.
 
     Symlinks are chowned in place and not followed, so ownership changes cannot
     escape the intended tree via symlink indirection.
     """
-
-    import pwd
-
-    pw = pwd.getpwnam(run_as_user)
-    uid, gid = pw.pw_uid, pw.pw_gid
 
     def _apply(target: Path) -> None:
         mode = os.lstat(target).st_mode

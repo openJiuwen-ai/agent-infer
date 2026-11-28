@@ -52,7 +52,6 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     cases_dir = (Path(metafunc.definition.path).parent / "cases").resolve()
     selected = metafunc.config.stash.get(_SELECTED_CASE, None)
     paths = [selected] if selected else sorted(path.resolve() for path in cases_dir.rglob("*.json"))
-    expand_benchmarks = "benchmark_index" in metafunc.fixturenames
     params = []
     for path in paths:
         try:
@@ -64,7 +63,14 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
                 raise ValueError("case JSON must be an object")
             marks = resolve_pytest_marks(payload.get("mark"), metafunc.config)
             case_id = path.relative_to(cases_dir).with_suffix("").as_posix()
-            if expand_benchmarks:
+            if "benchmark_case" in metafunc.fixturenames:
+                from tests.e2e.helpers.case_loader import load_case_group
+
+                for case in load_case_group(path):
+                    agent = case.benchmark_params.get("agent-type", "claude")
+                    case_marks = resolve_pytest_marks(case.mark, metafunc.config)
+                    params.append(pytest.param(path, case, marks=case_marks, id=f"{case_id}-{agent}"))
+            elif "benchmark_index" in metafunc.fixturenames:
                 for index, benchmark in enumerate(benchmark_param_variants(payload)):
                     agent = benchmark.get("agent-type", "agent")
                     profile = benchmark.get("agent-profile", "single")
@@ -75,7 +81,14 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
                 params.append(pytest.param(path, marks=marks, id=case_id))
         except (OSError, ValueError, TypeError) as exc:
             raise pytest.UsageError(f"{metafunc.definition.nodeid} [{path}]: {exc}") from exc
-    metafunc.parametrize("case_file,benchmark_index" if expand_benchmarks else "case_file", params)
+    if "benchmark_case" in metafunc.fixturenames:
+        # Keep benchmarks from the same file together so the module-scoped
+        # accuracy server survives between agents and stops before the next group.
+        metafunc.parametrize("case_file,benchmark_case", params, scope="module")
+    elif "benchmark_index" in metafunc.fixturenames:
+        metafunc.parametrize("case_file,benchmark_index", params)
+    else:
+        metafunc.parametrize("case_file", params)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

@@ -478,3 +478,21 @@ For the live SWE-bench test, set `AGENTBENCH_VLLM_URL`, `AGENTBENCH_VLLM_MODEL`,
 through CLI flags. Set `AGENTBENCH_JIUWEN_TEST_CONFIG` to use a different YAML file.
 Prepare the dataset and official evaluation environment before running `test_live_swebench.py`. Both modes
 use the first task of the same selection. Pytest skips the test when the model URL or name is unavailable.
+
+## Accuracy CI configuration
+
+The accuracy E2E cases reuse `swebench_vllm.yaml` for Claude and `swebench_vllm_dsh.yaml` for DSH,
+preserving those shared YAMLs. DSH cases pass `--context-window` to match their serve limit;
+other callers keep the original defaults when they omit the override.
+Claude accuracy cases pass the serve context limit and an 8,192-token output budget through the Claude
+environment variables. When pytest runs as root, the E2E helper reclaims the repo cache before each case,
+hands it to the requested regular user, and returns it to root after the case, including on failure.
+The cases use `Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8` with a 65,536-token server context and
+reserve a loopback port per serve group. Ready selects JiuwenSwarm; nightly selects all four agents.
+Jiuwen runs as root in CI. Its tracked native sandbox issue can still cause the job to fail.
+
+`docker/Dockerfile` provides `ci`, `accuracy-jiuwen`, and `accuracy` targets with shared dependency stages.
+The scorer and Jiuwen SDK are added for ready accuracy; nightly also installs the remaining agent CLIs.
+Both accuracy targets use WorkSwarm 0.2.8 and OpenJiuwen 0.1.20, matching the upstream adapter.
+The preflight initializes an isolated temporary home before checking the model client and execution hooks.
+See the [accuracy E2E guide](../../../tests/e2e/acc/README.md) for triggers, scoring artifacts, and commands.

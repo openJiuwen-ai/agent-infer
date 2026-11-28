@@ -43,6 +43,38 @@ def test_schema_overrides_metrics_url(tmp_path: Path) -> None:
     assert _apply_cli_overrides(args, config).backend.metrics_url == "http://vllm:8000/metrics"
 
 
+def test_agent_budget_cli_overrides_reach_dsh_provider_without_changing_defaults():
+    from agentinfer.agentbench.agents.dsh.instance import build_dsh_settings
+
+    base = AgentBenchConfig.model_validate(
+        {
+            "agent": {"type": "dsh", "context_window": 24576, "max_tokens": 1024},
+            "backend": {"endpoint": "/v1/chat/completions"},
+        }
+    )
+    original = base.model_dump()
+    args = _parser().parse_args(["run", "--context-window", "6144", "--max-tokens", "768"])
+    effective = _apply_cli_overrides(args, base)
+    settings = build_dsh_settings(
+        effective.backend.base_url,
+        effective.backend.model,
+        context_window=effective.agent.context_window,
+        max_tokens=effective.agent.max_tokens,
+    )
+    model = settings["llm-pi-ai"]["providers"]["agentbench-vllm"]["models"][0]
+    assert model["contextWindow"] == 6144
+    assert model["maxTokens"] == 768
+    assert base.model_dump() == original
+    assert _apply_cli_overrides(_parser().parse_args(["run"]), base) == base
+
+
+@pytest.mark.parametrize("flag", ["--context-window", "--max-tokens"])
+def test_agent_budget_cli_rejects_nonpositive_values(flag):
+    args = _parser().parse_args(["run", flag, "0"])
+    with pytest.raises(ValueError, match="greater than or equal to 1"):
+        _apply_cli_overrides(args, AgentBenchConfig())
+
+
 def test_zcode_subagent_limit_cli_overrides():
     args = _parser().parse_args(
         [

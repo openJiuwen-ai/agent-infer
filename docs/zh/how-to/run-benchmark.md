@@ -478,3 +478,21 @@ AGENTBENCH_JIUWEN_NATIVE=1 python -m pytest tests/e2e/function/agentbench/jiuwen
 可以用 `AGENTBENCH_JIUWEN_TEST_CONFIG` 指定其他 YAML 文件。
 准备数据与官方评测环境后执行 `test_live_swebench.py`；两个模式使用同一任务清单的第一题。
 缺少真实模型服务时，该项跳过，不代表已完成实题精度验证。
+
+## 精度 CI 配置
+
+精度 E2E 的 Claude、DSH 分别复用 `swebench_vllm.yaml` 和 `swebench_vllm_dsh.yaml`，
+保留共享 YAML 的原值。DSH 精度 case 通过 `--context-window` 与 serve 上限对齐，
+其他入口未传覆盖参数时继续沿用原有默认值。
+Claude 精度用例通过环境变量传入 serve 上下文上限及 `8192` 的输出预算。
+pytest 按 root 运行时，E2E 公共 helper 在每个 case 开始前收回缓存所有权，运行时交给指定普通用户，
+并在 case 结束的 `finally` 中交回 root；case 失败时同样恢复。
+用例使用 `Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8`，serve 上限为 65536，每组自动申请一个本地端口。
+ready 只执行九问精度，nightly 执行四个 agent。九问在 CI 中按 root 运行，
+已跟踪的原生沙箱问题仍可能导致用例失败。
+
+`docker/Dockerfile` 提供 `ci`、`accuracy-jiuwen`、`accuracy` 三个 target，复用公共依赖 stage。
+ready 精度增加评分环境和九问 SDK，nightly 在此基础上补齐其他 agent CLI。
+两个精度 target 均使用 WorkSwarm 0.2.8 和 OpenJiuwen 0.1.20，与主仓适配器保持一致。
+预检先初始化独立临时目录，再检查模型客户端和执行 hook。
+触发方式、评分产物及命令见[精度 E2E 文档](../../../tests/e2e/acc/README.md)。

@@ -18,8 +18,7 @@ RUN git init . \
  && pnpm --filter @zcode/cli... build \
  && test "$(node apps/zcode-cli/packages/cli/dist/zcode.cjs --version)" = "0.17.1"
 
-FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/vllm/vllm-openai:v0.23.0
-ARG PIP_INDEX_URL
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/vllm/vllm-openai:v0.23.0 AS ci-deps
 
 # Unit tests create throwaway repos with `git init` / `git commit`.
 # curl/xz unpack the Node tarball used by the DSH functional E2E.
@@ -46,38 +45,8 @@ RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-l
  && node --version \
  && dsh --version
 
-ARG CLAUDE_CODE_VERSION=2.1.323
-RUN npm install --global --prefix /usr/local \
-      --registry https://registry.npmjs.org \
-      --allow-scripts=@anthropic-ai/claude-code \
-      "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
- && claude --version
-
-# Keep the workspace and adjacent resources: the CLI bundles external runtime assets.
-COPY --from=zcode-build /opt/zcode /opt/zcode
-COPY --from=zcode-build /usr/local/bin/node /opt/zcode-node/bin/node
-RUN sed -i '1{/^#!/d;}' /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
- && sed -i '1i#!/opt/zcode-node/bin/node' /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
- && chmod 755 /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
- && ln -s /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs /usr/local/bin/zcode \
- && test "$(zcode --version)" = "0.17.1"
-
-# Jiuwen's sandbox mounts /usr but not /etc/alternatives. Keep the base image's
-# Python interpreter reachable inside the sandbox before creating the venv.
-RUN python3_target="$(readlink -f /usr/bin/python3)" \
- && test -x "$python3_target" \
- && if [ "$python3_target" != /usr/bin/python3 ]; then \
-      ln -sfn "$python3_target" /usr/bin/python3; \
-    fi
-
-# WorkSwarm provides the JiuwenSwarm commands in an isolated Python environment.
-ARG JIUWENSWARM_VERSION=0.2.8
-RUN python3 -m venv --system-site-packages /opt/jiuwenswarm \
- && /opt/jiuwenswarm/bin/pip install --no-cache-dir "workswarm==${JIUWENSWARM_VERSION}" \
- && for command in jiuwenswarm jiuwenswarm-init jiuwenswarm-start jiuwenbox-server; do \
-      test -x "/opt/jiuwenswarm/bin/$command" \
-      && ln -s "/opt/jiuwenswarm/bin/$command" "/usr/local/bin/$command" || exit 1; \
-    done
+# Accept the CI agent's Python index without invalidating the Node layers.
+ARG PIP_INDEX_URL=https://mirrors.huaweicloud.com/repository/pypi/simple/
 
 # Install deps before COPY so unchanged deps hit layer cache across PRs (vllm-omni deps-cache pattern).
 RUN pip install --no-cache-dir \
@@ -93,17 +62,76 @@ ENV HF_ENDPOINT=https://hf-mirror.com \
     HF_HUB_CACHE=/home/models/hub \
     HOME=/tmp/ci-home
 
+# Jiuwen's sandbox mounts /usr but not /etc/alternatives. Keep the base image's
+# Python interpreter reachable inside the sandbox before creating the venv.
+RUN python3_target="$(readlink -f /usr/bin/python3)" \
+ && test -x "$python3_target" \
+ && if [ "$python3_target" != /usr/bin/python3 ]; then \
+      ln -sfn "$python3_target" /usr/bin/python3; \
+    fi
+
 # Copy the entrypoint before the repo so dependency layers stay cached.
 # It drops root to whatever UID owns the checkout. See docker/ci-entrypoint.sh.
 COPY docker/ci-entrypoint.sh /usr/local/bin/ci-entrypoint.sh
 RUN chmod 755 /usr/local/bin/ci-entrypoint.sh \
  && mkdir -p /tmp/ci-home
 
+ENTRYPOINT ["/usr/local/bin/ci-entrypoint.sh"]
+CMD ["/bin/bash"]
+
+# Functional and accuracy jobs share the same agent runtimes.
+FROM ci-deps AS agent-deps
+
+ARG CLAUDE_CODE_VERSION=2.1.323
+RUN npm install --global --prefix /usr/local \
+      --registry https://registry.npmjs.org \
+      --allow-scripts=@anthropic-ai/claude-code \
+      "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+ && claude --version
+
+# Keep the workspace and adjacent resources: the CLI bundles external runtime assets.
+COPY --from=zcode-build /opt/zcode /opt/zcode
+COPY --from=zcode-build /usr/local/bin/node /opt/zcode-node/bin/node
+RUN sed -i '1{/^#!/d;}' /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
+ && sed -i '1i#!/opt/zcode-node/bin/node' /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
+ && chmod 755 /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs \
+ && ln -s /opt/zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs /usr/local/bin/zcode \
+ && ln -s /usr/local/bin/zcode /usr/local/bin/zcode-launcher \
+ && test "$(zcode --version)" = "0.17.1"
+
+# WorkSwarm provides the JiuwenSwarm commands in an isolated Python environment.
+ARG JIUWENSWARM_VERSION=0.2.8
+RUN python3 -m venv --system-site-packages /opt/jiuwenswarm \
+ && /opt/jiuwenswarm/bin/pip install --no-cache-dir "workswarm==${JIUWENSWARM_VERSION}" \
+ && for command in jiuwenswarm jiuwenswarm-init jiuwenswarm-start jiuwenbox-server; do \
+      test -x "/opt/jiuwenswarm/bin/$command" \
+      && ln -s "/opt/jiuwenswarm/bin/$command" "/usr/local/bin/$command" || exit 1; \
+    done
+
+# The scorer uses a separate Python environment to preserve vLLM dependencies.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends docker.io \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/agentbench/swebench-venv \
+ && /opt/agentbench/swebench-venv/bin/python -m pip install \
+      'swebench==4.1.0' 'numpy>=2' \
+ && /opt/agentbench/swebench-venv/bin/python -m pip check \
+ && printf '%s\n' \
+      'harness_python: /opt/agentbench/swebench-venv/bin/python' \
+      >/opt/agentbench/evaluation.yaml
+
+# One target serves ready, nightly and CPU jobs; dependency layers precede the checkout.
+FROM agent-deps AS ci
+
+# Apply to root preparation and sudo benchmarks without rebuilding agent dependencies.
+ARG GITHUB_GIT_BASE_URL
+RUN git config --system http.version HTTP/1.1 \
+ && if [ -n "${GITHUB_GIT_BASE_URL}" ]; then \
+      git config --system "url.${GITHUB_GIT_BASE_URL%/}/.insteadOf" https://github.com/; \
+    fi
+
 WORKDIR /app
 COPY . .
 RUN pip install --no-cache-dir \
       -e . --no-deps
-
-# CI image runs pytest. The entrypoint replaces `vllm serve` and drops privileges.
-ENTRYPOINT ["/usr/local/bin/ci-entrypoint.sh"]
-CMD ["/bin/bash"]

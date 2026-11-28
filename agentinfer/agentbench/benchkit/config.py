@@ -46,8 +46,15 @@ class AgentConfig(StrictModel):
     )
     tmux_startup_seconds: float = Field(2.0, ge=0)
     terminal_capture_interval_seconds: int = Field(30, ge=1)
-    context_window: int = Field(262144, ge=1)
-    max_tokens: int = Field(8192, ge=1)
+    context_window: int = Field(
+        262144, ge=1, description="Context capacity for runtimes supporting this field", json_schema_extra={"cli": True}
+    )
+    max_tokens: int = Field(
+        8192,
+        ge=1,
+        description="Output token budget for runtimes supporting this field",
+        json_schema_extra={"cli": True},
+    )
     max_subagents: int = Field(
         1,
         ge=1,
