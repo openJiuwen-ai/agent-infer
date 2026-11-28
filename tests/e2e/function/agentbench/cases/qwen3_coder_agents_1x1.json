@@ -6,7 +6,7 @@
     "num_cards": 2,
     "ci": "ready"
   },
-  "description": "Local add() smoke task across four agents and seven profiles, 1 task x 1 concurrency",
+  "description": "Local add() smoke task across four agents and eight profiles, 1 task x 1 concurrency",
   "server_params": {
     "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
     "serve_args": {
@@ -87,7 +87,23 @@
       "host": "127.0.0.1",
       "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
       "agent-executable": "jiuwenswarm",
-      "agent-profile": "code.normal",
+      "agent-profile": "agent.code.normal",
+      "task-num": 1,
+      "max-concurrency": 1,
+      "timeout": 600,
+      "agent-type": "jiuwenswarm",
+      "endpoint": "/v1/chat/completions"
+    },
+    {
+      "config": "tests/e2e/function/agentbench/smoke_vllm.yaml",
+      "prepare_dataset": "smoke",
+      "prepare_output_dir": "test-results/function/smoke-inputs",
+      "host": "127.0.0.1",
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+      "agent-executable": "jiuwenswarm",
+      "agent-profile": "team.code.normal",
+      "max-subagents": 1,
+      "max-concurrent-subagents": 1,
       "task-num": 1,
       "max-concurrency": 1,
       "timeout": 600,

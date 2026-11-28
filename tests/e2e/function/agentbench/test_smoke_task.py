@@ -29,6 +29,9 @@ def resolve_agent_type(config: E2EConfig) -> str:
         bench["agent"]["type"] = params["agent-type"]
     bench["agent"]["profile"] = config.agent_profile
     bench["agent"]["executable"] = config.agent_executable
+    for option in ("max-subagents", "max-concurrent-subagents"):
+        if option in params:
+            bench["agent"][option.replace("-", "_")] = params[option]
     if "endpoint" in params:
         bench["backend"]["endpoint"] = params["endpoint"]
     return AgentBenchConfig.model_validate(bench).agent.type

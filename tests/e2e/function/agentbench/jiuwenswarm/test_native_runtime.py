@@ -19,7 +19,7 @@ import pytest
 from tests.helpers.marks import test_marks
 
 pytestmark = [
-    *test_marks(hardware="cpu"),
+    *test_marks(hardware="cpu", ci="ready"),
     pytest.mark.skipif(
         os.environ.get("AGENTBENCH_JIUWEN_NATIVE") != "1", reason="requires the WorkSwarm 0.2.8 environment"
     ),
@@ -514,6 +514,49 @@ def test_task_local_services_start_and_stop_with_real_cli(native, backend, profi
         assert instance._process is None and instance._jiuwenbox_process is None
         assert instance._runtime_dir is None
         assert not Path(instance.environment["JIUWENSWARM_RUNTIME_SOCKET"]).exists()
+
+    asyncio.run(scenario())
+
+
+def test_parallel_services_follow_owned_fallback_gateways(native, backend, tmp_path, monkeypatch):
+    """Two real runtimes starting on the same ports must keep separate gateways."""
+    from agentinfer.agentbench.agents.jiuwenswarm import instance as module
+
+    allocate = module._allocate_ports
+    initial_ports = allocate(3)
+    monkeypatch.setattr(module, "_allocate_ports", lambda count: list(initial_ports) if count == 3 else allocate(count))
+    instances = []
+    for index in range(2):
+        root = tmp_path / f"task-{index}"
+        artifacts, workspace = root / "artifacts", root / "workspace"
+        artifacts.mkdir(parents=True)
+        workspace.mkdir()
+        instances.append(
+            module.JiuwenInstance(
+                executable=Path(sys.executable).with_name("jiuwenswarm"),
+                artifact_dir=artifacts,
+                workspace=workspace,
+                session_id=f"parallel-root-{index}",
+                api_base_url=backend[0].removesuffix("/v1"),
+                model="test",
+                completion_timeout_seconds=180,
+            )
+        )
+
+    async def scenario():
+        try:
+            # Keep the first runtime alive so the second must resolve a real conflict.
+            for instance in instances:
+                await asyncio.wait_for(instance.start(), 180)
+            assert len({instance.gateway_url for instance in instances}) == 2
+            for instance in instances:
+                assert instance._process.returncode is None
+                assert module._owns_runtime_ports(
+                    instance._process.pid, instance.gateway_port, instance.agent_server_port
+                )
+        finally:
+            await asyncio.gather(*(instance.stop() for instance in instances))
+        assert all(instance._process is None and instance._runtime_dir is None for instance in instances)
 
     asyncio.run(scenario())
 

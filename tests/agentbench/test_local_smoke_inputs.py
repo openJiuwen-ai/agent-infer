@@ -66,12 +66,28 @@ def test_agent_matrix_shares_deployment_and_preserves_each_benchmark() -> None:
         ("claude", "plan-subagent"),
         ("dsh", "single"),
         ("dsh", "plan-subagent"),
-        ("jiuwenswarm", "code.normal"),
+        ("jiuwenswarm", "agent.code.normal"),
+        ("jiuwenswarm", "team.code.normal"),
         ("zcode", "single"),
         ("zcode", "plan-subagent"),
     ]
     assert all(case.deploy == cases[0].deploy and case.mark == cases[0].mark for case in cases)
     assert cases[0].deploy.result_root == Path("test-results/function/agentbench")
+
+
+def test_team_limits_reach_benchmark_and_are_validated_before_model_start(tmp_path: Path) -> None:
+    """Honor JSON child limits and reject invalid limits before starting vLLM."""
+    config = E2EConfig.from_case(load_case_file(SMOKE_CASE, benchmark_index=5))
+    argv = build_benchmark_argv(config, tmp_path / "run")
+    assert argv[argv.index("--max-subagents") + 1] == "1"
+    assert argv[argv.index("--max-concurrent-subagents") + 1] == "1"
+    assert smoke_suite.resolve_agent_type(config) == "jiuwenswarm"
+    invalid = replace(
+        config.case,
+        benchmark_params={**config.case.benchmark_params, "max-concurrent-subagents": 4},
+    )
+    with pytest.raises(ValueError, match="max_concurrent_subagents must not exceed"):
+        smoke_suite.resolve_agent_type(replace(config, case=invalid))
 
 
 def test_single_benchmark_object_remains_supported(tmp_path: Path) -> None:
@@ -95,7 +111,7 @@ def test_invalid_benchmark_array_is_rejected(tmp_path: Path, params) -> None:
         load_case_file(path, benchmark_index=0)
 
 
-@pytest.mark.parametrize("index", [None, -1, 7, True])
+@pytest.mark.parametrize("index", [None, -1, 999, True])
 def test_benchmark_array_requires_valid_explicit_index(index) -> None:
     """Do not silently select an array entry or accept an out-of-range index."""
     with pytest.raises(ValueError, match="benchmark_index"):
@@ -134,14 +150,14 @@ def test_pytest_user_override_respects_suite_policy(
     assert config.benchmark_run_as_user == "bench-user"
 
 
-@pytest.mark.parametrize("index,uid", [(0, 0), (4, 0), (1, 1000)])
+@pytest.mark.parametrize("index,uid", [(0, 0), (4, 0), (5, 0), (1, 1000)])
 def test_non_planning_or_non_root_smoke_does_not_require_user(index, uid) -> None:
     """Direct profiles keep root; an ordinary caller already satisfies planning policy."""
     config = E2EConfig.from_case(load_case_file(SMOKE_CASE, benchmark_index=index))
     validate_benchmark_user(config, effective_uid=uid)
 
 
-@pytest.mark.parametrize("index", [1, 3, 6])
+@pytest.mark.parametrize("index", [1, 3, 7])
 def test_root_plan_smoke_requires_explicit_benchmark_user(index) -> None:
     """Every planning agent requires the same explicit CLI user when pytest is root."""
     config = E2EConfig.from_case(load_case_file(SMOKE_CASE, benchmark_index=index))
