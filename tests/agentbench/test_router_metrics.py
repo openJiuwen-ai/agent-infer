@@ -6,6 +6,9 @@
 import pytest
 
 from agentinfer.agentbench.benchkit.metrics.router import aggregate_router_prediction_metrics
+from tests.helpers.marks import test_marks
+
+pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
 def test_router_prediction_metrics_aggregate_window_deltas() -> None:
