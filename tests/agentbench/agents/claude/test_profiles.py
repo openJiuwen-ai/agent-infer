@@ -61,7 +61,11 @@ def test_plan_subagent_profile_requires_explore_without_agent_team() -> None:
     assert profile.expected_topology.expected_roles == {"lead", "subagent"}
     assert {"TeamCreate", "TeamDelete", "SendMessage"} <= set(profile.tool_policy.disallowed_tools)
 
-    prompt = profile.build_prompt(_task())
+    prompt = " ".join(profile.build_prompt(_task()).split())
     assert "call EnterPlanMode" in prompt
     assert "focused Explore subagent" in prompt
     assert "Do not create an Agent Team" in prompt
+    assert "Use EnterPlanMode and ExitPlanMode only during the initial planning phase." in prompt
+    assert "the planning phase is over for this task." in prompt
+    assert "end the turn with a text-only final response." in prompt
+    assert "Make zero tool calls in this final response." in prompt

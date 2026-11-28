@@ -238,7 +238,10 @@ const firstFetch = globalThis.fetch
 const secondDispose = apply(ctx, { apiBaseURL: 'http://proxy' })
 const secondFetch = globalThis.fetch
 const created = handlers.find(([event]) => event === 'agent/created')[1]
-created({ agent: { session: { header: { id: 'root-dsh', delegationDepth: 0 } } } })
+created({ agent: {
+  ctx: { tools: { restrict: () => {} } },
+  session: { header: { id: 'root-dsh', delegationDepth: 0 } },
+} })
 const stream = handlers.find(([event]) => event === 'llm/stream')[1]
 async function* request() {
   const response = await fetch('http://proxy/v1/chat/completions', {

@@ -57,12 +57,18 @@ While in plan mode:
 - Avoid spawning extra subagents unless they are clearly needed.
 - Subagents may inspect, search, review, and run tests, but cannot edit files.
 - Wait for all subagent reports, finalize the implementation plan, and call ExitPlanMode promptly.
-- Plan approval is automatic in this benchmark; continue immediately with implementation.
+- Use EnterPlanMode and ExitPlanMode only during the initial planning phase.
+- Plan approval is automatic in this benchmark. When ExitPlanMode reports
+  that the plan was approved, the planning phase is over for this task.
+  Proceed directly to implementation and verification.
 
 After exiting plan mode, write the final patch yourself. Do not create an Agent Team.
 Test the fix when practical and summarize the changes.
 
-{IMPLEMENTATION_CONSTRAINTS}- When you are done, stop and wait at the prompt.
+{IMPLEMENTATION_CONSTRAINTS}- After implementation and verification, end the turn with a text-only
+  final response. Summarize the changes and report the actual test results,
+  including any required tests that failed or were not run. Make zero tool
+  calls in this final response.
 """
 
 

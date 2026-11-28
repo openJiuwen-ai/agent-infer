@@ -139,7 +139,12 @@ export function apply(ctx, config = {}) {
         text: `You are a read-only Explore subagent. Search first, read focused ranges with limit <= 200, then report concise evidence to the lead. Do not implement fixes or delegate further. You have at most ${SUBAGENT_STEP_LIMIT} steps; finish with your findings.`,
       })
     }
-    if (!enforcePlanMode || lineage?.agent_role !== 'lead') return
+    if (lineage?.agent_role !== 'lead') return
+    if (!enforcePlanMode) {
+      // DSH advertises this tool even when plan mode is inactive.
+      agent.ctx.tools.restrict({ deny: ['exit_plan_mode'] })
+      return
+    }
     // Fail closed: a synchronous throw here vetoes agent publication, so the
     // run exits nonzero instead of degrading to prompt-only planning.
     const planMode = ctx.get('planMode')

@@ -219,7 +219,10 @@ vllm bench serve --agentinfer compare-correctness \
 ## 选择 Agent 与透明 Router
 
 默认示例 `agentinfer/agentbench/configs/swebench_vllm.yaml` 使用 Claude Code 的 `plan-subagent`。
-Claude Code 也支持 `single`，需要 Claude CLI 和 tmux。同一份 YAML 的注释中提供了 JiuwenSwarm 配置。
+该模式的提示词要求主 Agent 在计划获批后实施并验证修改，最后用纯文字汇报改动和测试结果，结束当前轮次。
+Claude Code 也支持 `single`，需要 Claude CLI 和 tmux。
+
+同一份 YAML 的注释中提供了 JiuwenSwarm 配置。
 以下命令选择 WorkSwarm 团队模式运行一题，累计最多启动 8 个子 Agent，同时最多 4 个执行模型请求或工具。
 如需使用单 Agent 模式，把参数改为 `--agent-profile agent.code.normal`。
 
@@ -284,8 +287,9 @@ vllm bench serve --agentinfer run \
 ```
 
 结果目录必须尚不存在，由 BenchKit 创建。使用全局安装时，将 `--agent-executable` 改为实际 DSH 路径。
-使用 `--agent-profile single` 可运行单 Agent 模式。`plan-subagent` 强制初始计划模式、子 Agent 只读工具和
-计划审批；主 Agent 必须等待所有子 Agent 正常完成，再提交计划并获得审批。只有明确的 plan-review 问题会自动批准。
+使用 `--agent-profile single` 可运行单 Agent 模式。该模式直接执行任务，模型的工具清单中没有 `exit_plan_mode`。
+`plan-subagent` 强制初始计划模式、子 Agent 只读工具和计划审批；主 Agent 必须等待所有子 Agent 正常完成，
+再提交计划并获得审批。只有明确的 plan-review 问题会自动批准。
 
 主 Agent 最多执行 200 个步骤（`agent_step_limit`），探索子 Agent 最多执行 100 个步骤；最近 8 次工具调用中，第 4 次读取相同文件、offset 和 limit 时会终止任务，
 并分别记录为 `subagent_step_limit` 或 `subagent_read_loop`。其他子 Agent 异常结束记录为 `subagent_failed`。
@@ -293,7 +297,7 @@ vllm bench serve --agentinfer run \
 再次结束仍未获批则记录为 `plan_not_approved`。提醒不会自动退出计划模式，原有审批要求继续生效。
 主、子 Agent 最近 8 次工具结果中，同一工具的同类参数错误或计划模式已关闭后的退出调用错误达到 4 次，
 会记录为 `validation_error_loop` 并终止。有效调用会将旧错误逐步移出窗口。
-计划模式关闭后调用 `exit_plan_mode` 会得到继续实施或直接回复最终结果的提示，不能用于标记任务完成。
+在 `plan-subagent` 中，主 Agent 在计划模式关闭后调用 `exit_plan_mode` 会收到继续实施或直接回复最终结果的提示。
 模型长度截断明确记录为 `max_tokens`。这些规则使用 DSH 生命周期事件执行，不改变整次任务超时。
 
 DSH 通过 pi-ai Chat Completions 请求 Request Proxy，prompt 经 stdin 发送，运行时版本和 npm lockfile 哈希

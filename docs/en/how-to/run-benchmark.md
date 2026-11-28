@@ -242,9 +242,13 @@ and [benchmark methodology](../explanation/benchmark-methodology.md).
 ## Select an agent and transparent Router
 
 The default example, `agentinfer/agentbench/configs/swebench_vllm.yaml`, runs Claude Code with `plan-subagent`.
-Claude Code also supports `single` and requires the Claude CLI and tmux. The same YAML includes the commented
-JiuwenSwarm settings. This command selects WorkSwarm team mode for one task, with up to eight child launches
-and four children executing model or tool work at a time. For single-agent mode, use `--agent-profile agent.code.normal`.
+The `plan-subagent` prompt directs the lead to implement and verify after plan approval, then end the turn
+with a text-only summary of the changes and test results. Claude Code also supports `single` and requires the
+Claude CLI and tmux.
+
+The same YAML includes the commented JiuwenSwarm settings. This command selects WorkSwarm team mode for one task,
+with up to eight child launches and four children executing model or tool work at a time.
+For single-agent mode, use `--agent-profile agent.code.normal`.
 
 ```bash
 vllm bench serve --agentinfer run \
@@ -297,6 +301,7 @@ vllm bench serve --agentinfer run \
 
 BenchKit creates the result directory; it must not already exist. For a global installation, replace
 `--agent-executable` with the actual DSH path. Use `--agent-profile single` for a single agent.
+The `single` profile runs without plan mode and omits `exit_plan_mode` from the model's tool list.
 The `plan-subagent` profile enforces initial plan mode, read-only child tools, and plan-review approval.
 The lead must wait for every child to complete successfully before submitting a plan for approval.
 Only explicit plan-review questions are approved automatically.
@@ -310,8 +315,8 @@ to submit its plan. Finishing again without approval produces `plan_not_approved
 plan mode or approve the plan. Model length truncation is reported as `max_tokens`.
 For both roles, four equivalent argument-validation errors or inactive-plan exit errors from the same tool
 within the last eight tool results produce `validation_error_loop`. Successful calls age old errors out of the window.
-Calling `exit_plan_mode` after plan mode closes returns guidance to continue implementation or reply with the final
-result; it is not a task-completion tool.
+In `plan-subagent`, the lead receives guidance to continue implementation or reply with the final result if it calls
+`exit_plan_mode` after plan mode closes.
 These controls run on DSH lifecycle events; the overall task timeout still applies.
 
 DSH uses pi-ai Chat Completions through the Request Proxy and receives the prompt on stdin.
