@@ -242,9 +242,13 @@ and [benchmark methodology](../explanation/benchmark-methodology.md).
 ## Select an agent and transparent Router
 
 The default example, `agentinfer/agentbench/configs/swebench_vllm.yaml`, runs Claude Code with `plan-subagent`.
-Claude Code also supports `single` and requires the Claude CLI and tmux. The same YAML includes the commented
-JiuwenSwarm settings. This command selects WorkSwarm team mode for one task, with up to eight child launches
-and four children executing model or tool work at a time. For single-agent mode, use `--agent-profile agent.code.normal`.
+The `plan-subagent` prompt directs the lead to implement and verify after plan approval, then end the turn
+with a text-only summary of the changes and test results. Claude Code also supports `single` and requires the
+Claude CLI and tmux.
+
+The same YAML includes the commented JiuwenSwarm settings. This command selects WorkSwarm team mode for one task,
+with up to eight child launches and four children executing model or tool work at a time.
+For single-agent mode, use `--agent-profile agent.code.normal`.
 
 ```bash
 vllm bench serve --agentinfer run \

@@ -219,7 +219,10 @@ vllm bench serve --agentinfer compare-correctness \
 ## 选择 Agent 与透明 Router
 
 默认示例 `agentinfer/agentbench/configs/swebench_vllm.yaml` 使用 Claude Code 的 `plan-subagent`。
-Claude Code 也支持 `single`，需要 Claude CLI 和 tmux。同一份 YAML 的注释中提供了 JiuwenSwarm 配置。
+该模式的提示词要求主 Agent 在计划获批后实施并验证修改，最后用纯文字汇报改动和测试结果，结束当前轮次。
+Claude Code 也支持 `single`，需要 Claude CLI 和 tmux。
+
+同一份 YAML 的注释中提供了 JiuwenSwarm 配置。
 以下命令选择 WorkSwarm 团队模式运行一题，累计最多启动 8 个子 Agent，同时最多 4 个执行模型请求或工具。
 如需使用单 Agent 模式，把参数改为 `--agent-profile agent.code.normal`。
 
