@@ -8,6 +8,7 @@ materialized at its base commit and re-initialized as a small git repository so
 agent edits can be exported as a patch.
 """
 
+import logging
 import os
 import re
 import shutil
@@ -22,6 +23,17 @@ from .dataset import Task
 
 _GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_.][A-Za-z0-9_.-]*/[A-Za-z0-9_.][A-Za-z0-9_.-]*$")
 _OUTPUT_SNIPPET_CHARS = 1000
+_TRANSIENT_GIT_ERRORS = (
+    "http/2 stream",
+    "curl 92",
+    "could not resolve host",
+    "failed to connect",
+    "connection reset",
+    "connection timed out",
+    "operation timed out",
+    "tls connection was non-properly terminated",
+)
+logger = logging.getLogger(__name__)
 
 
 class WorkspaceProcessOwner:
@@ -213,12 +225,31 @@ def ensure_repo_cache(task: Task, repo_cache: Path, owner: WorkspaceProcessOwner
         cache_dir.mkdir(parents=True, exist_ok=True)
         _run_git(["init"], cwd=cache_dir, owner=owner)
         _run_git(["remote", "add", "origin", f"https://github.com/{repo}.git"], cwd=cache_dir, owner=owner)
-        _run_git(["fetch", "--depth", "1", "origin", task.base_commit], cwd=cache_dir, owner=owner)
+        _fetch_repo_cache(task, cache_dir, owner)
 
     if not _commit_available(cache_dir, task.base_commit, owner):
-        _run_git(["fetch", "--depth", "1", "origin", task.base_commit], cwd=cache_dir, owner=owner)
+        _fetch_repo_cache(task, cache_dir, owner)
 
     return cache_dir
+
+
+def _fetch_repo_cache(task: Task, cache_dir: Path, owner: WorkspaceProcessOwner | None) -> None:
+    """Retry transient fetch failures under the caller's deadline and cancellation."""
+    for attempt in range(1, 4):
+        if owner is not None:
+            owner.check_active()
+        try:
+            _run_git(["fetch", "--depth", "1", "origin", task.base_commit], cwd=cache_dir, owner=owner)
+            return
+        except RuntimeError as exc:
+            if attempt == 3 or not any(error in str(exc).lower() for error in _TRANSIENT_GIT_ERRORS):
+                raise
+            if owner is not None:
+                owner.check_active()
+                if owner.deadline is not None and time.monotonic() + 5 >= owner.deadline:
+                    raise TimeoutError(f"Repo-cache fetch retry would exceed the workspace deadline: {exc}") from exc
+            logger.warning("Repo-cache fetch failed (attempt %s/3), retrying in 5s: %s", attempt, exc)
+            time.sleep(5)
 
 
 def _commit_available(repo: Path, commit: str, owner: WorkspaceProcessOwner | None = None) -> bool:

@@ -125,7 +125,11 @@ RUN python3 -m venv /opt/agentbench/swebench-venv \
 FROM agent-deps AS ci
 
 # Apply to root preparation and sudo benchmarks without rebuilding agent dependencies.
-RUN git config --system http.version HTTP/1.1
+ARG GITHUB_GIT_BASE_URL
+RUN git config --system http.version HTTP/1.1 \
+ && if [ -n "${GITHUB_GIT_BASE_URL}" ]; then \
+      git config --system "url.${GITHUB_GIT_BASE_URL%/}/.insteadOf" https://github.com/; \
+    fi
 
 WORKDIR /app
 COPY . .

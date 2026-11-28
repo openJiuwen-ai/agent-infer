@@ -145,7 +145,14 @@ including after test failures. Docker dependency layers remain available for sub
 The CPU agent builds the same `ci` target on its own Docker daemon with a separate `<build-id>-cpu` tag.
 Runtime Git uses HTTP/1.1 for both root and ordinary users. Shared repository-cache preparation retries
 transient Git fetch connection failures up to three attempts, with five seconds between attempts and
-the original preparation deadline. Authentication, ownership, missing-commit and other errors fail immediately.
+the original preparation deadline. This applies to all agents, including Jiuwen running directly as root.
+Authentication, ownership, missing-commit and other errors fail immediately.
+The bootstrap sets `GITHUB_GIT_BASE_URL=https://ghfast.top/https://github.com/`, matching the CI host's checkout route.
+Compose forwards this optional build argument, and the image installs a system-level Git URL rewrite for both
+root and ordinary users. It maps `https://github.com/astropy/astropy.git` to the configured base followed by
+`astropy/astropy.git`. Outside Buildkite, leave the argument unset to use GitHub directly, or set it before building
+for your own mirror. The setting is applied after the agent dependency layers, so those layers
+remain cached. It controls runtime repository fetches; the ZCode build keeps its separate `ZCODE_REPOSITORY` argument.
 The shared GPU and CPU image builds do not set step-level timeouts;
 ready accuracy allows 30 minutes and each nightly accuracy job allows 90 minutes.
 The nightly file retains the trigger condition on its outer group. Upload it through the bootstrap,

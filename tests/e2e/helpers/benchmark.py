@@ -26,17 +26,6 @@ from .case_loader import (
 )
 from .server import managed_vllm
 
-_TRANSIENT_GIT_ERRORS = (
-    "http/2 stream",
-    "curl 92",
-    "could not resolve host",
-    "failed to connect",
-    "connection reset",
-    "connection timed out",
-    "operation timed out",
-    "tls connection was non-properly terminated",
-)
-
 
 def run_benchmark(
     config: E2EConfig,
@@ -199,30 +188,12 @@ def ensure_repo_cache_prepared(config: E2EConfig) -> Path | None:
     deadline = time.monotonic() + config.task_timeout_seconds * max(len(tasks), 1)
     owner = WorkspaceProcessOwner(deadline)
     for task in tasks:
-        for attempt in range(1, 4):
-            try:
-                ensure_repo_cache(task, cache_dir, owner)
-                break
-            except TimeoutError as exc:
-                raise RuntimeError(f"repo-cache warmup timed out for {task.repo}@{task.base_commit}: {exc}") from exc
-            except Exception as exc:
-                message = str(exc).lower()
-                retryable = (
-                    isinstance(exc, RuntimeError)
-                    and "git fetch " in message
-                    and any(error in message for error in _TRANSIENT_GIT_ERRORS)
-                )
-                if not retryable or attempt == 3:
-                    raise RuntimeError(f"repo-cache warmup failed for {task.repo}@{task.base_commit}: {exc}") from exc
-                if time.monotonic() + 5 >= deadline:
-                    raise RuntimeError(
-                        f"repo-cache warmup timed out for {task.repo}@{task.base_commit}: {exc}"
-                    ) from exc
-                print(
-                    f"{prefix}repo-cache fetch failed (attempt {attempt}/3), retrying in 5s: {exc}",
-                    flush=True,
-                )
-                time.sleep(5)
+        try:
+            ensure_repo_cache(task, cache_dir, owner)
+        except TimeoutError as exc:
+            raise RuntimeError(f"repo-cache warmup timed out for {task.repo}@{task.base_commit}: {exc}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"repo-cache warmup failed for {task.repo}@{task.base_commit}: {exc}") from exc
     return cache_dir
 
 

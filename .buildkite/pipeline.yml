@@ -10,6 +10,10 @@
 #   - Skip when pull request has existing build for commit and branch: disabled
 # The second one is on by default, and it drops the label event when that
 # commit was already built.
+env:
+  # Match the public GitHub route already used by the CI host checkout.
+  GITHUB_GIT_BASE_URL: "https://ghfast.top/https://github.com/"
+
 steps:
   # GPU queues share a Docker daemon. Build once for both uploaded pipelines.
   - label: ":docker: Build CI image"
