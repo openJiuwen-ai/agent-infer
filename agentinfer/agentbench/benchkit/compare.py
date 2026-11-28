@@ -59,11 +59,23 @@ _EXECUTION_METRIC_ROOTS = {
 }
 _SUMMARY_ADAPTER = TypeAdapter(RunSummary)
 _MANIFEST_ADAPTER = TypeAdapter(RunManifest)
+_SCORING_SENSITIVE_METRICS = frozenset(
+    label
+    for label, path in _METRIC_SPECS
+    if path[:2] == ("tasks", "duration_seconds")
+    or label == "run_wall_time_seconds"
+    or label.endswith("throughput_per_second")
+)
 
 
 def load_summary(run_dir: Path) -> dict[str, Any]:
     """Load finalized, consistent artifacts from completed or failed runs."""
 
+    summary, _ = _load_run(run_dir)
+    return summary
+
+
+def _load_run(run_dir: Path) -> tuple[dict[str, Any], RunManifest]:
     path = run_dir / "summary.json"
     if not path.exists():
         raise FileNotFoundError(f"summary.json not found in {run_dir}")
@@ -111,7 +123,22 @@ def load_summary(run_dir: Path) -> dict[str, Any]:
         raise ValueError(f"run artifacts in {run_dir} identify different runs")
     if summary.lifecycle.status != manifest.status:
         raise ValueError(f"run artifacts in {run_dir} have inconsistent lifecycle statuses")
-    return asdict(summary)
+    return asdict(summary), manifest
+
+
+def _terminalbench_scoring_mode(summary: dict[str, Any], manifest: RunManifest) -> str | None:
+    dataset = manifest.config.get("dataset")
+    if not isinstance(dataset, dict) or dataset.get("name") != "terminalbench":
+        return None
+    enabled = manifest.config.get("with_correctness")
+    if isinstance(enabled, bool):
+        return "enabled" if enabled else "skipped"
+    correctness = summary["correctness"]
+    if correctness["reason"] == "skipped":
+        return "skipped"
+    if correctness["available"] or correctness["metadata"].get("scope") == "selected_tasks":
+        return "enabled"
+    return "unknown"
 
 
 def _as_dirs(runs: Path | str | list[Path] | list[str]) -> list[Path]:
@@ -261,8 +288,14 @@ def compare(
         raise ValueError("baseline must contain at least one run directory")
     if not candidate_dirs:
         raise ValueError("candidate must contain at least one run directory")
-    base_summaries = [load_summary(path) for path in base_dirs]
-    candidate_summaries = [load_summary(path) for path in candidate_dirs]
+    base_runs = [_load_run(path) for path in base_dirs]
+    candidate_runs = [_load_run(path) for path in candidate_dirs]
+    base_summaries = [summary for summary, _ in base_runs]
+    candidate_summaries = [summary for summary, _ in candidate_runs]
+    scoring_modes = [_terminalbench_scoring_mode(*run) for run in (*base_runs, *candidate_runs)]
+    mode_diagnostics = any(mode is not None for mode in scoring_modes) and (
+        len(set(scoring_modes)) > 1 or "unknown" in scoring_modes
+    )
     diagnostic_only = any(
         summary["lifecycle"]["status"] == "failed" for summary in base_summaries + candidate_summaries
     )
@@ -272,23 +305,31 @@ def compare(
             (f"vllm_{name}_mean_seconds", ("vllm", "latency_breakdown_seconds", name, "mean"))
             for name in _VLLM_COMPONENTS
         )
-    metrics = {
-        label: _comparison(
+    metrics = {}
+    for label, path in specs:
+        scoring_sensitive = mode_diagnostics and label in _SCORING_SENSITIVE_METRICS
+        descriptive = diagnostic_only or scoring_sensitive
+        metrics[label] = _comparison(
             _aggregate(
-                [_extract(summary, path) for summary in base_summaries], confidence, diagnostic_only=diagnostic_only
+                [_extract(summary, path) for summary in base_summaries], confidence, diagnostic_only=descriptive
             ),
             _aggregate(
                 [_extract(summary, path) for summary in candidate_summaries],
                 confidence,
-                diagnostic_only=diagnostic_only,
+                diagnostic_only=descriptive,
             ),
             confidence,
         )
-        for label, path in specs
-    }
+        if scoring_sensitive:
+            metrics[label]["diagnostic_only"] = True
     cold_confirmed = {path: _cold_confirmed(path) for path in (*base_dirs, *candidate_dirs)}
     warnings = []
     run_diagnostics = {}
+    if mode_diagnostics:
+        warnings.append(
+            "Terminal-Bench scoring modes differ or are unknown. "
+            "Task duration, run wall time and throughput are diagnostic only."
+        )
     if diagnostic_only:
         warnings.append(
             "Failed runs included: diagnostic comparison only. Request populations may differ; "
@@ -305,6 +346,10 @@ def compare(
         run_diagnostics[label] = [
             _run_diagnostics(path, summary) for path, summary in zip(directories, summaries, strict=True)
         ]
+        loaded_runs = base_runs if label == "baseline" else candidate_runs
+        for diagnostic, loaded_run in zip(run_diagnostics[label], loaded_runs, strict=True):
+            if (mode := _terminalbench_scoring_mode(*loaded_run)) is not None:
+                diagnostic["scoring_mode"] = mode
         for run in run_diagnostics[label]:
             if run.get("failure_details_error"):
                 warnings.append(f"{label} {run['failure_details_error']}")
@@ -315,7 +360,7 @@ def compare(
         ]
         if unavailable:
             warnings.append(f"{label} execution metrics unavailable for: {', '.join(unavailable)}")
-    report = {
+    report: dict[str, Any] = {
         "baseline": [str(path) for path in base_dirs],
         "candidate": [str(path) for path in candidate_dirs],
         "warnings": warnings,

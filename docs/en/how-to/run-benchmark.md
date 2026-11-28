@@ -46,6 +46,44 @@ vllm bench serve --agentinfer prepare swebench \
 
 The command creates `instances.jsonl`, `task-lists/default.txt`, and `manifest.json`.
 
+## Run Terminal-Bench 4.1.0
+
+Install Docker Compose and Harbor 0.25.0 in a Python 3.12 environment on the host. Prepare the task package,
+then optionally prepare images for a prefix of `all.txt`. The default data directory is
+`agentinfer/agentbench/data/terminalbench`.
+
+```bash
+vllm bench serve --agentinfer prepare terminalbench
+vllm bench serve --agentinfer prepare terminalbench --with-images --task-nums 4
+```
+
+An existing complete export of the same version can be reused with `--with-images`. Increasing `--task-nums`
+extends the prefix and reuses compatible images. Docker selects the native platform for each pinned image.
+The preparation report is `images.json`. Use a different `--output-dir` for a new export and update the
+dataset paths in the run config accordingly.
+
+The example config defaults to JiuwenSwarm 0.2.8 `agent.code.normal`. Build its container runtime once
+from an environment with WorkSwarm 0.2.8, OpenJiuwen 0.1.20, and uv. Set `AGENTBENCH_JIUWENSWARM_RUNTIME`
+to an existing runtime directory to reuse it.
+
+```bash
+python -m agentinfer.agentbench.benchkit.jiuwenswarm_runtime --output-dir "$PWD/.runtime/jiuwen"
+export AGENTBENCH_JIUWENSWARM_RUNTIME="$PWD/.runtime/jiuwen"
+vllm bench serve --agentinfer run \
+  --config agentinfer/agentbench/configs/terminalbench_vllm.yaml \
+  --task-num 4 --max-concurrency 2 --result-dir results/terminalbench
+```
+
+Set the model and URL in the example config. To select Claude `single` or DSH `single`/`plan-subagent`,
+use the commented examples with their endpoints. Claude needs a native Linux CLI. DSH needs 0.2.1-rc.2
+and Node.js 22.19 or later (`DSH_NODE_EXECUTABLE` selects a specific Node binary).
+
+By default, `run` executes the agent, keeps its artifacts and logs, and records requests in `requests.jsonl`.
+Image preparation covers only what the agent needs and the summary marks scoring as `skipped`.
+Add `--with-correctness` to enable Harbor's official verifier for each task. `correctness.json` then records
+rewards and coverage, including available rewards after an incomplete run. Both modes prepare the required
+images before timing starts and show per-task progress.
+
 ## Run One Cold Comparison
 
 The repository script starts the baseline, runs the workload, stops the service completely, starts the candidate,

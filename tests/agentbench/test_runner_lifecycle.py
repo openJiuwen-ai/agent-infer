@@ -136,6 +136,80 @@ def _manifest(tmp_path: Path) -> dict:
     return json.loads((tmp_path / "run" / "manifest.json").read_text(encoding="utf-8"))
 
 
+def test_terminalbench_image_preparation_is_outside_metrics_timing_and_run_timeout(tmp_path, monkeypatch):
+    from agentinfer.agentbench.benchkit import runner, terminalbench_images
+    from agentinfer.agentbench.benchkit.metrics.schema import EvidenceCapture
+
+    _patch_successful_run(monkeypatch)
+    config = _run_config(tmp_path)
+    config.dataset.name = "terminalbench"
+    config.experiment.run_timeout_seconds = 10
+    selected = (_task(),)
+    monkeypatch.setattr(runner, "load_tasks", lambda *_: selected)
+    clock = [1000.0]
+    events = []
+    monkeypatch.setattr(runner.time, "monotonic", lambda: clock[0])
+
+    def images(tasks, report, *, with_correctness):
+        assert tasks == selected
+        assert with_correctness is False
+        assert report == tmp_path / "run/evidence/terminalbench-images.json"
+        events.append("images")
+        clock[0] += 100  # Longer than the run timeout, but outside its budget.
+
+    async def metrics(_url):
+        events.append("metrics")
+        return EvidenceCapture("vllm", None, False, "unavailable", {})
+
+    async def tasks(context, *_args):
+        events.append("tasks")
+        clock[0] += 5
+        context.trace_path.write_text("")
+
+    monkeypatch.setattr(terminalbench_images, "prepare_task_images", images)
+    monkeypatch.setattr(runner, "capture_vllm_metrics", metrics)
+    monkeypatch.setattr(runner, "_run_tasks", tasks)
+    asyncio.run(runner.run_benchmark(config))
+
+    assert events == ["images", "metrics", "tasks", "metrics"]
+    summary = json.loads((tmp_path / "run/summary.json").read_text())
+    timing = json.loads((tmp_path / "run/evidence/terminalbench-timing.json").read_text())
+    assert summary["run_wall_time_seconds"] == 5
+    assert timing["image_preparation_seconds"] == 100
+    assert timing["invocation_wall_time_seconds"] == 105
+    assert _manifest(tmp_path)["status"] == "completed"
+
+
+def test_terminalbench_image_failure_finalizes_without_starting_model_collection(tmp_path, monkeypatch):
+    from agentinfer.agentbench.benchkit import runner, terminalbench_images
+
+    _patch_successful_run(monkeypatch)
+    config = _run_config(tmp_path)
+    config.dataset.name = "terminalbench"
+
+    def images(*_args, **_kwargs):
+        raise RuntimeError("image download failed")
+
+    monkeypatch.setattr(terminalbench_images, "prepare_task_images", images)
+    monkeypatch.setattr(runner, "capture_vllm_metrics", lambda *_: pytest.fail("Metrics sampled before images ready"))
+    monkeypatch.setattr(runner, "create_request_proxy_lifecycle", lambda *_a, **_kw: pytest.fail("Proxy started"))
+    with pytest.raises(RuntimeError, match="image download failed"):
+        asyncio.run(runner.run_benchmark(config))
+    manifest = _manifest(tmp_path)
+    assert manifest["status"] == "failed"
+    assert any(row["source"] == "terminalbench_images" and not row["available"] for row in manifest["evidence"])
+    assert (tmp_path / "run/evidence/terminalbench-timing.json").is_file()
+
+
+def test_swebench_does_not_prepare_terminalbench_images(tmp_path, monkeypatch):
+    from agentinfer.agentbench.benchkit import runner, terminalbench_images
+
+    _patch_successful_run(monkeypatch)
+    monkeypatch.setattr(terminalbench_images, "prepare_task_images", lambda *_: pytest.fail("SWE prepared images"))
+    asyncio.run(runner.run_benchmark(_run_config(tmp_path)))
+    assert not (tmp_path / "run/evidence/terminalbench-timing.json").exists()
+
+
 def test_run_writes_session_agent_csvs_as_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from agentinfer.agentbench.benchkit.runner import run_benchmark
 

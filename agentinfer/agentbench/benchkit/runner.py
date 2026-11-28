@@ -47,14 +47,23 @@ class RunContext:
     output_dir: Path
     trace_path: Path
     tasks: tuple[Task, ...]
+    preflight: AgentPreflightReport | None = None
+    with_correctness: bool = False
 
 
-async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, object] | None = None) -> Path:
+async def run_benchmark(
+    config: AgentBenchConfig, *, cli_metadata: dict[str, object] | None = None, with_correctness: bool = False
+) -> Path:
     output_dir = config.experiment.result_dir
     output_dir.mkdir(parents=True, exist_ok=False)
     run_id = output_dir.name
-    manifest = build_run_manifest(run_id, config.model_dump(mode="json"))
+    manifest_config = config.model_dump(mode="json")
+    if config.dataset.name == "terminalbench":
+        manifest_config["with_correctness"] = with_correctness
+    manifest = build_run_manifest(run_id, manifest_config)
     atomic_write_json(output_dir / "manifest.json", manifest.to_dict())
+    run_started = time.monotonic()
+    image_preparation_seconds = 0.0
 
     results: list[AgentRunResult] = []
     captures: list[EvidenceCapture] = []
@@ -69,9 +78,10 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
         time.monotonic() + config.experiment.run_timeout_seconds if config.experiment.run_timeout_seconds else None
     )
     context = RunContext(config, output_dir, output_dir / "requests.jsonl", ())
+    upstream_api_key: str | None = None
 
-    async def execute() -> None:
-        nonlocal context, lifecycle, preflight_succeeded, vllm_start
+    async def prepare_inputs() -> None:
+        nonlocal context, preflight_succeeded, upstream_api_key
         try:
             upstream_api_key = _resolve_backend_api_key(config.backend.api_key_env)
             report = await check_preflight(config, upstream_api_key=upstream_api_key)
@@ -84,7 +94,12 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
             captures.append(EvidenceCapture(f"{report.runtime}_runtime", path, True, None, asdict(report)))
         preflight_succeeded = True
         tasks = tuple(load_tasks(config.dataset.index_path, config.dataset.selection_path, config.experiment.task_num))
-        context = RunContext(config, output_dir, output_dir / "requests.jsonl", tasks)
+        context = RunContext(config, output_dir, output_dir / "requests.jsonl", tasks, report, with_correctness)
+
+    async def execute() -> None:
+        nonlocal lifecycle, vllm_start
+        if config.dataset.name != "terminalbench":
+            await prepare_inputs()
         start_capture = await capture_vllm_metrics(config.backend.effective_metrics_url)
         start_capture = _capture_with_path(
             _named_capture(start_capture, "vllm_start"),
@@ -107,6 +122,28 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
         await _run_tasks(context, handle.base_url, results, setup_owner)
 
     try:
+        if config.dataset.name == "terminalbench":
+            await prepare_inputs()
+            from .terminalbench_images import prepare_task_images
+
+            image_report = output_dir / "evidence" / "terminalbench-images.json"
+            image_started = time.monotonic()
+            try:
+                await asyncio.to_thread(
+                    prepare_task_images, context.tasks, image_report, with_correctness=with_correctness
+                )
+            except BaseException as exc:
+                captures.append(EvidenceCapture("terminalbench_images", image_report, False, str(exc), {}))
+                raise
+            else:
+                captures.append(EvidenceCapture("terminalbench_images", image_report, True, None, {}))
+            finally:
+                image_preparation_seconds = time.monotonic() - image_started
+            setup_owner = WorkspaceProcessOwner(
+                time.monotonic() + config.experiment.run_timeout_seconds
+                if config.experiment.run_timeout_seconds
+                else None
+            )
         if config.experiment.run_timeout_seconds:
             await asyncio.wait_for(execute(), config.experiment.run_timeout_seconds)
         else:
@@ -141,7 +178,7 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
                     RuntimeError(error),
                 )
 
-        if preflight_succeeded:
+        if preflight_succeeded and (config.dataset.name != "terminalbench" or lifecycle is not None):
             end_capture = await finalize_async(
                 "vllm_end", lambda: capture_vllm_metrics(config.backend.effective_metrics_url)
             )
@@ -176,14 +213,33 @@ async def run_benchmark(config: AgentBenchConfig, *, cli_metadata: dict[str, obj
                 )
 
         captures.append(_trace_capture(context.trace_path, close_result))
-        correctness_capture = finalize_sync(
-            "correctness", lambda: load_correctness_artifact(output_dir / "correctness.json")
-        )
+        if config.dataset.name == "terminalbench" and not with_correctness:
+            correctness_capture = EvidenceCapture("correctness", None, False, "skipped", {}, applicable=False)
+        else:
+            if config.dataset.name == "terminalbench" and context.tasks:
+                from .terminalbench import write_terminalbench_correctness
+
+                finalize_sync("terminalbench_correctness", lambda: write_terminalbench_correctness(context))
+            correctness_capture = finalize_sync(
+                "correctness", lambda: load_correctness_artifact(output_dir / "correctness.json")
+            )
         if correctness_capture is not None:
             captures.append(correctness_capture)
 
         finished_at = utc_now()
         run_wall_time_seconds = (finished_at - manifest.created_at).total_seconds()
+        if config.dataset.name == "terminalbench":
+            invocation_seconds = time.monotonic() - run_started
+            run_wall_time_seconds = max(0.000001, invocation_seconds - image_preparation_seconds)
+            timing = {
+                "invocation_wall_time_seconds": invocation_seconds,
+                "image_preparation_seconds": image_preparation_seconds,
+                "run_wall_time_seconds": run_wall_time_seconds,
+                "excluded_phase": "image_preparation",
+            }
+            timing_path = output_dir / "evidence" / "terminalbench-timing.json"
+            finalize_sync("terminalbench_timing", lambda: atomic_write_json(timing_path, timing))
+            captures.append(EvidenceCapture("terminalbench_timing", timing_path, True, None, timing))
         facts = finalize_sync("request_facts", lambda: load_request_facts(context.trace_path))
         if facts is not None:
             finalize_sync("task_topologies", lambda: _refresh_task_topologies(output_dir, facts))
@@ -252,6 +308,11 @@ async def _run_tasks(
 ) -> None:
     owner = owner or WorkspaceProcessOwner()
     config = context.config
+    if config.dataset.name == "terminalbench":
+        from .terminalbench import run_terminalbench_tasks
+
+        await run_terminalbench_tasks(context, api_base_url, results)
+        return
     cache = config.dataset.cache_dir.resolve()
     for task in context.tasks:
         await asyncio.to_thread(ensure_repo_cache, task, cache, owner)
@@ -458,7 +519,12 @@ async def check_preflight(
 ) -> AgentPreflightReport | None:
     if upstream_api_key is None:
         upstream_api_key = _resolve_backend_api_key(config.backend.api_key_env)
-    report = await check_agent_preflight(config.agent.type, config.agent.executable)
+    if config.dataset.name == "terminalbench":
+        from .terminalbench import check_terminalbench_preflight
+
+        report = await asyncio.to_thread(check_terminalbench_preflight, config)
+    else:
+        report = await check_agent_preflight(config.agent.type, config.agent.executable)
     url = f"{config.backend.base_url.rstrip('/')}/v1/models"
     headers = {"authorization": f"Bearer {upstream_api_key}"} if upstream_api_key is not None else None
     try:

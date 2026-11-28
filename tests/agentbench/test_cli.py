@@ -292,6 +292,17 @@ def mock_benchmark(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncMock
     return runner.run_benchmark
 
 
+@pytest.mark.parametrize("with_correctness", [False, True])
+def test_terminalbench_run_uses_its_own_correctness_path(monkeypatch, mock_benchmark, with_correctness):
+    monkeypatch.setattr(cli, "_evaluation_config", lambda *_: pytest.fail("SWE-bench evaluation config loaded"))
+    monkeypatch.setattr(cli, "_evaluate", lambda *_: pytest.fail("SWE-bench evaluator started"))
+    argv = ["run", "--dataset-name", "terminalbench"]
+    if with_correctness:
+        argv.append("--with-correctness")
+    assert main(argv) == 0
+    assert mock_benchmark.await_args.kwargs["with_correctness"] is with_correctness
+
+
 @pytest.mark.parametrize("custom_config", [False, True])
 @pytest.mark.parametrize("code", [0, 1, 130])
 def test_run_evaluates_after_finalization_with_separate_config(
@@ -632,24 +643,37 @@ def test_summarize_passes_figures_directory(tmp_path: Path, monkeypatch: pytest.
     ]
 
 
-def test_prepare_delegates_to_dataset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("dataset_name", ["swebench", "terminalbench"])
+def test_prepare_delegates_to_dataset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dataset_name: str) -> None:
     dataset = types.ModuleType("agentinfer.agentbench.benchkit.dataset")
-    dataset.prepare_swebench = lambda output: types.SimpleNamespace(rows=1, index_path=output / "instances.jsonl")
+    calls = []
+    dataset.prepare_dataset = lambda name, output: (
+        calls.append((name, output)) or types.SimpleNamespace(rows=1, index_path=output / "instances.jsonl")
+    )
     monkeypatch.setitem(sys.modules, dataset.__name__, dataset)
-    assert main(["prepare", "swebench", "--output-dir", str(tmp_path / "data")]) == 0
+    assert main(["prepare", dataset_name, "--output-dir", str(tmp_path / "data")]) == 0
+    assert calls == [(dataset_name, tmp_path / "data")]
 
 
-def test_prepare_defaults_output_dir_to_data_swebench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("dataset_name", ["swebench", "terminalbench"])
+def test_prepare_defaults_output_dir_to_dataset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dataset_name: str
+) -> None:
     captured: list[Path] = []
     dataset = types.ModuleType("agentinfer.agentbench.benchkit.dataset")
-    dataset.prepare_swebench = lambda output: (
+    dataset.prepare_dataset = lambda name, output: (
         captured.append(output) or types.SimpleNamespace(rows=1, index_path=output / "instances.jsonl")
     )
     monkeypatch.setitem(sys.modules, dataset.__name__, dataset)
     monkeypatch.chdir(tmp_path)
 
-    assert main(["prepare", "swebench"]) == 0
-    assert captured == [tmp_path / "data/swebench"]
+    assert main(["prepare", dataset_name]) == 0
+    expected = (
+        Path(__file__).resolve().parents[2] / "agentinfer/agentbench/data/terminalbench"
+        if dataset_name == "terminalbench"
+        else tmp_path / "data" / dataset_name
+    )
+    assert captured == [expected]
 
 
 def test_unsupported_cli_override_type_fails_during_discovery() -> None:
@@ -659,4 +683,19 @@ def test_unsupported_cli_override_type_fails_during_discovery() -> None:
 
 def test_prepare_rejects_unsupported_dataset() -> None:
     with pytest.raises(ValueError, match="unsupported benchmark dataset: other"):
-        _prepare(types.SimpleNamespace(dataset="other", output_dir=Path("unused")))
+        _prepare(types.SimpleNamespace(dataset="other", output_dir=Path("unused"), with_images=False, task_nums=None))
+
+
+def test_terminalbench_example_config_matches_prepare_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = Path(__file__).resolve().parents[2]
+    config = load_config(root / "agentinfer/agentbench/configs/terminalbench_vllm.yaml")
+    captured = []
+    dataset = types.ModuleType("agentinfer.agentbench.benchkit.dataset")
+    dataset.prepare_dataset = lambda name, output: (
+        captured.append(output) or types.SimpleNamespace(rows=1, index_path=output / "instances.jsonl")
+    )
+    monkeypatch.setitem(sys.modules, dataset.__name__, dataset)
+    monkeypatch.chdir(tmp_path)
+    assert main(["prepare", "terminalbench"]) == 0
+    assert captured == [config.dataset.index_path.parent]
+    assert config.dataset.selection_path == captured[0] / "task-lists/all.txt"

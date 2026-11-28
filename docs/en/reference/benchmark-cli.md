@@ -26,8 +26,13 @@ vllm bench serve --agentinfer prepare swebench --output-dir PATH
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `dataset` | Yes | Dataset type; currently only `swebench`. |
-| `--output-dir PATH` | No | Directory for the index, task list, and manifest. Relative paths use the current directory. |
+| `dataset` | Yes | Dataset type: `swebench` or `terminalbench`. |
+| `--output-dir PATH` | No | Task data directory. Terminal-Bench defaults to package-local `agentinfer/agentbench/data/terminalbench`; SWE-bench keeps cwd-relative `data/swebench`. |
+| `--with-images` | No | Terminal-Bench only. Prepare task and verifier images, including for an existing complete export of the pinned version. |
+| `--task-nums INT` | No | Terminal-Bench only. Target the first N tasks in `all.txt`, N ≥ 1, with `--with-images`. Defaults to all tasks and preserves indexes. |
+
+With `--with-images`, a complete export of the pinned version can be reused. Without it, prepare requires an empty destination.
+See [Run Terminal-Bench](../how-to/run-benchmark.md#run-terminal-bench-410) for runtimes and results.
 
 ## `run`
 
@@ -40,8 +45,8 @@ vllm bench serve --agentinfer run --config PATH [OVERRIDES]
 | Argument | Type or value | Configuration field |
 | --- | --- | --- |
 | `--config PATH` | Optional file path | Configuration file |
-| `--with-correctness` | Disabled by default | Evaluate completed tasks after the run finalizes successfully |
-| `--evaluation-config PATH` | Optional file path | Evaluation configuration; requires `--with-correctness` |
+| `--with-correctness` | Disabled by default | Enable official correctness checks for the selected dataset |
+| `--evaluation-config PATH` | Optional file path | SWE-bench evaluation configuration, requires `--with-correctness` |
 | `--task-num INT` | `>= 1` | `experiment.task_num` |
 | `--result-dir PATH` | Directory path | `experiment.result_dir` |
 | `--max-concurrency INT` | `>= 1` | `experiment.max_concurrency` |
@@ -60,7 +65,11 @@ Precedence is built-in defaults, YAML, then explicit CLI overrides. Relative YAM
 CLI paths resolve from the current directory. Unknown YAML fields are rejected. For Router runs, use `--base-url`
 for the transparent upstream and `--metrics-url` for vLLM metrics.
 
-With `--with-correctness`, evaluation configuration is validated before the run, defaulting to the current Python
+Terminal-Bench skips scoring by default. Add `--with-correctness` to run Harbor's verifier for each task.
+If the scoring modes differ or are unknown, `compare` reports task duration, run wall time, and throughput as
+diagnostic metrics.
+
+For SWE-bench, `--with-correctness` validates the evaluation configuration before the run, defaulting to the current Python
 environment and standard evaluation settings. Run and evaluation configurations are separate. After successful
 finalization, the actual run directory is evaluated, with results in a unique directory under its `evaluations/`.
 Run exceptions or interruption skip evaluation and propagate the original failure. Evaluation returns 0 for normal
@@ -113,7 +122,9 @@ See [Run a benchmark](../how-to/run-benchmark.md) for the procedure and
 
 ## Additional options and Replay
 
-`run` accepts an omitted `--config` and uses model defaults. `prepare --output-dir` defaults to `data/swebench`.
+`run` accepts an omitted `--config` and uses model defaults.
+Terminal-Bench defaults to package-local `agentinfer/agentbench/data/terminalbench`; SWE-bench prepare
+keeps its cwd-relative `data/swebench` default.
 `run --metrics-url URL` selects the complete vLLM metrics endpoint. `summarize --output-figs-dir PATH` writes
 distribution plots.
 

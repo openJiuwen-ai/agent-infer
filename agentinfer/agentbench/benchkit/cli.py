@@ -230,14 +230,28 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AgentInfer benchmark harness")
     commands = parser.add_subparsers(dest="command", required=True)
 
-    prepare = commands.add_parser("prepare", help="Prepare benchmark dataset inputs")
-    prepare.add_argument("dataset", choices=["swebench"])
-    prepare.add_argument("--output-dir", type=Path, default=Path("data/swebench"))
+    prepare = commands.add_parser("prepare", help="Prepare benchmark dataset inputs", allow_abbrev=False)
+    prepare.add_argument("dataset", choices=["swebench", "terminalbench"])
+    prepare.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Defaults to agentinfer/agentbench/data/terminalbench for Terminal-Bench, or data/swebench for SWE-bench",
+    )
+    prepare.add_argument(
+        "--with-images",
+        action="store_true",
+        help="Terminal-Bench: prepare native Docker images for new or existing task data",
+    )
+    prepare.add_argument(
+        "--task-nums",
+        type=int,
+        help="Terminal-Bench: prepare images for the first N tasks in all.txt; requires --with-images",
+    )
 
     run = commands.add_parser("run", help="Run one benchmark")
     run.add_argument("--config", type=Path, default=None)
-    run.add_argument("--with-correctness", action="store_true", help="Evaluate completed tasks after the run finishes")
-    run.add_argument("--evaluation-config", type=Path, help="Optional evaluation YAML; requires --with-correctness")
+    run.add_argument("--with-correctness", action="store_true", help="Run the dataset's official correctness checks")
+    run.add_argument("--evaluation-config", type=Path, help="SWE-bench evaluation YAML; requires --with-correctness")
     _register_run_args(run)
 
     replay = commands.add_parser(
@@ -277,6 +291,13 @@ def main(argv: list[str] | None = None, *, cli_metadata: dict[str, object] | Non
     _configure_logging()
     parser = _parser()
     args = parser.parse_args(argv)
+    if args.command == "prepare":
+        if args.dataset != "terminalbench" and (args.with_images or args.task_nums is not None):
+            parser.error("--with-images and --task-nums are only supported for terminalbench prepare")
+        if args.task_nums is not None and args.task_nums < 1:
+            parser.error("--task-nums must be positive")
+        if args.task_nums is not None and not args.with_images:
+            parser.error("--task-nums requires --with-images")
     if args.command in {"evaluate", "compare-correctness"}:
         return _correctness(args, parser)
     if args.command == "replay" and args.config is None:
@@ -294,12 +315,7 @@ def main(argv: list[str] | None = None, *, cli_metadata: dict[str, object] | Non
         if args.command == "replay":
             _replay(args, metadata)
         else:
-            if args.evaluation_config is not None and not args.with_correctness:
-                parser.error("--evaluation-config requires --with-correctness")
-            evaluation_config = _evaluation_config(args.evaluation_config, parser) if args.with_correctness else None
-            run_dir = asyncio.run(_run(args, metadata))
-            if evaluation_config is not None:
-                return _evaluate(run_dir, evaluation_config)
+            return _run(args, parser, metadata)
     elif args.command == "summarize":
         _summarize(args)
     elif args.command == "compare":
@@ -346,15 +362,24 @@ def _evaluate(run_dir: Path, config: "EvaluationConfig", output_dir: Path | None
         return 1
 
 
-async def _run(args: argparse.Namespace, cli_metadata: dict[str, object]) -> Path:
-    """Delegate benchmark execution to the Runner API."""
+def _run(args: argparse.Namespace, parser: argparse.ArgumentParser, cli_metadata: dict[str, object]) -> int:
+    """Dispatch benchmark execution and dataset-specific correctness checks."""
 
     from .runner import run_benchmark
 
+    if args.evaluation_config is not None and not args.with_correctness:
+        parser.error("--evaluation-config requires --with-correctness")
     config = _apply_cli_overrides(args, load_config(args.config))
-    run_dir = await run_benchmark(config, cli_metadata=cli_metadata)
+    terminalbench = config.dataset.name == "terminalbench"
+    if terminalbench and args.evaluation_config is not None:
+        parser.error("--evaluation-config is only supported for SWE-bench")
+    evaluation = (
+        _evaluation_config(args.evaluation_config, parser) if args.with_correctness and not terminalbench else None
+    )
+    options = {"with_correctness": args.with_correctness} if terminalbench else {}
+    run_dir = asyncio.run(run_benchmark(config, cli_metadata=cli_metadata, **options))
     logger.info("Results: %s", run_dir)
-    return run_dir
+    return _evaluate(run_dir, evaluation) if evaluation is not None else 0
 
 
 def _replay(args: argparse.Namespace, cli_metadata: dict[str, object]) -> None:
@@ -408,10 +433,16 @@ def _compare(args: argparse.Namespace) -> None:
 def _prepare(args: argparse.Namespace) -> None:
     """Prepare the selected benchmark dataset."""
 
-    from .dataset import prepare_swebench
+    from .dataset import prepare_dataset
 
-    if args.dataset == "swebench":
-        prepared = prepare_swebench(args.output_dir.resolve())
+    default_dir = (
+        Path(__file__).resolve().parent.parent / "data" / "terminalbench"
+        if args.dataset == "terminalbench"
+        else Path("data") / args.dataset
+    )
+    output_dir = (args.output_dir if args.output_dir is not None else default_dir).resolve()
+    if args.with_images:
+        prepared = prepare_dataset(args.dataset, output_dir, with_images=True, task_nums=args.task_nums)
     else:
-        raise ValueError(f"unsupported benchmark dataset: {args.dataset}")
+        prepared = prepare_dataset(args.dataset, output_dir)
     logger.info("Prepared %s rows at %s", prepared.rows, prepared.index_path)

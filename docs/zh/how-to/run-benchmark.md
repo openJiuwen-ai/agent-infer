@@ -44,6 +44,39 @@ vllm bench serve --agentinfer prepare swebench \
 
 命令会生成 `instances.jsonl`、`task-lists/default.txt` 和 `manifest.json`。
 
+## 运行 Terminal-Bench 4.1.0
+
+在宿主机准备 Docker Compose 和 Python 3.12 环境中的 Harbor 0.25.0。先准备任务数据，再按需为
+`all.txt` 的前 N 题预拉镜像。默认数据目录是 `agentinfer/agentbench/data/terminalbench`。
+
+```bash
+vllm bench serve --agentinfer prepare terminalbench
+vllm bench serve --agentinfer prepare terminalbench --with-images --task-nums 4
+```
+
+`--with-images` 可复用同版本的完整任务数据。增大 `--task-nums` 会扩大选题范围并复用兼容镜像。
+Docker 按原生架构使用任务指定的镜像，准备记录保存在 `images.json`。如需重新导出数据，指定新的
+`--output-dir` 并同步运行配置的数据路径。
+
+示例默认使用 JiuwenSwarm 0.2.8 的 `agent.code.normal`。在已安装 WorkSwarm 0.2.8、OpenJiuwen 0.1.20 和 uv
+的环境中构建一次容器运行时。已有运行时可直接将 `AGENTBENCH_JIUWENSWARM_RUNTIME` 指向其目录。
+
+```bash
+python -m agentinfer.agentbench.benchkit.jiuwenswarm_runtime --output-dir "$PWD/.runtime/jiuwen"
+export AGENTBENCH_JIUWENSWARM_RUNTIME="$PWD/.runtime/jiuwen"
+vllm bench serve --agentinfer run \
+  --config agentinfer/agentbench/configs/terminalbench_vllm.yaml \
+  --task-num 4 --max-concurrency 2 --result-dir results/terminalbench
+```
+
+在示例配置中设置模型名和服务地址。需要 Claude `single` 或 DSH `single`/`plan-subagent` 时，
+使用配置中对应的注释示例及端点。Claude 需要原生 Linux CLI，DSH 需要 0.2.1-rc.2 和 Node.js 22.19 或更高版本，
+可用 `DSH_NODE_EXECUTABLE` 指定 Node 程序。
+
+`run` 默认只执行 Agent，保留任务提交、逐题日志和 `requests.jsonl`。镜像准备只补齐解题所需镜像，评分在汇总中标记为
+`skipped`。加 `--with-correctness` 时，Harbor 对每题运行官方评分，并在 `correctness.json` 记录奖励和覆盖率，
+执行中断时仍汇总已有奖励。两种模式都在测评计时前补齐所需镜像，并显示题目进度。
+
 ## 运行一次冷启动对比
 
 仓库脚本会依次启动基线服务、运行任务、彻底停止服务，再启动候选服务并输出比较报告：
