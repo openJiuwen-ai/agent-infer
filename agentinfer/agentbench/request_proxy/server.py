@@ -117,7 +117,21 @@ class RequestProxyServer:
         self.app = FastAPI()
         self.app.add_api_route("/health", self.handle_health, methods=["GET"])
         self.app.add_api_route(self.endpoint, self.handle_model_request, methods=["POST"])
+        self.app.add_api_route(
+            "/sessions/{session_id:uuid}" + self.endpoint, self.handle_scoped_request, methods=["POST"]
+        )
         self.app.add_api_route("/shutdown", self.handle_shutdown, methods=["POST"])
+
+    async def handle_scoped_request(self, session_id: uuid.UUID, request: Request) -> Response:
+        """Attribute SDKs that accept a base URL but do not expose identity headers."""
+        from agentinfer.scheduling.headers import CLAUDE_SESSION_HEADER, DSH_SESSION_HEADER
+
+        header = CLAUDE_SESSION_HEADER if self.endpoint == "/v1/messages" else DSH_SESSION_HEADER
+        scope = dict(request.scope)
+        replaced = {key.lower().encode() for key in (CLAUDE_SESSION_HEADER, DSH_SESSION_HEADER)}
+        scope["headers"] = [(key, val) for key, val in scope["headers"] if key.lower() not in replaced]
+        scope["headers"].append((header.lower().encode(), str(session_id).encode()))
+        return await self.handle_model_request(Request(scope, request.receive))
 
     async def handle_health(self) -> dict[str, object]:
         return {"status": "ok" if self.accepting else "stopping", "active_requests": self._active_requests}

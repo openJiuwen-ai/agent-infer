@@ -21,7 +21,7 @@ from .profiles import get_profile
 logger = logging.getLogger(__name__)
 
 
-async def run_jiuwenswarm(request: AgentRunRequest) -> AgentRunResult:
+async def run_jiuwenswarm(request: AgentRunRequest, *, workspace_prompt: str | None = None) -> AgentRunResult:
     """Execute one task in its own Jiuwen Gateway/AgentServer instance."""
 
     profile = get_profile(request.profile_name)
@@ -35,7 +35,7 @@ async def run_jiuwenswarm(request: AgentRunRequest) -> AgentRunResult:
         started_at=datetime.now(timezone.utc).isoformat(),
     )
     request.artifact_dir.mkdir(parents=True, exist_ok=True)
-    prompt = profile.build_prompt(request.task)
+    prompt = workspace_prompt if workspace_prompt is not None else profile.build_prompt(request.task)
     await asyncio.to_thread((request.artifact_dir / "prompt.txt").write_text, prompt, encoding="utf-8")
     instance = JiuwenInstance(
         executable=request.executable,
@@ -130,27 +130,28 @@ async def run_jiuwenswarm(request: AgentRunRequest) -> AgentRunResult:
 
     if cancellation is not None:
         raise cancellation
-    try:
-        if request.patch_flush_seconds:
-            await asyncio.sleep(request.patch_flush_seconds)
-        patch = await asyncio.to_thread(export_patch, request.workspace)
-        if patch:
+    if workspace_prompt is None:
+        try:
+            if request.patch_flush_seconds:
+                await asyncio.sleep(request.patch_flush_seconds)
+            patch = await asyncio.to_thread(export_patch, request.workspace)
+            if patch:
+                await asyncio.to_thread(
+                    (request.artifact_dir / "model.patch").write_text,
+                    patch,
+                    encoding="utf-8",
+                )
+                result.has_patch = True
+                result.patch_bytes = len(patch.encode("utf-8"))
+        except Exception:
             await asyncio.to_thread(
-                (request.artifact_dir / "model.patch").write_text,
-                patch,
+                (request.artifact_dir / "jiuwenswarm-patch-error.log").write_text,
+                traceback.format_exc(),
                 encoding="utf-8",
             )
-            result.has_patch = True
-            result.patch_bytes = len(patch.encode("utf-8"))
-    except Exception:
-        await asyncio.to_thread(
-            (request.artifact_dir / "jiuwenswarm-patch-error.log").write_text,
-            traceback.format_exc(),
-            encoding="utf-8",
-        )
-        if result.outcome is AgentRunOutcome.COMPLETED:
-            result.outcome = AgentRunOutcome.FAILED
-            result.termination_reason = TerminationReason.HARNESS_ERROR
+            if result.outcome is AgentRunOutcome.COMPLETED:
+                result.outcome = AgentRunOutcome.FAILED
+                result.termination_reason = TerminationReason.HARNESS_ERROR
     result.finished_at = datetime.now(timezone.utc).isoformat()
     result.duration_seconds = time.monotonic() - started_clock
     return result

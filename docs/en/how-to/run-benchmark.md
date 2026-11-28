@@ -4,6 +4,8 @@ This guide compares a cold upstream vLLM async scheduler with the AgentInfer Pro
 the same Claude Code workload. BenchKit records both arms through the same Request Proxy to avoid observation-path bias.
 It also covers SWE-bench Verified correctness evaluation, including automatic scoring after a run.
 
+For office-file tasks, see [Run and grade Workspace-Bench Full](run-workspacebench.md).
+
 ## Prepare the Environment
 
 The workflow requires:

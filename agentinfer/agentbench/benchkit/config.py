@@ -28,12 +28,18 @@ class ExperimentConfig(StrictModel):
 
 
 class DatasetConfig(StrictModel):
-    name: Literal["swebench_verified", "smoke"] = Field(
+    name: Literal["swebench_verified", "smoke", "workspacebench"] = Field(
         "swebench_verified", json_schema_extra={"cli": {"flag": "--dataset-name"}}
     )
     index_path: Path = Field(Path("data/swebench/instances.jsonl"), json_schema_extra={"cli": True})
     selection_path: Path = Field(Path("data/swebench/task-lists/default.txt"), json_schema_extra={"cli": True})
     cache_dir: Path = Path("data/swebench/repo-cache")
+    workspacebench_execution: Literal["docker", "host"] = Field(
+        "docker", description="Workspace-Bench task execution environment", json_schema_extra={"cli": True}
+    )
+    workspacebench_checkout: Path | None = Field(
+        None, description="Pinned Workspace-Bench checkout for host execution", json_schema_extra={"cli": True}
+    )
 
 
 class AgentConfig(StrictModel):
@@ -166,10 +172,11 @@ def resolve_config_paths(config: AgentBenchConfig, base_dir: Path) -> AgentBench
         (config.dataset, "index_path"),
         (config.dataset, "selection_path"),
         (config.dataset, "cache_dir"),
+        (config.dataset, "workspacebench_checkout"),
         (config.experiment, "result_dir"),
     ):
         value = getattr(owner, name)
-        if not value.is_absolute():
+        if value is not None and not value.is_absolute():
             setattr(owner, name, (base_dir / value).resolve())
     executable = config.agent.executable
     if not executable.is_absolute() and len(executable.parts) > 1:
