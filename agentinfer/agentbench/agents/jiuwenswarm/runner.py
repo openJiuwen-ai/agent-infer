@@ -21,6 +21,28 @@ from .profiles import get_profile
 logger = logging.getLogger(__name__)
 
 
+def build_chat_command(
+    executable: Path, profile: str, session_id: str, workspace: Path, gateway_url: str, timeout_seconds: int
+) -> list[str]:
+    return [
+        str(executable),
+        "chat",
+        "--jsonl",
+        "--mode",
+        profile,
+        "--session",
+        session_id,
+        "--cwd",
+        str(workspace),
+        "--project-dir",
+        str(workspace),
+        "--gateway-url",
+        gateway_url,
+        "--timeout",
+        str(timeout_seconds),
+    ]
+
+
 async def run_jiuwenswarm(request: AgentRunRequest) -> AgentRunResult:
     """Execute one task in its own Jiuwen Gateway/AgentServer instance."""
 
@@ -53,23 +75,14 @@ async def run_jiuwenswarm(request: AgentRunRequest) -> AgentRunResult:
     cancellation: asyncio.CancelledError | None = None
     try:
         await asyncio.wait_for(instance.start(), _remaining(deadline))
-        command = [
-            str(request.executable),
-            "chat",
-            "--jsonl",
-            "--mode",
+        command = build_chat_command(
+            request.executable,
             profile.name,
-            "--session",
             request.session_id,
-            "--cwd",
-            str(request.workspace),
-            "--project-dir",
-            str(request.workspace),
-            "--gateway-url",
+            request.workspace,
             instance.gateway_url,
-            "--timeout",
-            str(request.timeout_seconds),
-        ]
+            request.timeout_seconds,
+        )
         await asyncio.to_thread(
             (request.artifact_dir / "jiuwenswarm-launch-command.json").write_text,
             json.dumps(command, indent=2) + "\n",

@@ -24,8 +24,14 @@ vllm bench serve --agentinfer prepare swebench --output-dir PATH
 
 | 参数 | 必需 | 说明 |
 | --- | --- | --- |
-| `dataset` | 是 | 数据集类型；当前仅支持 `swebench`。 |
-| `--output-dir PATH` | 否 | 写入索引、任务列表和清单的目录。相对路径以当前工作目录为基准。 |
+| `dataset` | 是 | 数据集类型：`swebench` 或 `terminalbench`。 |
+| `--output-dir PATH` | 否 | 写入任务数据的目录。Terminal-Bench 默认包内 `agentinfer/agentbench/data/terminalbench`；SWE-bench 仍为当前目录下 `data/swebench`。 |
+| `--with-images` | 否 | 仅 Terminal-Bench：准备解题和评分镜像，支持在完整且版本匹配的数据目录上追加。 |
+| `--task-nums INT` | 否 | 仅 Terminal-Bench：累计准备 `all.txt` 中前 N 题的镜像，N ≥ 1，须搭配 `--with-images`。省略时准备全部，不裁剪索引。 |
+
+Terminal-Bench 可在原目录续传本工具标记的中断导出。加 `--with-images` 时可复用同版本的完整任务
+数据。首次导出使用空目录。新索引的任务路径相对索引文件解析，同时兼容已有绝对路径。
+运行时配置和结果说明见 [运行 Terminal-Bench](../how-to/run-benchmark.md#运行-terminal-bench-410)。
 
 ## `run`
 
@@ -38,8 +44,8 @@ vllm bench serve --agentinfer run --config PATH [OVERRIDES]
 | 参数 | 类型或取值 | 映射字段 |
 | --- | --- | --- |
 | `--config PATH` | 文件路径，可选 | 配置文件 |
-| `--with-correctness` | 默认关闭 | 运行正常收尾后评测 completed 任务 |
-| `--evaluation-config PATH` | 文件路径，可选 | 评测配置；需同时指定 `--with-correctness` |
+| `--with-correctness` | 默认关闭 | 启用对应数据集的官方评分 |
+| `--evaluation-config PATH` | 文件路径，可选 | SWE-bench 评测配置，需同时指定 `--with-correctness` |
 | `--task-num INT` | `>= 1` | `experiment.task_num` |
 | `--result-dir PATH` | 目录路径 | `experiment.result_dir` |
 | `--max-concurrency INT` | `>= 1` | `experiment.max_concurrency` |
@@ -57,7 +63,12 @@ vllm bench serve --agentinfer run --config PATH [OVERRIDES]
 配置优先级为内置默认值、YAML、显式 CLI 覆盖。YAML 中的相对路径以 YAML 文件目录为基准；CLI 路径以当前
 工作目录为基准。未知 YAML 字段会被拒绝。Router 使用 `--base-url` 指向透明转发端点，`--metrics-url` 指向 vLLM 指标端点。
 
-开启 `--with-correctness` 后，评测配置在运行前校验，默认使用当前 Python 环境和标准评测参数。
+Terminal-Bench 的 `run` 默认跳过评分，加 `--with-correctness` 时启用 Harbor 逐题评分。
+批次执行结束后，如果请求了评分却没有任何有效奖励，命令返回 1。有效奖励可以为 0。
+返回 0 时仍可能只有部分题目获评，具体比例见 `correctness.json` 的 `evaluation_coverage`。
+比较 Terminal-Bench 运行时，若两侧评分模式不同或无法确认，`compare` 仅以诊断数据展示任务耗时、整轮耗时和吞吐量。
+
+SWE-bench 开启 `--with-correctness` 后，评测配置在运行前校验，默认使用当前 Python 环境和标准评测参数。
 运行配置与评测配置独立；运行正常结束后，将实际产物目录交给评测器，结果写入 `evaluations/` 下的唯一目录。
 运行异常或中断时跳过自动评测并保留原始失败；正常评分返回 0（含 unresolved），评测错误返回 1，
 配置错误返回 2，评测中断返回 130。部分任务失败不会阻止其余 completed 任务入评；无 completed 任务时返回 1。
@@ -106,7 +117,8 @@ JSON 中 `metadata.diagnostic_only=true`，每次运行的诊断信息分别位�
 
 ## 其他参数与 Replay
 
-`run` 可省略 `--config`，此时使用模型默认值。`prepare --output-dir` 默认是 `data/swebench`。
+`run` 可省略 `--config`，此时使用模型默认值。Terminal-Bench 默认数据目录为包内 `agentinfer/agentbench/data/terminalbench`；
+SWE-bench 的 prepare 默认仍为当前目录下的 `data/swebench`。
 `run --metrics-url URL` 指定完整的 vLLM 指标端点。`summarize --output-figs-dir PATH` 输出分布图。
 
 ```bash

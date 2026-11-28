@@ -120,6 +120,43 @@ def test_compare_finalized_artifacts_and_router_schema(tmp_path: Path) -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("candidate_mode", "legacy_reason", "expected_mode", "diagnostic"),
+    [
+        (True, None, "enabled", True),
+        (False, None, "skipped", False),
+        (None, "skipped", "skipped", False),
+        (None, "artifact missing", "unknown", True),
+    ],
+)
+def test_terminalbench_compare_marks_scoring_sensitive_metrics(
+    tmp_path: Path, candidate_mode, legacy_reason, expected_mode, diagnostic
+) -> None:
+    baseline, candidate = tmp_path / "baseline", tmp_path / "candidate"
+    for path, mode in ((baseline, False), (candidate, candidate_mode)):
+        write_run(path)
+        manifest_path = path / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["config"]["dataset"] = {"name": "terminalbench"}
+        if mode is not None:
+            manifest["config"]["with_correctness"] = mode
+        manifest_path.write_text(json.dumps(manifest))
+    if legacy_reason is not None:
+        summary_path = candidate / "summary.json"
+        summary = json.loads(summary_path.read_text())
+        summary["correctness"]["reason"] = legacy_reason
+        summary_path.write_text(json.dumps(summary))
+
+    result = json.loads(compare(baseline, candidate, as_json=True))
+    assert result["metadata"]["candidate_runs"][0]["scoring_mode"] == expected_mode
+    assert any("scoring modes" in warning for warning in result["warnings"]) == diagnostic
+    for name in ("run_wall_time_seconds", "p95_task_duration_seconds", "request_throughput_per_second"):
+        metric = result["metrics"][name]
+        assert metric.get("diagnostic_only", False) == diagnostic
+        assert (metric["delta_ci"] is None) == diagnostic
+    assert result["metrics"]["ttft_p95_seconds"]["delta_ci"] is not None
+
+
 def test_compare_accepts_cli_metadata_in_finalized_summary(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     write_run(run_dir)

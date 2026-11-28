@@ -1,0 +1,35 @@
+experiment:
+  task_num: null
+  result_dir: ../result_terminalbench
+  max_concurrency: 1
+  task_timeout_seconds: 28800
+
+dataset:
+  name: terminalbench
+  # Matches prepare terminalbench's package-local default directory.
+  index_path: ../data/terminalbench/instances.jsonl
+  selection_path: ../data/terminalbench/task-lists/all.txt
+
+agent:
+  # JiuwenSwarm 0.2.8 requires AGENTBENCH_JIUWENSWARM_RUNTIME to point to a prepared runtime directory.
+  type: jiuwenswarm
+  profile: agent.code.normal
+  executable: jiuwenswarm
+
+  # To switch agents, replace the three active fields above with one of these examples.
+  # DSH uses the active /v1/chat/completions endpoint.
+  # type: dsh
+  # profile: single  # single | plan-subagent
+  # executable: dsh
+
+  # Claude Code requires switching backend.endpoint to /v1/messages.
+  # type: claude
+  # profile: single
+  # executable: claude
+
+backend:
+  type: vllm
+  base_url: http://127.0.0.1:8000
+  model: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8
+  endpoint: /v1/chat/completions  # JiuwenSwarm or DSH
+  # endpoint: /v1/messages       # Claude Code

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agentinfer.agentbench.benchkit import dataset
+from agentinfer.agentbench.benchkit import dataset, swebench
 from tests.helpers.marks import test_marks
 
 pytestmark = test_marks(hardware="cpu", ci="ready")
@@ -80,7 +80,7 @@ def test_load_tasks_rejects_duplicate_selection(tmp_path: Path) -> None:
 
 def test_prepare_swebench_writes_local_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        dataset,
+        swebench,
         "_load_swebench_verified",
         lambda: [
             {
@@ -102,7 +102,7 @@ def test_prepare_swebench_writes_local_inputs(tmp_path: Path, monkeypatch: pytes
         ],
     )
 
-    prepared = dataset.prepare_swebench(tmp_path / "swebench")
+    prepared = dataset.prepare_dataset("swebench", tmp_path / "swebench")
 
     assert prepared.rows == 2
     assert prepared.index_path.read_text(encoding="utf-8").count("\n") == 2
@@ -119,4 +119,4 @@ def test_prepare_swebench_rejects_non_empty_output_dir(tmp_path: Path) -> None:
     (output_dir / "old.txt").write_text("old", encoding="utf-8")
 
     with pytest.raises(FileExistsError):
-        dataset.prepare_swebench(output_dir)
+        dataset.prepare_dataset("swebench", output_dir)

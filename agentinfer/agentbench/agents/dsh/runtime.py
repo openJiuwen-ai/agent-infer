@@ -88,6 +88,7 @@ def _probe_sandbox(executable: Path) -> dict[str, object]:
 
 
 DSH_VERSION = "0.2.1-rc.2"
+DSH_NODE_VERSION_RANGE = "^22.19.0 || >=24"
 _METADATA_PROBE = r"""
 import { realpathSync, readFileSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -108,6 +109,14 @@ console.log(JSON.stringify({ node: process.versions.node, packages }));
 """
 
 
+def node_version_supported(version: str) -> bool:
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.\d+", version)
+    if match is None:
+        return False
+    major, minor = (int(part) for part in match.groups())
+    return (major == 22 and minor >= 19) or major >= 24
+
+
 def _runtime_report(path: Path) -> AgentPreflightReport:
     version = subprocess.run([str(path), "--version"], capture_output=True, text=True, timeout=20, check=True)
     actual = re.search(r"\b\d+\.\d+\.\d+(?:-[\w.]+)?", version.stdout + version.stderr)
@@ -124,9 +133,10 @@ def _runtime_report(path: Path) -> AgentPreflightReport:
         check=True,
     )
     data = json.loads(metadata.stdout)
-    node = tuple(int(part) for part in data["node"].split("."))
-    if not ((node[0] == 22 and node >= (22, 19, 0)) or node[0] >= 24):
-        raise RuntimeError(f"Unsupported Node version: actual={data['node']}, expected=^22.19.0 || >=24, path={path}")
+    if not node_version_supported(data["node"]):
+        raise RuntimeError(
+            f"Unsupported Node version: actual={data['node']}, expected={DSH_NODE_VERSION_RANGE}, path={path}"
+        )
     versions = {name: pkg["version"] for name, pkg in data["packages"].items()}
     for name, value in versions.items():
         if name.startswith("@deepseek-ai/dsh") and value != DSH_VERSION:
