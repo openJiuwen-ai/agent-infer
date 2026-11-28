@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 from pathlib import Path
 
 import httpx
@@ -20,10 +22,20 @@ THROUGHPUT_COUNTERS = (
     "vllm:generation_tokens_total",
     "vllm:request_success_total",
 )
+PREEMPTIONS_COUNTER = "vllm:num_preemptions_total"
+
+# Optional operator override for the per-EngineCore logical KV capacity. It exists for
+# deployments whose cache_config_info does not expose a trustworthy logical size.
+KV_CAPACITY_OVERRIDE_ENV = "AGENTINFER_KV_CAPACITY_TOKENS"
 
 
 async def collect_metadata(client: httpx.AsyncClient, model: str) -> tuple[dict[str, object], tuple[int, ...]]:
-    """Build the hashable metadata available from /version, /v1/models, and /metrics."""
+    """Return hashable deployment metadata and the engine IDs exposed by /metrics.
+
+    Both stages record the per-engine token count and its source in
+    ``deployment.kv_capacity``. An invalid capacity override raises ValueError.
+    Without an override, unusable logical and block capacity fields also raise ValueError.
+    """
     version_response = await client.get("/version")
     version_response.raise_for_status()
     version_body = version_response.json()
@@ -59,11 +71,13 @@ async def collect_metadata(client: httpx.AsyncClient, model: str) -> tuple[dict[
             "throughput_metric_names": metric_names,
         },
     }
+    capacity, source = _resolve_kv_capacity_tokens(metadata)
+    metadata["deployment"]["kv_capacity"] = {"tokens": capacity, "source": source}
     return metadata, engine_ids
 
 
 async def collect_throughput_counters(client: httpx.AsyncClient, engine: int) -> dict[str, float]:
-    """Read selected cumulative counters for one EngineCore/DP rank."""
+    """Read throughput counters and, when exposed, preemptions for one EngineCore."""
     response = await client.get("/metrics")
     response.raise_for_status()
     values = dict.fromkeys(THROUGHPUT_COUNTERS, 0.0)
@@ -72,16 +86,21 @@ async def collect_throughput_counters(client: httpx.AsyncClient, engine: int) ->
         if labels.get("engine") != str(engine):
             continue
         found_engine = True
-        if name in values:
-            values[name] += value
+        if name in THROUGHPUT_COUNTERS or name == PREEMPTIONS_COUNTER:
+            values[name] = values.get(name, 0.0) + value
     if not found_engine:
         raise ValueError(f"/metrics does not expose engine={engine}")
     return values
 
 
 def counter_delta(before: dict[str, float], after: dict[str, float]) -> dict[str, float]:
-    """Calculate nonnegative metric counter deltas for one measurement window."""
-    return {name: max(after.get(name, 0) - value, 0) for name, value in before.items()}
+    """Calculate stage deltas, omitting preemptions if missing or reset during the stage."""
+    deltas = {}
+    for name, start in before.items():
+        if name == PREEMPTIONS_COUNTER and (name not in after or after[name] < start):
+            continue
+        deltas[name] = max(after.get(name, 0) - start, 0)
+    return deltas
 
 
 def metadata_hash(metadata: dict[str, object]) -> str:
@@ -104,6 +123,19 @@ def persist_metadata(root: Path, metadata: dict[str, object]) -> str:
     else:
         write_json(path, record)
     return digest
+
+
+def prepare_stage(root: Path, stage: str, overwrite: bool, metadata: dict[str, object]) -> tuple[Path, str]:
+    """Check the shared metadata before replacing any completed stage artifacts."""
+    path = root / stage
+    occupied = path.exists() and any(path.iterdir())
+    if occupied and not overwrite:
+        raise FileExistsError(f"stage directory is not empty: {path}")
+    digest = persist_metadata(root, metadata)
+    if occupied:
+        shutil.rmtree(path)
+    path.mkdir(parents=True, exist_ok=True)
+    return path, digest
 
 
 def assemble_profile(root: Path) -> Path | None:
@@ -148,12 +180,69 @@ def resolve_calibration_engine(requested_engine: int | None, engine_ids: tuple[i
     return engine, request_rank
 
 
+def _positive_int(value: object) -> int | None:
+    """Parse a positive integer from a metrics label value, or return None."""
+    if value is None:
+        return None
+    text = str(value).strip().strip("\"'")
+    if text in ("", "None", "none", "null"):
+        return None
+    try:
+        parsed = int(text)
+    except ValueError:
+        try:
+            parsed = int(float(text))
+        except (ValueError, OverflowError):
+            return None
+    return parsed if parsed > 0 else None
+
+
 def infer_kv_capacity_tokens(metadata: dict[str, object]) -> int:
-    """Derive one EngineCore rank's logical HBM KV capacity from cache metrics."""
+    """Return the capacity captured with metadata, or resolve uncaptured metadata."""
+    deployment = metadata.get("deployment")
+    if isinstance(deployment, dict) and "kv_capacity" in deployment:
+        return deployment["kv_capacity"]["tokens"]
+    return _resolve_kv_capacity_tokens(metadata)[0]
+
+
+def _resolve_kv_capacity_tokens(metadata: dict[str, object]) -> tuple[int, str]:
+    """Return one EngineCore rank's logical HBM KV capacity in tokens.
+
+    Resolution order:
+
+    1. ``AGENTINFER_KV_CAPACITY_TOKENS`` (explicit operator override);
+    2. ``cache_config_info.kv_cache_size_tokens`` -- the logical per-engine capacity
+       reported by the backend itself;
+    3. ``block_size * num_gpu_blocks / engine_count`` -- legacy fallback.
+
+    Step 3 is only a fallback because some backends report a ``block_size`` that is not
+    the number of logical tokens per block. Compressed or sparse attention layouts can
+    make that arithmetic off by more than an order of magnitude, and the resulting
+    capacity silently truncates the decode calibration matrix: every case whose
+    ``batch * context`` exceeds ``max_kv_fraction * capacity`` is skipped, so the fitted
+    context coefficient collapses to zero and the profile underestimates decode cost
+    on production-length contexts.
+    """
     deployment = metadata.get("deployment")
     cache_config = deployment.get("cache_config") if isinstance(deployment, dict) else None
     if not isinstance(cache_config, dict):
         raise ValueError("/metrics does not expose vllm:cache_config_info")
+
+    raw_override = os.environ.get(KV_CAPACITY_OVERRIDE_ENV)
+    if raw_override is not None:
+        try:
+            override = int(raw_override)
+        except ValueError:
+            override = 0
+        if override <= 0:
+            raise ValueError(f"{KV_CAPACITY_OVERRIDE_ENV} must be a positive integer, got {raw_override!r}")
+        return override, KV_CAPACITY_OVERRIDE_ENV
+
+    logical = _positive_int(cache_config.get("kv_cache_size_tokens"))
+    if logical is not None:
+        # vLLM reports this per EngineCore, so it is already the pinned rank's capacity.
+        return logical, "kv_cache_size_tokens"
+
     try:
         block_size = int(str(cache_config["block_size"]))
         num_gpu_blocks = int(str(cache_config["num_gpu_blocks"]))
@@ -169,7 +258,7 @@ def infer_kv_capacity_tokens(metadata: dict[str, object]) -> int:
     capacity = block_size * num_gpu_blocks // engine_count
     if capacity <= 0:
         raise ValueError("derived KV capacity must be positive")
-    return capacity
+    return capacity, "block_arithmetic"
 
 
 def _parse_samples(text: str) -> list[tuple[str, dict[str, str], float]]:
