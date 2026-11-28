@@ -139,6 +139,7 @@ class ProgramRegistry:
         *,
         total_tokens: int | None,
         observed_at_monotonic_s: float | None = None,
+        has_pending_requests: bool = False,
     ) -> ProgramStatus:
         """Apply trustworthy final usage and return the previous status.
 
@@ -146,6 +147,7 @@ class ProgramRegistry:
             ref: Exact Program generation that owned the request.
             total_tokens: Final prompt plus completion tokens, when supplied by the backend.
             observed_at_monotonic_s: Deterministic timestamp override used by tests.
+            has_pending_requests: Whether another request still belongs to this generation.
         """
         program = self.require(ref)
         previous_status = program.status
@@ -158,7 +160,7 @@ class ProgramRegistry:
             observed_at_monotonic_s=(time.monotonic() if observed_at_monotonic_s is None else observed_at_monotonic_s),
         )
         program.step_count += 1
-        program.status = ProgramStatus.ACTING
+        program.status = ProgramStatus.REASONING if has_pending_requests else ProgramStatus.ACTING
         return previous_status
 
     def release(self, ref: ProgramRef) -> RuntimeProgram | None:

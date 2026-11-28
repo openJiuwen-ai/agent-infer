@@ -27,7 +27,16 @@ class TransitionKind(str, Enum):
     PAUSE = "pause"
     MARK_FOR_PAUSE = "mark_for_pause"
     RESUME = "resume"
+    CLEAR_PAUSE_MARK = "clear_pause_mark"
     RELEASE = "release"
+
+
+class ProgramPlacement(str, Enum):
+    """A Program placement intent understood by a capable host."""
+
+    INTERACTIVE = "interactive"
+    ASYNC = "async"
+    INACTIVE = "inactive"
 
 
 TRANSITION_EVENT_KINDS = {
@@ -36,6 +45,7 @@ TRANSITION_EVENT_KINDS = {
     TransitionKind.PAUSE: SchedulingEventKind.PROGRAM_PAUSED,
     TransitionKind.MARK_FOR_PAUSE: SchedulingEventKind.PROGRAM_MARKED_FOR_PAUSE,
     TransitionKind.RESUME: SchedulingEventKind.PROGRAM_RESUMED,
+    TransitionKind.CLEAR_PAUSE_MARK: SchedulingEventKind.STRATEGY_FACTORS_CHANGED,
     TransitionKind.RELEASE: SchedulingEventKind.PROGRAM_RELEASED,
 }
 
@@ -55,11 +65,18 @@ class TransitionRequest:
     program: ProgramRef
     reason: str
     backend_id: str | None = None
+    placement: ProgramPlacement | None = None
 
     def __post_init__(self) -> None:
         """Validate reason and backend requirements."""
         if not self.reason:
             raise ValueError("transition reason must not be empty")
+        if self.placement is not None and (
+            (self.kind is TransitionKind.RESUME and self.placement is not ProgramPlacement.INTERACTIVE)
+            or (self.kind is TransitionKind.PAUSE and self.placement is ProgramPlacement.INTERACTIVE)
+            or self.kind not in (TransitionKind.RESUME, TransitionKind.PAUSE)
+        ):
+            raise ValueError("placement is incompatible with the transition")
         needs_backend = self.kind in (TransitionKind.ADMIT, TransitionKind.RESUME)
         if needs_backend and not self.backend_id:
             raise ValueError("admit and resume transitions require backend_id")

@@ -21,7 +21,7 @@ from vllm.v1.engine import EngineCoreEventType
 from vllm.v1.request import Request, RequestStatus
 
 from agentinfer.agentcache.core.api_adapter import LIFECYCLE_SOCKET_ENV, UnixLifecycleReceiver
-from agentinfer.agentcache.core.controller import build_progress_ttl_controller
+from agentinfer.agentcache.core.controller import build_mori_controller, build_progress_ttl_controller
 from agentinfer.agentcache.core.vllm_logging import attach_agentinfer_to_vllm_logging
 from agentinfer.scheduling.backend import BackendInfo, BackendPoolInfo, DispatchTarget, DpRankInfo
 from agentinfer.scheduling.identity import AgentIdentity, JsonMapping, JsonObject, parse_agent_identity
@@ -95,6 +95,8 @@ class EmbeddedSchedulerController(Protocol[RetainedRequestT]):
 class _VllmAdmissionHooks:
     """Composition helper shared by the two single-inheritance native bridges."""
 
+    program_admission = None
+
     def __init__(self, owner: Scheduler, vllm_config: object, kv_cache_config: object, block_size: int) -> None:
         attach_agentinfer_to_vllm_logging()
         self._owner = owner
@@ -123,9 +125,23 @@ class _VllmAdmissionHooks:
         self.tracked_native: set[str] = set()
         self._local_prefix_observations: dict[str, tuple[int, int]] = {}
         self._prefix_refresh_pending = False
+        self.lifecycle_receiver: UnixLifecycleReceiver | None = None
+        strategy = settings.get("strategy", "progress_ttl")
+        if strategy == "mori":
+            from agentinfer.agentcache.mori.ipc import install_core_utility
+            from agentinfer.agentcache.mori.timer import install_mori_timer
+
+            if getattr(parallel_config, "data_parallel_size", 1) != 1:
+                raise ValueError("Embedded MORI requires one data-parallel rank")
+            self.program_admission = build_mori_controller(owner, settings, self.backend_id)
+            self.controller = self.program_admission.runtime
+            install_core_utility()
+            install_mori_timer()
+            return
+        if strategy != "progress_ttl":
+            raise ValueError(f"Unknown AgentInfer scheduling strategy {strategy!r}")
         self.controller = build_progress_ttl_controller(self.backend_pool_info(owner), settings)
         self._install_prefix_lookup_observer(owner)
-        self.lifecycle_receiver: UnixLifecycleReceiver | None = None
         socket_path = settings.get("lifecycle_socket_path") or os.environ.get(LIFECYCLE_SOCKET_ENV)
         if socket_path is not None:
             if not isinstance(socket_path, str) or not socket_path:
@@ -134,6 +150,12 @@ class _VllmAdmissionHooks:
 
     def add_request(self, owner: Scheduler, request: Request, native_add: Callable[[Request], None]) -> None:
         """Retain agentic work or pass compatibility traffic directly to vLLM."""
+        if self.program_admission is not None:
+            queued_at = time.monotonic()
+            self.program_admission.add_request(
+                request, lambda child: self._add_to_native_waiting(child, queued_at, native_add)
+            )
+            return
         self._drain_lifecycle_signals()
         metadata = _metadata_from_request(request)
         if metadata is None:
@@ -153,6 +175,8 @@ class _VllmAdmissionHooks:
 
     def before_schedule(self, owner: Scheduler, native_add: Callable[[Request], None]) -> None:
         """Run one AgentCache cycle and transfer admitted requests to native waiting."""
+        if self.program_admission is not None:
+            return
         self._drain_lifecycle_signals()
         now = time.monotonic()
         self.controller.run_due_lightweight_checks(now)
@@ -295,6 +319,11 @@ class _VllmAdmissionHooks:
         normalized_request_ids = (
             request_ids if request_ids is None or isinstance(request_ids, str) else tuple(request_ids)
         )
+        if self.program_admission is not None:
+            from agentinfer.agentcache.mori.ipc import native_finished_requests
+
+            retained_children = self.program_admission.finish_requests(normalized_request_ids, finished_status)
+            return native_finished_requests(retained_children) + native_finish(normalized_request_ids, finished_status)
         retained = self.cancel_retained(normalized_request_ids)
         token_counts = {
             request_id: request.num_tokens
@@ -349,6 +378,8 @@ class _VllmAdmissionHooks:
 
     def unfinished_count(self, native_count: int) -> int:
         """Merge retained and native liveness without exposing request objects to EngineCore."""
+        if self.program_admission is not None:
+            return native_count
         return native_count + self.controller.retained_request_count
 
     def backend_pool_info(self, owner: Scheduler) -> BackendPoolInfo:

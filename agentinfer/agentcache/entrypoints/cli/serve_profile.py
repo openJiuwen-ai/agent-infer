@@ -15,12 +15,13 @@ import argparse
 import json
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 ASYNC_SCHEDULER_CLS = "agentinfer.agentcache.core.scheduler.AgentCacheAsyncSchedulerBridge"
 SYNC_SCHEDULER_CLS = "agentinfer.agentcache.core.scheduler.AgentCacheSyncSchedulerBridge"
 IDENTITY_MIDDLEWARE = "agentinfer.agentcache.core.api_adapter.AgentCacheIdentityMiddleware"
+MORI_MIDDLEWARE = "agentinfer.agentcache.mori.admission_api.MoriSchedulingMiddleware"
 LIFECYCLE_MIDDLEWARE = "agentinfer.agentcache.core.api_adapter.AgentCacheLifecycleMiddleware"
 
 LIFECYCLE_SOCKET_ENV = "AGENTCACHE_VLLM_LIFECYCLE_SOCKET"
@@ -65,9 +66,14 @@ def add_agentinfer_arguments(parser: argparse.ArgumentParser) -> None:
         "--agentinfer",
         action="store_true",
         default=False,
-        help="Enable the AgentInfer Progress-TTL serving path: injects the AgentCache scheduler bridge "
+        help="Enable the AgentInfer serving path with the AgentCache scheduler bridge "
         "(async or sync, following --async-scheduling/--no-async-scheduling), the identity and lifecycle "
-        "middleware, and the embedded Progress-TTL controller.",
+        "middleware, and the selected Program scheduling strategy.",
+    )
+    group.add_argument(
+        "--agentinfer-strategy",
+        choices=("progress_ttl", "mori"),
+        help="Program scheduling strategy for --agentinfer (default: progress_ttl).",
     )
 
 
@@ -164,6 +170,22 @@ def inject_profile(
 
     resolved = profile if profile is not None else DEFAULT_SERVE_PROFILE
     injected: dict[str, Any] = {}
+    current = _coerce_additional_config(getattr(namespace, ADDITIONAL_CONFIG_DEST, None))
+    agentcache = current.get("agentcache") or {}
+    selected = getattr(namespace, "agentinfer_strategy", None)
+    if isinstance(agentcache, dict):
+        configured = agentcache.get("strategy")
+        if selected is not None and configured is not None and selected != configured:
+            raise AgentInferServeError("Conflicting AgentInfer strategy settings")
+        selected = selected or configured
+    if selected == "mori":
+        resolved = replace(
+            resolved,
+            middlewares=(MORI_MIDDLEWARE,),
+            agentcache_config={**resolved.agentcache_config, "strategy": "mori"},
+        )
+    elif selected not in (None, "progress_ttl"):
+        raise AgentInferServeError(f"Unknown AgentInfer scheduling strategy {selected!r}")
 
     if SCHEDULER_CLS_DEST in explicit_dests:
         raise AgentInferServeError(
