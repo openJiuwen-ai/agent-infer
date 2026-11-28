@@ -7,6 +7,8 @@ a versioned section.
 
 ### Added
 
+- Added Terminal-Bench 4.1.0 support in AgentBench with Harbor task containers, optional official scoring,
+  and per-task model request traces.
 - Added the `vllm serve MODEL --agentinfer` single-flag serving path: the delegating `vllm` console script takes over
   serve parsing, injects the agent-aware scheduler (async or sync, following `--async-scheduling`/`--no-async-scheduling`),
   the identity and lifecycle middleware, and the embedded Progress-TTL controller, then dispatches upstream vLLM. The

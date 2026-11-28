@@ -4,8 +4,8 @@
 """Prepare the pinned Terminal-Bench task package without changing SWE-bench."""
 
 import asyncio
-import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -25,6 +25,7 @@ from tqdm import tqdm
 from agentinfer.scheduling.headers import CLAUDE_SESSION_HEADER, DSH_SESSION_HEADER
 
 from ..agents.contracts import AgentPreflightReport, AgentRunOutcome, AgentRunResult, TerminationReason
+from ..agents.dsh.runtime import DSH_NODE_VERSION_RANGE, DSH_VERSION, node_version_supported
 from .common import atomic_write_json
 from .config import AgentBenchConfig
 from .dataset import PreparedDataset, Task, load_tasks
@@ -32,9 +33,11 @@ from .dataset import PreparedDataset, Task, load_tasks
 if TYPE_CHECKING:
     from .runner import RunContext
 
+logger = logging.getLogger(__name__)
 DATASET_REF = "terminal-bench/terminal-bench@4.1.0"
-DSH_VERSION = "0.2.1-rc.2"
+HARBOR_VERSION = "0.25.0"
 _CLI_VERSION = re.compile(r"\b\d+\.\d+\.\d+\b")
+_HARBOR_CLI_VERSION = re.compile(r"\b\d+\.\d+\.\d+[\w.+-]*")
 _VALID_REWARD_EXCEPTIONS = frozenset(
     {
         "AgentTimeoutError",
@@ -51,18 +54,41 @@ _VALID_REWARD_EXCEPTIONS = frozenset(
 def prepare_terminalbench(
     output_dir: Path,
     *,
-    harbor_executable: str = "harbor",
+    harbor_executable: str | None = None,
     with_images: bool = False,
     task_nums: int | None = None,
 ) -> PreparedDataset:
     """Export task files or extend image preparation for an existing export."""
 
-    from .terminalbench_images import prepare_images, read_task_config
+    from fcntl import LOCK_EX, LOCK_NB, flock
 
     if task_nums is not None and (task_nums < 1 or not with_images):
         raise ValueError("task_nums must be positive and requires with_images")
-    if output_dir.exists() and (not output_dir.is_dir() or any(output_dir.iterdir())):
-        if with_images and output_dir.is_dir():
+    output_dir.mkdir(parents=True, exist_ok=True)
+    directory = os.open(output_dir, os.O_RDONLY)
+    try:
+        try:
+            flock(directory, LOCK_EX | LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError(f"Terminal-Bench prepare is already running in {output_dir}") from exc
+        harbor = harbor_executable or os.environ.get("HARBOR_EXECUTABLE", "harbor")
+        return _prepare_terminalbench(output_dir, harbor, with_images, task_nums)
+    finally:
+        os.close(directory)
+
+
+def _prepare_terminalbench(
+    output_dir: Path, harbor_executable: str, with_images: bool, task_nums: int | None
+) -> PreparedDataset:
+    from .terminalbench_images import prepare_images, read_task_config
+
+    manifest = output_dir / "manifest.json"
+    pending = output_dir / ".terminalbench-export"
+    resuming = (
+        not manifest.exists() and pending.is_file() and pending.read_text(encoding="utf-8").strip() == DATASET_REF
+    )
+    if not resuming and any(output_dir.iterdir()):
+        if with_images:
             prepared = _reuse_prepared_dataset(output_dir)
             prepare_images(output_dir, task_nums, harbor_executable=harbor_executable)
             return prepared
@@ -70,6 +96,8 @@ def prepare_terminalbench(
     harbor = shutil.which(harbor_executable)
     if harbor is None:
         raise FileNotFoundError(f"Harbor executable not found: {harbor_executable}")
+    if not resuming:
+        pending.write_text(DATASET_REF + "\n", encoding="utf-8")
     tasks_dir = output_dir / "tasks"
     tasks_dir.mkdir(parents=True, exist_ok=True)
     download = [harbor, "datasets", "download", DATASET_REF, "--output-dir", str(tasks_dir), "--export"]
@@ -82,7 +110,7 @@ def prepare_terminalbench(
         if attempt == 2:
             raise RuntimeError(
                 f"Harbor export failed after three attempts (exit {completed.returncode}). "
-                f"Partial files remain in {tasks_dir}. Retry with a new --output-dir."
+                f"Partial files remain in {tasks_dir}. Retry with the same --output-dir to resume."
             )
     rows: list[dict[str, object]] = []
     used_ids: set[str] = set()
@@ -92,15 +120,6 @@ def prepare_terminalbench(
         if not instruction.is_file():
             continue
         name = read_task_config(task_dir)["task"]["name"]
-        content_hash = hashlib.sha256()
-        for path in sorted(task_dir.rglob("*")):
-            if not path.is_file() or ".git" in path.relative_to(task_dir).parts:
-                continue
-            content_hash.update(str(path.relative_to(task_dir)).encode("utf-8"))
-            with path.open("rb") as handle:
-                while chunk := handle.read(1024 * 1024):
-                    content_hash.update(chunk)
-        digest = content_hash.hexdigest()
         instance_id = re.sub(r"[^A-Za-z0-9_.-]", "__", name)
         if instance_id in used_ids:
             raise ValueError(f"Duplicate task identifier: {instance_id}")
@@ -109,8 +128,7 @@ def prepare_terminalbench(
             {
                 "instance_id": instance_id,
                 "source_task_name": name,
-                "task_path": str(task_dir.resolve()),
-                "sha256": digest,
+                "task_path": task_dir.relative_to(output_dir).as_posix(),
             }
         )
     if not rows:
@@ -121,24 +139,20 @@ def prepare_terminalbench(
     index.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
     selection = lists_dir / "all.txt"
     selection.write_text("\n".join(str(row["instance_id"]) for row in rows) + "\n", encoding="utf-8")
-    manifest = output_dir / "manifest.json"
-    manifest.write_text(
-        json.dumps(
-            {
-                "dataset": "terminalbench",
-                "source": DATASET_REF,
-                "rows": len(rows),
-                "selection_status": "all",
-                "validation": {
-                    "oracle": "not_run",
-                    "agent": "not_run",
-                },
+    atomic_write_json(
+        manifest,
+        {
+            "dataset": "terminalbench",
+            "source": DATASET_REF,
+            "rows": len(rows),
+            "selection_status": "all",
+            "validation": {
+                "oracle": "not_run",
+                "agent": "not_run",
             },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
+        },
     )
+    pending.unlink()
     if with_images:
         prepare_images(output_dir, task_nums, harbor_executable=harbor_executable)
     return PreparedDataset(index, selection, manifest, len(rows))
@@ -199,7 +213,14 @@ async def _forward_model_request(
 ) -> None:
     try:
         upstream_reader, upstream_writer = await asyncio.open_connection(proxy_host, proxy_port)
-    except OSError:
+    except OSError as exc:
+        logger.warning(
+            "Terminal-Bench model gateway for session %s cannot connect to %s:%d: %s",
+            session_id,
+            proxy_host,
+            proxy_port,
+            exc,
+        )
         writer.close()
         return
     try:
@@ -233,12 +254,12 @@ def _command_output(command: list[str], label: str) -> str:
     return result.stdout.strip()
 
 
-def _executable_version(executable: Path, label: str) -> tuple[Path, str]:
+def _executable_version(executable: Path, label: str, pattern: re.Pattern[str] = _CLI_VERSION) -> tuple[Path, str]:
     resolved = shutil.which(str(executable))
     if resolved is None:
         raise FileNotFoundError(f"{label} executable not found: {executable}")
     output = _command_output([resolved, "--version"], label)
-    match = _CLI_VERSION.search(output)
+    match = pattern.search(output)
     if match is None:
         raise ValueError(f"Cannot determine {label} version from {resolved}: {output}")
     return Path(resolved).resolve(), match.group()
@@ -280,11 +301,10 @@ def validate_dsh_executable(executable: Path) -> tuple[Path, Path]:
         raise ValueError(f"DSH executable must point to @deepseek-ai/dsh@{DSH_VERSION}: {executable}")
     node = shutil.which(os.environ.get("DSH_NODE_EXECUTABLE", "node"))
     if node is None:
-        raise FileNotFoundError("Node.js not found; DSH requires Node.js >=22.19")
+        raise FileNotFoundError(f"Node.js not found; DSH requires Node.js {DSH_NODE_VERSION_RANGE}")
     version = _command_output([node, "--version"], "DSH Node.js")
-    match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", version)
-    if match is None or (int(match[1]), int(match[2])) < (22, 19):
-        raise ValueError(f"DSH requires Node.js >=22.19; found {version} at {node}")
+    if not node_version_supported(version):
+        raise ValueError(f"DSH requires Node.js {DSH_NODE_VERSION_RANGE}; found {version} at {node}")
     return package_json.parent, Path(node).resolve()
 
 
@@ -307,7 +327,11 @@ def check_terminalbench_preflight(config: AgentBenchConfig) -> AgentPreflightRep
 
     agent = config.agent
     _validate_agent_support(agent.type, agent.profile)
-    harbor, harbor_version = _executable_version(Path(os.environ.get("HARBOR_EXECUTABLE", "harbor")), "Harbor")
+    harbor, harbor_version = _executable_version(
+        Path(os.environ.get("HARBOR_EXECUTABLE", "harbor")), "Harbor", _HARBOR_CLI_VERSION
+    )
+    if harbor_version != HARBOR_VERSION:
+        raise ValueError(f"Terminal-Bench requires Harbor {HARBOR_VERSION}, found {harbor_version} at {harbor}")
     gateway = _docker_gateway()
     from .terminalbench_images import docker_platform, native_platform
 
@@ -367,7 +391,7 @@ def check_terminalbench_preflight(config: AgentBenchConfig) -> AgentPreflightRep
 
 
 _HARBOR_AGENTS = {"claude": "LocalClaudeCode", "dsh": "DshHarborAgent", "jiuwenswarm": "JiuwenHarborAgent"}
-_CLAUDE_HARBOR_HOST_ENV = frozenset(
+_HARBOR_HOST_ENV = frozenset(
     {
         "PATH",
         "HOME",
@@ -391,12 +415,12 @@ _CLAUDE_HARBOR_HOST_ENV = frozenset(
 
 
 def _harbor_env(agent_type: str) -> dict[str, str]:
-    """Give Claude's Harbor process its host environment and a local credential."""
+    """Pass only host settings needed to launch Harbor and Docker."""
 
-    env = dict(os.environ)
+    env = {name: os.environ[name] for name in _HARBOR_HOST_ENV if name in os.environ}
+    env["PYTHON_DOTENV_DISABLED"] = "1"
     if agent_type == "claude":
-        env = {name: value for name, value in env.items() if name in _CLAUDE_HARBOR_HOST_ENV}
-        env.update(ANTHROPIC_API_KEY="agentbench", PYTHON_DOTENV_DISABLED="1")
+        env["ANTHROPIC_API_KEY"] = "agentbench"
     repo_root = str(Path(__file__).resolve().parents[3])
     env["PYTHONPATH"] = os.pathsep.join(filter(None, (repo_root, env.get("PYTHONPATH"))))
     return env
@@ -442,6 +466,7 @@ def _harbor_command(context: "RunContext", task: Task, directory: Path, model_ur
             options.update(
                 host_runtime=installation["runtime"],
                 timeout_seconds=timeout,
+                prompt_delivery_timeout_seconds=context.config.experiment.prompt_delivery_timeout_seconds,
                 max_subagents=agent.max_subagents,
                 max_concurrent_subagents=agent.max_concurrent_subagents,
             )

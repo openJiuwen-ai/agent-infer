@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+from unittest.mock import AsyncMock, Mock
 from urllib.parse import urlsplit
 
 import httpx
@@ -20,9 +21,56 @@ from .helpers.mock_benchmark import FakeModelServer, ThreadRequestProxyProcess
 pytestmark = test_marks(hardware="cpu", ci="ready")
 
 
+@pytest.mark.parametrize("version", ["0.9.9", "0.25.1", "0.25.0-rc.1"])
+def test_preflight_rejects_unsupported_harbor_before_docker(tmp_path, monkeypatch, version):
+    harbor = tmp_path / "harbor"
+    harbor.write_text(f"#!/bin/sh\necho 'version {version}'\n")
+    harbor.chmod(0o755)
+    monkeypatch.setenv("HARBOR_EXECUTABLE", str(harbor))
+
+    def unexpected_docker_check():
+        pytest.fail("Unsupported Harbor must be rejected before probing Docker")
+
+    monkeypatch.setattr(terminalbench, "_docker_gateway", unexpected_docker_check)
+    with pytest.raises(ValueError, match=r"Terminal-Bench requires Harbor 0\.25\.0") as error:
+        terminalbench.check_terminalbench_preflight(AgentBenchConfig())
+    assert version in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("version", "supported"), [("v22.18.9", False), ("v22.19.0", True), ("v23.0.0", False), ("v24.0.0", True)]
+)
+def test_dsh_host_preflight_uses_supported_node_versions(tmp_path, monkeypatch, version, supported):
+    package = tmp_path / "dsh"
+    executable = package / "lib" / "bin.js"
+    executable.parent.mkdir(parents=True)
+    executable.touch(mode=0o755)
+    (package / "package.json").write_text('{"version":"0.2.1-rc.2"}')
+    node = tmp_path / "node"
+    node.write_text(f"#!/bin/sh\necho '{version}'\n")
+    node.chmod(0o755)
+    monkeypatch.setenv("DSH_NODE_EXECUTABLE", str(node))
+
+    if supported:
+        assert terminalbench.validate_dsh_executable(executable) == (package, node)
+    else:
+        with pytest.raises(ValueError, match="DSH requires Node.js"):
+            terminalbench.validate_dsh_executable(executable)
+
+
 @pytest.fixture
 def proxy_process(monkeypatch):
     monkeypatch.setattr(lifecycle, "RequestProxyProcess", ThreadRequestProxyProcess)
+
+
+def test_gateway_logs_failed_proxy_connection(monkeypatch, caplog):
+    connect = AsyncMock(side_effect=ConnectionRefusedError("connection refused"))
+    monkeypatch.setattr(asyncio, "open_connection", connect)
+    writer = Mock()
+    asyncio.run(terminalbench._forward_model_request(Mock(), writer, "proxy.example.test", 8001, "trial-42"))
+    writer.close.assert_called_once()
+    assert "trial-42" in caplog.text
+    assert "proxy.example.test:8001" in caplog.text
 
 
 @pytest.mark.parametrize("agent_type", ["claude", "dsh", "jiuwenswarm"])
@@ -219,18 +267,28 @@ def test_run_preserves_correctness_and_closes_task_gateway(
         assert result["trials"][1]["exception"]["exception_type"] == "CancelledError"
 
 
-def test_claude_harbor_host_environment_only_contains_local_model_credentials(monkeypatch):
+@pytest.mark.parametrize("agent_type", ["claude", "dsh", "jiuwenswarm"])
+def test_harbor_host_environment_only_contains_local_credentials(monkeypatch, agent_type):
     monkeypatch.setenv("DOCKER_CONTEXT", "benchmark")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-host-key")
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "test-host-token")
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-oauth-token")
     monkeypatch.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-cloud-key")
-    env = terminalbench._harbor_env("claude")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-dsh-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    env = terminalbench._harbor_env(agent_type)
     assert env["DOCKER_CONTEXT"] == "benchmark"
-    assert env["ANTHROPIC_API_KEY"] == "agentbench"
+    assert env.get("ANTHROPIC_API_KEY") == ("agentbench" if agent_type == "claude" else None)
     assert env["PYTHON_DOTENV_DISABLED"] == "1"
     assert (
-        not {"ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "AWS_ACCESS_KEY_ID"}
+        not {
+            "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "AWS_ACCESS_KEY_ID",
+            "DEEPSEEK_API_KEY",
+            "OPENAI_API_KEY",
+        }
         & env.keys()
     )

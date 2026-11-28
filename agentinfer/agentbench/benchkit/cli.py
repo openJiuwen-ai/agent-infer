@@ -379,7 +379,17 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser, cli_metadata
     options = {"with_correctness": args.with_correctness} if terminalbench else {}
     run_dir = asyncio.run(run_benchmark(config, cli_metadata=cli_metadata, **options))
     logger.info("Results: %s", run_dir)
-    return _evaluate(run_dir, evaluation) if evaluation is not None else 0
+    if evaluation is not None:
+        return _evaluate(run_dir, evaluation)
+    if terminalbench and args.with_correctness:
+        from .collectors.correctness import load_correctness_artifact
+
+        scoring = load_correctness_artifact(run_dir / "correctness.json")
+        scored = scoring.metadata.get("scored_trials")
+        if not isinstance(scored, int) or scored < 1:
+            logger.error("Terminal-Bench scoring produced no valid rewards: %s", scoring.reason or "zero scored trials")
+            return 1
+    return 0
 
 
 def _replay(args: argparse.Namespace, cli_metadata: dict[str, object]) -> None:

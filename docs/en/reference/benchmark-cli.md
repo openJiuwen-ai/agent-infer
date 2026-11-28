@@ -31,7 +31,9 @@ vllm bench serve --agentinfer prepare swebench --output-dir PATH
 | `--with-images` | No | Terminal-Bench only. Prepare task and verifier images, including for an existing complete export of the pinned version. |
 | `--task-nums INT` | No | Terminal-Bench only. Target the first N tasks in `all.txt`, N ≥ 1, with `--with-images`. Defaults to all tasks and preserves indexes. |
 
-With `--with-images`, a complete export of the pinned version can be reused. Without it, prepare requires an empty destination.
+Terminal-Bench can resume its own interrupted export in the same directory. Add `--with-images` to
+reuse a complete export of the pinned version. New exports use empty destinations. Newly generated
+indexes store paths relative to the index. Existing absolute paths are still accepted.
 See [Run Terminal-Bench](../how-to/run-benchmark.md#run-terminal-bench-410) for runtimes and results.
 
 ## `run`
@@ -66,6 +68,9 @@ CLI paths resolve from the current directory. Unknown YAML fields are rejected. 
 for the transparent upstream and `--metrics-url` for vLLM metrics.
 
 Terminal-Bench skips scoring by default. Add `--with-correctness` to run Harbor's verifier for each task.
+After a completed batch, the command exits with code 1 when scoring was requested and no task has a valid
+reward. A recorded reward of zero is valid. Code 0 permits partial scoring, so check `evaluation_coverage`
+in `correctness.json` for the fraction of tasks scored.
 If the scoring modes differ or are unknown, `compare` reports task duration, run wall time, and throughput as
 diagnostic metrics.
 

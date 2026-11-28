@@ -29,7 +29,8 @@ vllm bench serve --agentinfer prepare swebench --output-dir PATH
 | `--with-images` | 否 | 仅 Terminal-Bench：准备解题和评分镜像，支持在完整且版本匹配的数据目录上追加。 |
 | `--task-nums INT` | 否 | 仅 Terminal-Bench：累计准备 `all.txt` 中前 N 题的镜像，N ≥ 1，须搭配 `--with-images`。省略时准备全部，不裁剪索引。 |
 
-加 `--with-images` 时可复用同版本的完整任务数据。普通 prepare 需要空目录。
+Terminal-Bench 可在原目录续传本工具标记的中断导出。加 `--with-images` 时可复用同版本的完整任务
+数据。首次导出使用空目录。新索引的任务路径相对索引文件解析，同时兼容已有绝对路径。
 运行时配置和结果说明见 [运行 Terminal-Bench](../how-to/run-benchmark.md#运行-terminal-bench-410)。
 
 ## `run`
@@ -63,6 +64,8 @@ vllm bench serve --agentinfer run --config PATH [OVERRIDES]
 工作目录为基准。未知 YAML 字段会被拒绝。Router 使用 `--base-url` 指向透明转发端点，`--metrics-url` 指向 vLLM 指标端点。
 
 Terminal-Bench 的 `run` 默认跳过评分，加 `--with-correctness` 时启用 Harbor 逐题评分。
+批次执行结束后，如果请求了评分却没有任何有效奖励，命令返回 1。有效奖励可以为 0。
+返回 0 时仍可能只有部分题目获评，具体比例见 `correctness.json` 的 `evaluation_coverage`。
 比较 Terminal-Bench 运行时，若两侧评分模式不同或无法确认，`compare` 仅以诊断数据展示任务耗时、整轮耗时和吞吐量。
 
 SWE-bench 开启 `--with-correctness` 后，评测配置在运行前校验，默认使用当前 Python 环境和标准评测参数。

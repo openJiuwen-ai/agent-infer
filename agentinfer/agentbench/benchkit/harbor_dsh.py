@@ -15,7 +15,7 @@ from pydantic import Field
 from ..agents.dsh.bridge import AGENTBENCH_BRIDGE
 from ..agents.dsh.instance import DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS, build_dsh_settings
 from ..agents.dsh.profiles import get_profile
-from .terminalbench import DSH_VERSION
+from ..agents.dsh.runtime import DSH_NODE_VERSION_RANGE, DSH_VERSION, node_version_supported
 
 _REMOTE_HOME = "/tmp/agentbench-dsh-home"
 _REMOTE_LOGS = "/logs/agent/agentbench-dsh"
@@ -67,13 +67,17 @@ class DshHarborAgent(BaseAgent):
             "chmod 755 /opt/agentbench-node/bin/node; "
             "ln -sfn /opt/agentbench-node/bin/node /usr/local/bin/node; "
             "ln -sfn /opt/agentbench-dsh/lib/bin.js /usr/local/bin/dsh; "
-            'node -e \'const [major, minor] = process.versions.node.split(".").map(Number); '
-            "if (major < 22 || (major === 22 && minor < 19)) process.exit(1)'; "
-            "dsh --version"
+            "node --version"
         )
-        result = await environment.exec(command, timeout_sec=60, user="root")
-        if result.return_code:
-            raise RuntimeError(f"DSH setup failed: {result.stderr or result.stdout}")
+        node_check = await environment.exec(command, timeout_sec=60, user="root")
+        if node_check.return_code:
+            raise RuntimeError(f"DSH setup failed: {node_check.stderr or node_check.stdout}")
+        node_version = node_check.stdout.strip()
+        if not node_version_supported(node_version):
+            raise RuntimeError(f"DSH requires Node.js {DSH_NODE_VERSION_RANGE}; found {node_version} in the container")
+        dsh_check = await environment.exec("dsh --version", timeout_sec=60, user="root")
+        if dsh_check.return_code:
+            raise RuntimeError(f"DSH setup failed: {dsh_check.stderr or dsh_check.stdout}")
 
     async def _upload_text(self, environment: BaseEnvironment, name: str, content: str) -> None:
         source = self.logs_dir / name

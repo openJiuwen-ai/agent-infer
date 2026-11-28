@@ -12,7 +12,7 @@ import pytest
 
 from agentinfer.agentbench.benchkit import terminalbench, terminalbench_images
 from agentinfer.agentbench.benchkit.cli import main
-from agentinfer.agentbench.benchkit.dataset import Task
+from agentinfer.agentbench.benchkit.dataset import Task, load_tasks
 from tests.helpers.marks import test_marks
 
 pytestmark = test_marks(hardware="cpu", ci="ready")
@@ -33,9 +33,16 @@ def make_task(root: Path, name: str, *, gpu: int = 0) -> Task:
 @pytest.fixture
 def engine(monkeypatch):
     state = SimpleNamespace(
-        cached={}, calls=[], fail=None, downloaded=0, architecture="x86_64", pulled_platform="linux/amd64"
+        cached={},
+        calls=[],
+        fail=None,
+        downloaded=0,
+        download_fails=False,
+        architecture="x86_64",
+        pulled_platform="linux/amd64",
     )
     monkeypatch.delenv("DOCKER_DEFAULT_PLATFORM", raising=False)
+    monkeypatch.delenv("HARBOR_EXECUTABLE", raising=False)
     which = terminalbench.shutil.which
     monkeypatch.setattr(terminalbench.shutil, "which", lambda exe: "/fake/harbor" if exe == "harbor" else which(exe))
 
@@ -43,7 +50,10 @@ def engine(monkeypatch):
         state.calls.append(command)
         if command[:3] == ["/fake/harbor", "datasets", "download"]:
             root = Path(command[command.index("--output-dir") + 1])
-            make_task(root / "a", "a")
+            if not (root / "a").exists():
+                make_task(root / "a", "a")
+            if state.download_fails:
+                return SimpleNamespace(returncode=1)
             make_task(root / "b", "b")
             make_task(root / "gpu", "gpu", gpu=1)
             state.downloaded += 1
@@ -69,6 +79,58 @@ def engine(monkeypatch):
 
     monkeypatch.setattr(terminalbench_images.subprocess, "run", run)
     return state
+
+
+def test_prepare_resumes_its_own_interrupted_export(tmp_path, engine):
+    engine.download_fails = True
+    prepare = ["prepare", "terminalbench", "--output-dir", str(tmp_path)]
+    with pytest.raises(RuntimeError, match="same --output-dir"):
+        main(prepare)
+    partial = tmp_path / "tasks/a/instruction.md"
+    assert partial.is_file()
+    assert not (tmp_path / "manifest.json").exists()
+
+    engine.download_fails = False
+    assert main([*prepare, "--with-images", "--task-nums", "1"]) == 0
+    assert json.loads((tmp_path / "manifest.json").read_text())["rows"] == 3
+    assert partial.is_file()
+    assert not (tmp_path / ".terminalbench-export").exists()
+
+
+def test_prepare_keeps_foreign_nonempty_output_untouched(tmp_path, engine):
+    foreign = tmp_path / "unrelated.txt"
+    foreign.write_text("keep me")
+    with pytest.raises(FileExistsError, match="not empty"):
+        main(["prepare", "terminalbench", "--output-dir", str(tmp_path), "--with-images"])
+    assert list(tmp_path.iterdir()) == [foreign]
+    assert not engine.calls
+
+
+def test_prepare_uses_configured_harbor(tmp_path, engine, monkeypatch):
+    monkeypatch.setenv("HARBOR_EXECUTABLE", "/fake/harbor")
+    executable = terminalbench.shutil.which
+    monkeypatch.setattr(
+        terminalbench.shutil, "which", lambda path: path if path == "/fake/harbor" else executable(path)
+    )
+    main(["prepare", "terminalbench", "--output-dir", str(tmp_path)])
+    assert engine.calls[0][:3] == ["/fake/harbor", "datasets", "download"]
+
+
+def test_exported_index_moves_with_its_tasks(tmp_path, engine, monkeypatch):
+    prepared = terminalbench.prepare_terminalbench(tmp_path / "export")
+    rows = [json.loads(line) for line in prepared.index_path.read_text().splitlines()]
+    assert rows[0]["task_path"] == "tasks/a"
+    assert "sha256" not in rows[0]
+    rows[-1]["task_path"] = str(tmp_path / "export" / "tasks" / "gpu")
+    prepared.index_path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    assert load_tasks(prepared.index_path, prepared.selection_path)[-1].task_path == tmp_path / "export/tasks/gpu"
+    rows[-1]["task_path"] = "tasks/gpu"
+    prepared.index_path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    moved = (tmp_path / "export").rename(tmp_path / "moved")
+    monkeypatch.chdir(tmp_path)
+    assert main(["prepare", "terminalbench", "--output-dir", str(moved), "--with-images", "--task-nums", "1"]) == 0
+    assert engine.downloaded == 1
+    assert json.loads((moved / "images.json").read_text())["status"] == "ready"
 
 
 def test_with_images_extends_prefix_of_existing_export(tmp_path, engine):

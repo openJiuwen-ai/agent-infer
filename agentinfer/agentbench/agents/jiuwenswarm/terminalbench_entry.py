@@ -14,7 +14,7 @@ from pathlib import Path
 import yaml
 
 from .instance import JiuwenInstance
-from .runner import _communicate_with_timeout, _kill_cli_process_group, _write_outputs
+from .runner import _communicate_with_timeout, _kill_cli_process_group, _write_outputs, build_chat_command
 
 
 class HarborJiuwenInstance(JiuwenInstance):
@@ -52,7 +52,7 @@ async def run(config: dict) -> None:
         api_base_url=config["proxy_url"],
         model=config["model"],
         completion_timeout_seconds=config["timeout_seconds"],
-        profile_name="agent.code.normal",
+        profile_name=config["profile"],
         max_subagents=config["max_subagents"],
         max_concurrent_subagents=config["max_concurrent_subagents"],
     )
@@ -60,23 +60,14 @@ async def run(config: dict) -> None:
     process = None
     try:
         await asyncio.wait_for(instance.start(), max(0, deadline - time.monotonic()))
-        command = [
-            str(instance.executable),
-            "chat",
-            "--jsonl",
-            "--mode",
+        command = build_chat_command(
+            instance.executable,
             instance.profile_name,
-            "--session",
             instance.session_id,
-            "--cwd",
-            str(instance.workspace),
-            "--project-dir",
-            str(instance.workspace),
-            "--gateway-url",
+            instance.workspace,
             instance.gateway_url,
-            "--timeout",
-            str(config["timeout_seconds"]),
-        ]
+            config["timeout_seconds"],
+        )
         (logs / "jiuwenswarm-launch-command.json").write_text(json.dumps(command, indent=2) + "\n")
         process = await asyncio.create_subprocess_exec(
             *command,
@@ -87,7 +78,9 @@ async def run(config: dict) -> None:
             start_new_session=True,
         )
         prompt = Path(config["prompt"]).read_bytes()
-        stdout, stderr, timed_out, reason = await _communicate_with_timeout(process, prompt, deadline, 30)
+        stdout, stderr, timed_out, reason = await _communicate_with_timeout(
+            process, prompt, deadline, config["prompt_delivery_timeout_seconds"]
+        )
         await _write_outputs(logs, stdout, stderr)
         if timed_out:
             await instance.interrupt()
@@ -101,7 +94,7 @@ async def run(config: dict) -> None:
             await asyncio.wait_for(instance.stop(), 30)
         finally:
             (logs / "container-runtime.json").write_text(
-                json.dumps({"isolation": "harbor-docker", "profile": "agent.code.normal"}) + "\n"
+                json.dumps({"isolation": "harbor-docker", "profile": instance.profile_name}) + "\n"
             )
 
 

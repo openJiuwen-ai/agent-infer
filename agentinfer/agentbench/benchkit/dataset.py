@@ -133,7 +133,7 @@ def load_tasks(
                 difficulty=row.get("difficulty"),
                 fail_to_pass=_as_tuple(row.get("fail_to_pass", row.get("FAIL_TO_PASS", []))),
                 pass_to_pass=_as_tuple(row.get("pass_to_pass", row.get("PASS_TO_PASS", []))),
-                task_path=Path(row["task_path"]) if row.get("task_path") else None,
+                task_path=dataset_path.parent / row["task_path"] if row.get("task_path") else None,
             )
 
     tasks = [tasks_by_id[instance_id] for instance_id in instance_ids if instance_id in tasks_by_id]

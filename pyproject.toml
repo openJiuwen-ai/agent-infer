@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "agentinfer"
 version = "0.2.0"
 requires-python = ">=3.10"
-dependencies = ["datasets", "fastapi", "httpx", "huggingface-hub", "matplotlib", "numpy", "prometheus-client", "psutil>=6", "PyYAML", "pydantic>=2", "tomli>=2; python_version < '3.11'", "tqdm", "uvicorn", "websockets", "zstandard"]
+dependencies = ["datasets", "fastapi", "httpx", "huggingface-hub", "matplotlib", "numpy", "prometheus-client", "psutil>=6", "pyarrow>=14.0.1", "PyYAML", "pydantic>=2", "tomli>=2; python_version < '3.11'", "tqdm", "uvicorn", "websockets", "zstandard"]
 description = "vLLM based inference framework for agentic workload."
 readme = { file = "README.md", content-type = "text/markdown" }
 

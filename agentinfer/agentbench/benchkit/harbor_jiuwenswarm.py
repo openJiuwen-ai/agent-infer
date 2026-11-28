@@ -5,6 +5,7 @@
 
 import json
 import shlex
+from pathlib import Path
 
 from harbor.agents.base import BaseAgent
 from harbor.agents.options import AgentOptions
@@ -12,7 +13,7 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from pydantic import Field
 
-from .jiuwenswarm_runtime import REMOTE_RUNTIME, RUNTIME_IMPORT_CHECK, WORKSWARM_VERSION
+from .jiuwenswarm_runtime import OPENJIUWEN_VERSION, REMOTE_RUNTIME, RUNTIME_IMPORT_CHECK, WORKSWARM_VERSION
 
 REMOTE_LOGS = "/logs/agent/agentbench-jiuwenswarm"
 
@@ -23,6 +24,7 @@ class JiuwenHarborOptions(AgentOptions):
     task_session_id: str
     host_runtime: str
     timeout_seconds: int = Field(default=28800, ge=1)
+    prompt_delivery_timeout_seconds: int = Field(default=30, ge=1)
     max_subagents: int = Field(default=1, ge=1)
     max_concurrent_subagents: int = Field(default=1, ge=1)
     version: str = WORKSWARM_VERSION
@@ -40,21 +42,31 @@ class JiuwenHarborAgent(BaseAgent):
         return WORKSWARM_VERSION
 
     async def setup(self, environment: BaseEnvironment) -> None:
-        from pathlib import Path
-
         prepared = await environment.exec(f"mkdir -p {REMOTE_RUNTIME} {REMOTE_LOGS}", user="root", timeout_sec=30)
         if prepared.return_code:
             raise RuntimeError(f"JiuwenSwarm runtime directory setup failed: {prepared.stderr}")
         await environment.upload_file(
             Path(self.options.host_runtime) / "runtime.tar.gz", f"{REMOTE_RUNTIME}/runtime.tar.gz"
         )
+        unpacked = await environment.exec(
+            f"tar -xzf {REMOTE_RUNTIME}/runtime.tar.gz -C {REMOTE_RUNTIME}", user="root", timeout_sec=300
+        )
+        if unpacked.return_code:
+            raise RuntimeError(f"JiuwenSwarm runtime extraction failed: {unpacked.stderr or unpacked.stdout}")
+        # Prepared archives may predate the current host adapter. Keep the
+        # runtime's dependencies and load the current launch code.
+        relative = "agentinfer/agentbench/agents/jiuwenswarm"
+        source = Path(__file__).resolve().parents[3] / relative
+        for name in ("runner.py", "terminalbench_entry.py"):
+            await environment.upload_file(
+                source / name, f"{REMOTE_RUNTIME}/python/lib/python3.12/site-packages/{relative}/{name}"
+            )
         checked = await environment.exec(
-            f"tar -xzf {REMOTE_RUNTIME}/runtime.tar.gz -C {REMOTE_RUNTIME} && "
             f"{REMOTE_RUNTIME}/python/bin/python3 -c "
             + shlex.quote(
                 "from importlib.metadata import version; "
-                "assert version('workswarm') == '0.2.8'; assert version('openjiuwen') == '0.1.20'; "
-                + RUNTIME_IMPORT_CHECK
+                f"assert version('workswarm') == {WORKSWARM_VERSION!r}; "
+                f"assert version('openjiuwen') == {OPENJIUWEN_VERSION!r}; " + RUNTIME_IMPORT_CHECK
             ),
             user="root",
             timeout_sec=300,
@@ -72,7 +84,9 @@ class JiuwenHarborAgent(BaseAgent):
             "model": self.model_name,
             "proxy_url": self.options.proxy_url,
             "session_id": self.options.task_session_id,
+            "profile": self.options.profile,
             "timeout_seconds": self.options.timeout_seconds,
+            "prompt_delivery_timeout_seconds": self.options.prompt_delivery_timeout_seconds,
             "max_subagents": self.options.max_subagents,
             "max_concurrent_subagents": self.options.max_concurrent_subagents,
         }

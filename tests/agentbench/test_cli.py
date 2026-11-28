@@ -292,14 +292,21 @@ def mock_benchmark(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncMock
     return runner.run_benchmark
 
 
-@pytest.mark.parametrize("with_correctness", [False, True])
-def test_terminalbench_run_uses_its_own_correctness_path(monkeypatch, mock_benchmark, with_correctness):
+@pytest.mark.parametrize(
+    ("with_correctness", "scored", "code"), [(False, None, 0), (True, 1, 0), (True, 0, 1), (True, None, 1)]
+)
+def test_terminalbench_run_uses_its_own_correctness_path(monkeypatch, mock_benchmark, with_correctness, scored, code):
     monkeypatch.setattr(cli, "_evaluation_config", lambda *_: pytest.fail("SWE-bench evaluation config loaded"))
     monkeypatch.setattr(cli, "_evaluate", lambda *_: pytest.fail("SWE-bench evaluator started"))
     argv = ["run", "--dataset-name", "terminalbench"]
     if with_correctness:
         argv.append("--with-correctness")
-    assert main(argv) == 0
+    if scored is not None:
+        mock_benchmark.return_value.mkdir()
+        (mock_benchmark.return_value / "correctness.json").write_text(
+            json.dumps({"planned_trials": 2, "scored_trials": scored, "trials": [{"rewards": {"reward": 0}}] * scored})
+        )
+    assert main(argv) == code
     assert mock_benchmark.await_args.kwargs["with_correctness"] is with_correctness
 
 

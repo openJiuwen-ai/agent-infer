@@ -97,6 +97,16 @@ steps:
           - pytest tests -sv -m "cpu and ready"
         timeout_in_minutes: 20
         mirror_hardwares: cpu_small
+      - label: "Terminal-Bench adapters"
+        commands:
+          - |
+            set -eu
+            harbor_env=$$(mktemp -d)/venv
+            python3 -m venv --system-site-packages "$$harbor_env"
+            "$$harbor_env/bin/python" -m pip install harbor==0.25.0
+            HARBOR_EXECUTABLE="$$harbor_env/bin/harbor" "$$harbor_env/bin/python" -m pytest -q tests/agentbench/test_terminalbench_offline.py
+        timeout_in_minutes: 10
+        mirror_hardwares: cpu_small
 
   # A plain wait skips every later step when an earlier step failed, which
   # leaves this build's tagged images on the agent. Continue so cleanup still
