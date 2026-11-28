@@ -10,7 +10,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -106,6 +106,90 @@ def test_repo_cache_owner_does_not_chown_without_root(monkeypatch, platform, uid
     monkeypatch.setattr(benchmark, "_chown_tree", unexpected)
     with benchmark._repo_cache_owner(None):
         pass
+
+
+@pytest.fixture
+def repo_cache_warmup(tmp_path, monkeypatch):
+    from agentinfer.agentbench.benchkit import config, dataset, workspace
+    from tests.e2e.helpers import benchmark
+
+    bench_config = tmp_path / "benchmark.yaml"
+    bench_config.touch()
+    cache = tmp_path / "cache"
+    source = SimpleNamespace(cache_dir=cache, index_path=tmp_path / "tasks.jsonl", selection_path=None)
+    tasks = [SimpleNamespace(repo="astropy/astropy", base_commit=letter * 40) for letter in "ab"]
+    clock, sleeps = [100.0], []
+    fetch = Mock()
+    monkeypatch.setattr(benchmark, "prepare_runs_as_root", lambda _: True)
+    monkeypatch.setattr(benchmark, "time", SimpleNamespace(monotonic=lambda: clock[0], sleep=sleeps.append))
+    monkeypatch.setattr(config, "load_config", lambda _: SimpleNamespace(dataset=source))
+    monkeypatch.setattr(dataset, "load_tasks", lambda *_: tasks)
+    monkeypatch.setattr(workspace, "ensure_repo_cache", fetch)
+    options = SimpleNamespace(
+        bench_config=bench_config, task_num=2, task_timeout_seconds=60, scenario=SimpleNamespace(value="baseline")
+    )
+    return SimpleNamespace(
+        benchmark=benchmark, config=options, cache=cache, tasks=tasks, clock=clock, sleeps=sleeps, fetch=fetch
+    )
+
+
+def test_repo_cache_retries_transient_fetch_with_same_deadline(repo_cache_warmup, capsys):
+    warmup = repo_cache_warmup
+    failure = RuntimeError("git fetch --depth 1 origin commit: HTTP/2 stream 1 was not closed cleanly")
+    warmup.fetch.side_effect = [failure, failure, None, None]
+    assert warmup.benchmark.ensure_repo_cache_prepared(warmup.config) == warmup.cache
+    calls = warmup.fetch.call_args_list
+    assert [call.args[0] for call in calls] == [warmup.tasks[0]] * 3 + [warmup.tasks[1]]
+    assert all(call.args[2] is calls[0].args[2] for call in calls)
+    assert calls[0].args[2].deadline == 220.0
+    assert warmup.sleeps == [5, 5]
+    assert "attempt 2/3" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        RuntimeError("git fetch origin commit: Authentication failed"),
+        RuntimeError("git fetch origin commit: detected dubious ownership"),
+        RuntimeError("git fetch origin commit: remote error: not our ref commit"),
+        RuntimeError("git init: HTTP/2 stream error"),
+        ValueError("git fetch: HTTP/2 stream error"),
+        TimeoutError("Workspace command timed out"),
+    ],
+)
+def test_repo_cache_does_not_retry_other_failures(repo_cache_warmup, failure):
+    warmup = repo_cache_warmup
+    warmup.fetch.side_effect = failure
+    with pytest.raises(RuntimeError, match="repo-cache warmup") as caught:
+        warmup.benchmark.ensure_repo_cache_prepared(warmup.config)
+    assert caught.value.__cause__ is failure
+    assert warmup.fetch.call_count == 1
+    assert warmup.sleeps == []
+
+
+def test_repo_cache_stops_after_three_failed_attempts(repo_cache_warmup):
+    warmup = repo_cache_warmup
+    failure = RuntimeError("git fetch origin commit: Connection reset by peer")
+    warmup.fetch.side_effect = failure
+    with pytest.raises(RuntimeError, match="repo-cache warmup failed") as caught:
+        warmup.benchmark.ensure_repo_cache_prepared(warmup.config)
+    assert caught.value.__cause__ is failure
+    assert warmup.fetch.call_count == 3
+    assert warmup.sleeps == [5, 5]
+
+
+def test_repo_cache_does_not_backoff_past_deadline(repo_cache_warmup):
+    warmup = repo_cache_warmup
+
+    def fail_near_deadline(*_):
+        warmup.clock[0] = 219.0
+        raise RuntimeError("git fetch origin commit: Connection reset by peer")
+
+    warmup.fetch.side_effect = fail_near_deadline
+    with pytest.raises(RuntimeError, match="repo-cache warmup timed out"):
+        warmup.benchmark.ensure_repo_cache_prepared(warmup.config)
+    assert warmup.fetch.call_count == 1
+    assert warmup.sleeps == []
 
 
 def test_claude_accuracy_budget_reaches_sudo_command_and_restores_for_other_agents(pytester, monkeypatch):

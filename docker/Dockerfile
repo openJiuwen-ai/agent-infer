@@ -124,6 +124,9 @@ RUN python3 -m venv /opt/agentbench/swebench-venv \
 # One target serves ready, nightly and CPU jobs; dependency layers precede the checkout.
 FROM agent-deps AS ci
 
+# Apply to root preparation and sudo benchmarks without rebuilding agent dependencies.
+RUN git config --system http.version HTTP/1.1
+
 WORKDIR /app
 COPY . .
 RUN pip install --no-cache-dir \

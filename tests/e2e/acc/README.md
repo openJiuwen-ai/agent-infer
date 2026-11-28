@@ -144,6 +144,9 @@ The accuracy service adds root execution and the Docker socket needed by the sco
 The shared image is removed only after both selected pipelines and their uploaded jobs finish,
 including after test failures. Docker dependency layers remain available for subsequent builds.
 The CPU agent builds the same `ci` target on its own Docker daemon with a separate `<build-id>-cpu` tag.
+Runtime Git uses HTTP/1.1 for both root and ordinary users. Shared repository-cache preparation retries
+transient Git fetch connection failures up to three attempts, with five seconds between attempts and
+the original preparation deadline. Authentication, ownership, missing-commit and other errors fail immediately.
 The shared GPU and CPU image builds do not set step-level timeouts;
 ready accuracy allows 30 minutes and each nightly accuracy job allows 90 minutes.
 The nightly file retains the trigger condition on its outer group. Upload it through the bootstrap,
