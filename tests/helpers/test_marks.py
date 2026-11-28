@@ -220,6 +220,7 @@ def test_agentbench_session_owns_one_model_process(collection_tree, mode):
     payload = json.loads(
         (ROOT / "tests/e2e/function/agentbench/cases/qwen3_coder_agents_1x1.json").read_text(encoding="utf-8")
     )
+    case_count = len(payload["benchmark_params"])
     payload["mark"] = {"hardware": "cpu", "ci": "ready"}
     (suite / "cases/matrix.json").write_text(json.dumps(payload), encoding="utf-8")
     fixture_source = (ROOT / "tests/e2e/function/agentbench/conftest.py").read_text(encoding="utf-8")
@@ -256,12 +257,12 @@ def test_agentbench_session_owns_one_model_process(collection_tree, mode):
         args.extend(["-k", "claude and single"])
     result = collection_tree.runpytest_subprocess(*args)
     if mode == "reuse":
-        result.assert_outcomes(passed=7)
+        result.assert_outcomes(passed=case_count)
     elif mode == "startup-failure":
-        result.assert_outcomes(failed=1, deselected=6)
+        result.assert_outcomes(failed=1, deselected=case_count - 1)
         assert "model startup failed" in result.stdout.str()
     else:
-        result.assert_outcomes(passed=6, failed=1)
+        result.assert_outcomes(passed=case_count - 1, failed=1)
         assert "must share the same deployment" in result.stdout.str()
     assert (collection_tree.path / "server-events.txt").read_text().splitlines() == ["start", "stop"]
 

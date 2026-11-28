@@ -120,6 +120,7 @@ Before loading vLLM, the same job runs all 15 ready-marked native WorkSwarm chec
 with a simulated HTTP model in the isolated agent environment:
 
 ```bash
+mkdir -p test-results/function/agentbench
 AGENTBENCH_JIUWEN_NATIVE=1 /opt/jiuwenswarm/bin/python -m pytest -s -v -m "cpu and ready" \
   tests/e2e/function/agentbench/jiuwenswarm/test_native_runtime.py \
   --basetemp=test-results/function/agentbench/native-runtime --timeout=240

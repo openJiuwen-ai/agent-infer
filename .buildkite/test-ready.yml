@@ -80,6 +80,7 @@ steps:
           - bwrap --unshare-user --unshare-pid --ro-bind / / --proc /proc -- /bin/true
           # Reuse the upstream runtime checks with a simulated model before loading vLLM.
           - |
+            mkdir -p test-results/function/agentbench
             AGENTBENCH_JIUWEN_NATIVE=1 /opt/jiuwenswarm/bin/python -m pytest -s -v -m "cpu and ready" \
               tests/e2e/function/agentbench/jiuwenswarm/test_native_runtime.py \
               --basetemp=test-results/function/agentbench/native-runtime --timeout=240
